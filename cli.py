@@ -81,19 +81,28 @@ def mask_preview(input_path, output_path, mask_threshold, feather):
 @click.argument("output_path", type=click.Path())
 @click.option("--effect", "effects", type=click.Choice(photo_effects.EFFECTS), required=True, multiple=True,
               help="Which procedural motion(s) to animate onto the photo. Repeat to combine effects "
-                   "(e.g. --effect dust --effect flicker) -- at most one of rain/snow/dust may be combined "
-                   "with any number of ripple/sway/flicker/smoke.")
+                   "(e.g. --effect dust --effect flicker), in any mix -- ripple/sway/flicker/smoke run "
+                   "first in listed order; rain/snow/dust (if any) always composite on top last.")
 @click.option("--mask", "mask_path", type=click.Path(exists=True), default=None,
               help="Where the effect applies (white=animated, black=frozen). Omit to apply over the whole photo.")
 @click.option("--duration", type=float, default=4.0, help="Length of the loop in seconds.")
 @click.option("--fps", type=int, default=30, help="Frames per second.")
 @click.option("--speed", type=float, default=1.0,
               help="Motion speed multiplier, independent of --duration (1.0 = default rate).")
-@click.option("--count", type=int, default=None,
-              help="Number of particles for rain/snow/dust (defaults: rain=90, snow=70, dust=45).")
-@click.option("--opacity", type=float, default=None,
-              help="Blend strength for rain/snow/dust (defaults: rain=0.55, snow=0.85, dust=0.4). "
-                   "Raise this if the effect is hard to see, e.g. dust next to a strong smoke/flicker pass.")
+@click.option("--rain-count", type=int, default=None, help="Number of rain streaks (default: 90).")
+@click.option("--rain-opacity", type=float, default=None, help="Rain blend strength (default: 0.55).")
+@click.option("--snow-count", type=int, default=None, help="Number of snowflakes (default: 70).")
+@click.option("--snow-opacity", type=float, default=None, help="Snow blend strength (default: 0.85).")
+@click.option("--dust-count", type=int, default=None, help="Number of dust motes (default: 45).")
+@click.option("--dust-opacity", type=float, default=None,
+              help="Dust blend strength (default: 0.4). Raise this if dust is hard to see next to a "
+                   "strong smoke/flicker pass.")
+@click.option("--ripple-amplitude", type=float, default=None, help="Ripple displacement in pixels (default: 4.0).")
+@click.option("--ripple-wavelength", type=float, default=None, help="Ripple wavelength in pixels (default: 40.0).")
+@click.option("--sway-amplitude", type=float, default=None, help="Sway displacement in pixels (default: 6.0).")
+@click.option("--sway-freq", type=float, default=None, help="Sway spatial frequency (default: 1.0).")
+@click.option("--flicker-strength", type=float, default=None, help="Flicker brightness swing, 0-1+ (default: 0.25).")
+@click.option("--smoke-opacity", type=float, default=None, help="Smoke blend strength (default: 0.35).")
 @click.option("--feather", type=int, default=21, help="Mask edge softness (odd pixel radius).")
 @click.option("--grade/--no-grade", "apply_grade", default=True, help="Apply the lofi color grade.")
 @click.option("--grade-strength", type=float, default=1.0, help="Strength of the lofi grade.")
@@ -103,8 +112,10 @@ def mask_preview(input_path, output_path, mask_threshold, feather):
               help="Stretch the output to this many seconds by repeating the --duration loop "
                    "(e.g. 3600 for an hour), instead of rendering unique frames the whole way. "
                    "Not compatible with --gif.")
-def from_photo(photo_path, output_path, effects, mask_path, duration, fps, speed, count, opacity, feather,
-                apply_grade, grade_strength, grain, also_gif, loop_duration):
+def from_photo(photo_path, output_path, effects, mask_path, duration, fps, speed,
+                rain_count, rain_opacity, snow_count, snow_opacity, dust_count, dust_opacity,
+                ripple_amplitude, ripple_wavelength, sway_amplitude, sway_freq, flicker_strength, smoke_opacity,
+                feather, apply_grade, grade_strength, grain, also_gif, loop_duration):
     """Animate a single PHOTO_PATH into a looping cinemagraph using one or more procedural effects.
 
     Effects: rain, snow, dust, ripple, sway, flicker, smoke.
@@ -113,15 +124,24 @@ def from_photo(photo_path, output_path, effects, mask_path, duration, fps, speed
     a 20s clip of the same --speed look equally fast, just looping more or
     less often.
     """
-    particle_effects = [e for e in effects if e in photo_effects.PARTICLE_EFFECTS]
-    if len(particle_effects) > 1:
-        raise click.UsageError(f"Only one of rain/snow/dust can be combined at a time, got {particle_effects}.")
-    if (count is not None or opacity is not None) and not particle_effects:
-        raise click.UsageError(f"--count/--opacity only apply to rain/snow/dust, not {list(effects)}.")
+    # (option value, owning effect, effect_kwargs key)
+    per_effect_options = [
+        (rain_count, "rain", "count"), (rain_opacity, "rain", "opacity"),
+        (snow_count, "snow", "count"), (snow_opacity, "snow", "opacity"),
+        (dust_count, "dust", "count"), (dust_opacity, "dust", "opacity"),
+        (ripple_amplitude, "ripple", "amplitude"), (ripple_wavelength, "ripple", "wavelength"),
+        (sway_amplitude, "sway", "amplitude"), (sway_freq, "sway", "freq"),
+        (flicker_strength, "flicker", "strength"),
+        (smoke_opacity, "smoke", "opacity"),
+    ]
 
     effect_kwargs = {}
-    if count is not None or opacity is not None:
-        effect_kwargs[particle_effects[0]] = {"count": count, "opacity": opacity}
+    for value, owning_effect, key in per_effect_options:
+        if value is None:
+            continue
+        if owning_effect not in effects:
+            raise click.UsageError(f"--{owning_effect}-{key} only applies when --effect {owning_effect} is included.")
+        effect_kwargs.setdefault(owning_effect, {})[key] = value
 
     pipeline.make_cinemagraph_from_photo(
         photo_path=photo_path,

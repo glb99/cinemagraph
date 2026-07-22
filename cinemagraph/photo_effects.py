@@ -51,7 +51,7 @@ def _cycles_for(speed_hz, duration, speed):
 # ---------------------------------------------------------------------------
 
 PARTICLE_PRESETS = {
-    "rain": dict(count=90, min_speed=1.4, max_speed=2.2, size_range=(1, 1),
+    "rain": dict(count=300, min_speed=1.4, max_speed=2.2, size_range=(1, 1),
                  direction=(0.15, 1), jitter=0.5, color=(200, 210, 220),
                  opacity=0.55, streak_ksize=(1, 9)),
     "snow": dict(count=70, min_speed=0.15, max_speed=0.4, size_range=(1.5, 3.5),
@@ -137,17 +137,17 @@ def _particle_stage_apply(base, stage, t):
     return base + layer * opacity * mask3
 
 
-def rain(image, mask=None, n_frames=60, duration=REFERENCE_DURATION, count=90, seed=0, speed=1.0, opacity=None):
+def rain(image, mask=None, n_frames=60, duration=REFERENCE_DURATION, count=None, seed=0, speed=1.0, opacity=None):
     return animate_photo(image, "rain", mask=mask, n_frames=n_frames, duration=duration,
                           effect_kwargs={"rain": {"count": count, "seed": seed, "opacity": opacity}}, speed=speed)
 
 
-def snow(image, mask=None, n_frames=90, duration=REFERENCE_DURATION, count=70, seed=0, speed=1.0, opacity=None):
+def snow(image, mask=None, n_frames=90, duration=REFERENCE_DURATION, count=None, seed=0, speed=1.0, opacity=None):
     return animate_photo(image, "snow", mask=mask, n_frames=n_frames, duration=duration,
                           effect_kwargs={"snow": {"count": count, "seed": seed, "opacity": opacity}}, speed=speed)
 
 
-def dust(image, mask=None, n_frames=90, duration=REFERENCE_DURATION, count=45, seed=0, speed=1.0, opacity=None):
+def dust(image, mask=None, n_frames=90, duration=REFERENCE_DURATION, count=None, seed=0, speed=1.0, opacity=None):
     return animate_photo(image, "dust", mask=mask, n_frames=n_frames, duration=duration,
                           effect_kwargs={"dust": {"count": count, "seed": seed, "opacity": opacity}}, speed=speed)
 
@@ -301,10 +301,13 @@ def animate_photo(image: np.ndarray, effect, mask: np.ndarray | None = None,
                    speed: float = 1.0, effect_kwargs: dict | None = None) -> list[np.ndarray]:
     """Render `effect` (a single effect name, or a list to combine) onto `image`.
 
-    At most one particle effect (rain/snow/dust) may be combined with any
-    number of tone effects (ripple/sway/flicker/smoke); tone effects are
-    applied in the given order to a running base frame, then the particle
-    overlay (if any) is composited on top last. `effect_kwargs` is keyed by
+    Any number of effects can be combined, in any mix of particle
+    (rain/snow/dust) and tone (ripple/sway/flicker/smoke) effects. Tone
+    effects run first, in the given order, transforming a shared running
+    frame; particle overlays (if any) always composite last, in the given
+    order among themselves -- particles sit visually on top of the scene, so
+    running a warp (ripple/sway) after adding them would incorrectly smear
+    the particles along with the background. `effect_kwargs` is keyed by
     effect name, e.g. {"dust": {"count": 150}, "flicker": {"strength": 0.3}}.
     """
     effects = [effect] if isinstance(effect, str) else list(effect)
@@ -316,8 +319,6 @@ def animate_photo(image: np.ndarray, effect, mask: np.ndarray | None = None,
 
     particle_effects = [e for e in effects if e in PARTICLE_EFFECTS]
     tone_effects = [e for e in effects if e in TONE_EFFECTS]
-    if len(particle_effects) > 1:
-        raise ValueError(f"Only one particle effect (rain/snow/dust) can be combined at a time, got {particle_effects}")
 
     effect_kwargs = effect_kwargs or {}
     h, w = image.shape[:2]
@@ -328,14 +329,15 @@ def animate_photo(image: np.ndarray, effect, mask: np.ndarray | None = None,
         for e in tone_effects
     ]
 
-    particle_stage = None
-    if particle_effects:
-        peffect = particle_effects[0]
-        kw = effect_kwargs.get(peffect, {})
-        particle_stage = _particle_stage_precompute(
-            peffect, image, n_frames, duration, mask_arr,
-            speed=speed, seed=kw.get("seed", 0), count=kw.get("count"), opacity=kw.get("opacity"),
+    particle_stages = [
+        _particle_stage_precompute(
+            peffect, image, n_frames, duration, mask_arr, speed=speed,
+            seed=effect_kwargs.get(peffect, {}).get("seed", 0),
+            count=effect_kwargs.get(peffect, {}).get("count"),
+            opacity=effect_kwargs.get(peffect, {}).get("opacity"),
         )
+        for peffect in particle_effects
+    ]
 
     frames = []
     label = "Generating frames (" + "+".join(effects) + ")"
@@ -345,7 +347,7 @@ def animate_photo(image: np.ndarray, effect, mask: np.ndarray | None = None,
             base = image.astype(np.float32)
             for pc, apply_fn in tone_stages:
                 base = apply_fn(base, pc, t)
-            if particle_stage:
-                base = _particle_stage_apply(base, particle_stage, t)
+            for stage in particle_stages:
+                base = _particle_stage_apply(base, stage, t)
             frames.append(np.clip(base, 0, 255).astype(np.uint8))
     return frames
