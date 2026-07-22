@@ -32,7 +32,11 @@ def read_frames(video_path: str, max_frames: int | None = None) -> tuple[list[np
     return frames, fps
 
 
-def write_video(frames: list[np.ndarray], out_path: str, fps: float) -> None:
+def write_video(frames: list[np.ndarray], out_path: str, fps: float, loop_duration: float | None = None) -> None:
+    """Write `frames` as a video. If `loop_duration` (seconds) is longer than the
+    natural length of `frames`, the loop is repeated to fill it -- frames are
+    written directly to the encoder as they're cycled through, so memory use
+    stays proportional to the short loop, not the output duration."""
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -41,9 +45,11 @@ def write_video(frames: list[np.ndarray], out_path: str, fps: float) -> None:
     writer = cv2.VideoWriter(str(out_path), fourcc, fps, (w, h))
     if not writer.isOpened():
         raise RuntimeError(f"Could not open video writer for: {out_path}")
-    with click.progressbar(frames, label="Writing video") as bar:
-        for frame in bar:
-            writer.write(frame)
+
+    total_frames = max(int(round(loop_duration * fps)), len(frames)) if loop_duration else len(frames)
+    with click.progressbar(range(total_frames), label="Writing video") as bar:
+        for i in bar:
+            writer.write(frames[i % len(frames)])
     writer.release()
 
 

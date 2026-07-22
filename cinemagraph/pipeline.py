@@ -26,7 +26,11 @@ def make_cinemagraph(
     grain: float = 0.03,
     also_gif: bool = False,
     mask_preview_path: str | None = None,
+    loop_duration: float | None = None,
 ) -> None:
+    if loop_duration and also_gif:
+        raise ValueError("--gif isn't supported together with --loop-duration (the GIF would be enormous); drop one of them.")
+
     frames, fps = io_utils.read_frames(input_path)
     if still_frame_index >= len(frames):
         raise ValueError(f"still_frame_index {still_frame_index} out of range (clip has {len(frames)} frames)")
@@ -59,7 +63,7 @@ def make_cinemagraph(
     if apply_grade:
         looped = grade_mod.apply_grade_to_frames(looped, strength=grade_strength, grain=grain)
 
-    io_utils.write_video(looped, output_path, fps=fps)
+    io_utils.write_video(looped, output_path, fps=fps, loop_duration=loop_duration)
 
     if also_gif:
         gif_path = str(Path(output_path).with_suffix(".gif"))
@@ -69,17 +73,26 @@ def make_cinemagraph(
 def make_cinemagraph_from_photo(
     photo_path: str,
     output_path: str,
-    effect: str,
+    effect: str | list[str],
     mask_path: str | None = None,
     duration: float = 4.0,
     fps: int = 30,
+    speed: float = 1.0,
     feather: int = 21,
     apply_grade: bool = True,
     grade_strength: float = 1.0,
     grain: float = 0.03,
     also_gif: bool = False,
     effect_kwargs: dict | None = None,
+    loop_duration: float | None = None,
 ) -> None:
+    """`effect` may be a single effect name, or a list to combine -- at most
+    one particle effect (rain/snow/dust) plus any number of tone effects
+    (ripple/sway/flicker/smoke). `effect_kwargs` is keyed by effect name for
+    per-effect overrides, e.g. {"dust": {"count": 150}}."""
+    if loop_duration and also_gif:
+        raise ValueError("--gif isn't supported together with --loop-duration (the GIF would be enormous); drop one of them.")
+
     image = cv2.imread(str(photo_path))
     if image is None:
         raise FileNotFoundError(f"Could not read photo: {photo_path}")
@@ -90,13 +103,13 @@ def make_cinemagraph_from_photo(
     n_frames = max(int(round(duration * fps)), 2)
     frames = photo_effects.animate_photo(
         image, effect=effect, mask=soft_mask, n_frames=n_frames, duration=duration,
-        **(effect_kwargs or {})
+        speed=speed, effect_kwargs=effect_kwargs,
     )
 
     if apply_grade:
         frames = grade_mod.apply_grade_to_frames(frames, strength=grade_strength, grain=grain)
 
-    io_utils.write_video(frames, output_path, fps=fps)
+    io_utils.write_video(frames, output_path, fps=fps, loop_duration=loop_duration)
 
     if also_gif:
         gif_path = str(Path(output_path).with_suffix(".gif"))
