@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cinemagraph-tool"
+version = "0"
+description = "Turn a short video or photo into a looping lofi cinemagraph."
+requires-python = ">=3.11"
+dependencies = [
+    "opencv-python>=4.9.0,<5",
+    "numpy>=1.26.0,<3",
+    "click>=8.1.0,<9",
+    "imageio>=2.34.0,<3",
+    "imageio-ffmpeg>=0.4.9,<1",
+]
+
+[project.optional-dependencies]
+api = ["fastapi>=0.110.0,<1", "uvicorn[standard]>=0.29.0,<1"]
+ml = ["torch>=2.2.0", "transformers>=4.40.0"]
+
+[dependency-groups]
+dev = ["pytest>=8.0.0", "pytest-cov"]
+
+[project.scripts]
+cinemagraph = "cinemagraph.cli:cli"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

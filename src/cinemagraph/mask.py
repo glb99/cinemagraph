@@ -60,3 +60,8 @@ def load_mask(mask_path: str, shape: tuple[int, int], feather: int = 21) -> np.n
 
 def save_mask_preview(mask: np.ndarray, out_path: str) -> None:
     cv2.imwrite(str(out_path), (mask * 255).astype(np.uint8))
+
+
+def to_3ch(mask: np.ndarray) -> np.ndarray:
+    """Broadcast a soft HxW mask to HxWx3 for blending against a BGR frame."""
+    return np.stack([mask] * 3, axis=-1)

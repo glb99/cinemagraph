@@ -32,6 +32,14 @@ def read_frames(video_path: str, max_frames: int | None = None) -> tuple[list[np
     return frames, fps
 
 
+def read_image(image_path: str) -> np.ndarray:
+    """Read a single image (BGR, uint8) via OpenCV."""
+    image = cv2.imread(str(image_path))
+    if image is None:
+        raise FileNotFoundError(f"Could not read image: {image_path}")
+    return image
+
+
 def write_video(frames: list[np.ndarray], out_path: str, fps: float, loop_duration: float | None = None) -> None:
     """Write `frames` as a video. If `loop_duration` (seconds) is longer than the
     natural length of `frames`, the loop is repeated to fill it -- frames are

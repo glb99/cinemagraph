@@ -9,31 +9,42 @@ element). Two independent input modes:
 
 - **From a video clip** — auto-detects the moving region and produces a looping, graded cinemagraph.
 - **From a single photo** — animates a still using built-in procedural motion effects (rain, snow,
-  dust, ripple, sway, flicker, smoke), no source footage needed.
+  dust, ripple, sway, wind, flicker, smoke, vapor), no source footage needed. Effects are
+  combinable (e.g. `--effect wind --effect vapor --effect dust`).
 
 ## Setup
 
+Uses [uv](https://docs.astral.sh/uv/):
+
 ```bash
-pip install -r requirements.txt
+uv sync
 ```
 
-No test suite, linter, or formatter is configured in this repo.
+Installs the `cinemagraph` package (editable) plus the `api` extra and `dev` dependency group into
+`.venv`. The heavy `ml` extra (torch/transformers, for the future semantic-mask sidecar) is declared
+in `pyproject.toml` but deliberately **not** synced by default — only pull it in explicitly
+(`uv sync --extra ml`) when working on that feature, since it doesn't belong in the core tool's venv.
+
+Tests: `uv run pytest`. No linter/formatter configured yet.
 
 ## Running
 
+Installed as a console script, `cinemagraph`, via `[project.scripts]` in `pyproject.toml`:
+
 ```bash
 # From a video clip
-python cli.py make input.mp4 output.mp4
-python cli.py mask-preview input.mp4 mask_preview.png   # preview auto-detected mask before a full render
-python cli.py make input.mp4 output.mp4 --mask mask_preview.png --no-grade
+uv run cinemagraph make input.mp4 output.mp4
+uv run cinemagraph mask-preview input.mp4 mask_preview.png   # preview auto-detected mask before a full render
+uv run cinemagraph make input.mp4 output.mp4 --mask mask_preview.png --no-grade
 
 # From a single photo (no video needed)
-python cli.py from-photo photo.jpg output.mp4 --effect smoke
-python cli.py from-photo photo.jpg output.mp4 --effect rain --mask window_mask.png
+uv run cinemagraph from-photo photo.jpg output.mp4 --effect smoke
+uv run cinemagraph from-photo photo.jpg output.mp4 --effect rain --mask window_mask.png
 ```
 
-Run `python cli.py make --help` / `python cli.py from-photo --help` for the full flag list (feather,
-grade strength, grain, duration/fps/speed, GIF export, etc.) — flags are self-documenting via Click.
+Run `uv run cinemagraph make --help` / `uv run cinemagraph from-photo --help` for the full flag list
+(feather, grade strength, grain, duration/fps/speed, GIF export, etc.) — flags are self-documenting
+via Click.
 
 ### Generating synthetic test inputs
 
@@ -41,19 +52,20 @@ There's no real sample footage checked in beyond `photo.jpg`. To exercise the vi
 photo effects without your own footage:
 
 ```bash
-python examples/make_test_clip.py   # writes examples/test_input.mp4 (fake steam over a mug)
-python cli.py make examples/test_input.mp4 examples/test_output.mp4 --gif
+uv run python examples/make_test_clip.py   # writes examples/test_input.mp4 (fake steam over a mug)
+uv run cinemagraph make examples/test_input.mp4 examples/test_output.mp4 --gif
 
-python examples/make_test_photo.py  # writes examples/test_photo.jpg
-python cli.py from-photo examples/test_photo.jpg examples/test_output.mp4 --effect smoke
+uv run python examples/make_test_photo.py  # writes examples/test_photo.jpg
+uv run cinemagraph from-photo examples/test_photo.jpg examples/test_output.mp4 --effect smoke
 ```
 
 ## Architecture
 
-All logic lives in `cinemagraph/`, with `cli.py` as a thin Click wrapper that only parses flags and
-calls into `cinemagraph.pipeline`. Two entry points, `make_cinemagraph` and
-`make_cinemagraph_from_photo` in `pipeline.py`, each stitch together the same set of stages in
-different order:
+Package lives at `src/cinemagraph/` (src-layout, to keep `import cinemagraph` from ever silently
+resolving to the working copy instead of the installed package), with `cli.py` as a thin Click
+wrapper that only parses flags and calls into `cinemagraph.pipeline`. Two entry points,
+`make_cinemagraph` and `make_cinemagraph_from_photo` in `pipeline.py`, each stitch together the same
+set of stages in different order:
 
 - **`io_utils.py`** — reads/writes video (`cv2.VideoCapture`/`VideoWriter`) and GIFs (`imageio`).
   Whole clips are read into memory as a `list[np.ndarray]` — fine for the few-second clips this tool
@@ -65,12 +77,23 @@ different order:
 - **`loop.py`** — video-pipeline-only. `find_best_loop_point` trims a clip to where it naturally
   loops best (closest frame to frame 0 near the end); `crossfade_loop` blends the tail into the head
   so the loop point is invisible.
-- **`photo_effects.py`** — procedural motion generators (rain/snow/dust share a particle engine;
-  ripple/sway use `cv2.remap` pixel displacement; flicker modulates brightness; smoke layers sine
-  noise fields). Every effect is a periodic function of `t = frame / n_frames`, so the sequence loops
-  perfectly by construction — this is why the photo pipeline never calls `loop.py`. Motion rate is
-  defined in `speed` (cycles/sec-equivalent), decoupled from `duration`, so lengthening a clip changes
-  how often it loops rather than how fast the motion looks.
+- **`effects/`** — procedural motion generators, one plugin per module, registered against a single
+  registry in `base.py` (`Effect(name, family, precompute, apply, defaults, allowed_kwargs)`,
+  `EffectFamily.TONE` or `.PARTICLE`). `animate_photo()` (in `effects/__init__.py`) resolves the
+  requested effect name(s) against the registry and chains them: rain/snow/dust (`particles.py`)
+  share a particle engine and always composite last (`PARTICLE` family — they sit visually on top,
+  regardless of the order effects were requested in); ripple/sway/wind (`ripple.py`/`sway.py`/
+  `wind.py`) use `cv2.remap` pixel displacement (wind sums several sway-like octaves at different
+  spatial/temporal rates for a turbulent, gusting look); flicker (`flicker.py`) modulates brightness;
+  smoke/vapor (`clouds.py`) share a layered-sine-field "cloud" engine (vapor adds blur, lower
+  opacity, and a deterministic rising carrier wave for a steam-like look) — these five are all
+  `TONE` family, running in sequence on one shared frame before any `PARTICLE` effect is applied.
+  Every effect is a periodic function of `t = frame / n_frames`, so the sequence loops perfectly by
+  construction — this is why the photo pipeline never calls `loop.py`. Motion rate is defined in
+  `speed` (cycles/sec-equivalent), decoupled from `duration`, so lengthening a clip changes how often
+  it loops rather than how fast the motion looks. To add a new effect: write a `_precompute(ctx) ->
+  dict` / `_apply(base, pc, t) -> ndarray` pair in a new module and `register()` an `Effect` for it
+  (see any existing module, e.g. `ripple.py`, for the pattern) — nothing else needs to change.
 - **`grade.py`** — shared by both pipelines. `lofi_grade` applies lifted blacks, warm shift,
   desaturation, vignette, and grain to a single frame; `apply_grade_to_frames` maps it over a list.
 

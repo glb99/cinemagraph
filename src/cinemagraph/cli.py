@@ -1,13 +1,13 @@
 """CLI for generating lofi-style cinemagraphs from short video clips.
 
 Usage:
-    python cli.py make input.mp4 output.mp4
-    python cli.py make input.mp4 output.mp4 --mask mask.png --no-grade
-    python cli.py mask-preview input.mp4 preview_mask.png
+    cinemagraph make input.mp4 output.mp4
+    cinemagraph make input.mp4 output.mp4 --mask mask.png --no-grade
+    cinemagraph mask-preview input.mp4 preview_mask.png
 """
 import click
 
-from cinemagraph import io_utils, mask as mask_mod, photo_effects, pipeline
+from . import effects as effects_pkg, pipeline, validation
 
 
 @click.group()
@@ -40,7 +40,7 @@ def make(input_path, output_path, mask_path, still_frame_index, blend_frames, au
          mask_threshold, feather, apply_grade, grade_strength, grain, also_gif, mask_preview_path,
          loop_duration):
     """Turn INPUT_PATH into a looping cinemagraph at OUTPUT_PATH."""
-    pipeline.make_cinemagraph(
+    pipeline.save_cinemagraph_video(
         input_path=input_path,
         output_path=output_path,
         mask_path=mask_path,
@@ -70,19 +70,17 @@ def mask_preview(input_path, output_path, mask_threshold, feather):
     Use this to check/tune the mask before committing to a full render, or as a
     starting point to hand-touch-up in an image editor.
     """
-    frames, _ = io_utils.read_frames(input_path)
-    soft_mask = mask_mod.auto_motion_mask(frames, threshold=mask_threshold, feather=feather)
-    mask_mod.save_mask_preview(soft_mask, output_path)
+    pipeline.save_mask_preview(input_path, output_path, mask_threshold=mask_threshold, feather=feather)
     click.echo(f"Saved mask preview to {output_path}")
 
 
 @cli.command("from-photo")
 @click.argument("photo_path", type=click.Path(exists=True))
 @click.argument("output_path", type=click.Path())
-@click.option("--effect", "effects", type=click.Choice(photo_effects.EFFECTS), required=True, multiple=True,
+@click.option("--effect", "effects", type=click.Choice(effects_pkg.EFFECTS), required=True, multiple=True,
               help="Which procedural motion(s) to animate onto the photo. Repeat to combine effects "
-                   "(e.g. --effect dust --effect flicker), in any mix -- ripple/sway/flicker/smoke run "
-                   "first in listed order; rain/snow/dust (if any) always composite on top last.")
+                   "(e.g. --effect dust --effect flicker), in any mix -- ripple/sway/wind/flicker/smoke/vapor "
+                   "run first in listed order; rain/snow/dust (if any) always composite on top last.")
 @click.option("--mask", "mask_path", type=click.Path(exists=True), default=None,
               help="Where the effect applies (white=animated, black=frozen). Omit to apply over the whole photo.")
 @click.option("--duration", type=float, default=4.0, help="Length of the loop in seconds.")
@@ -101,8 +99,12 @@ def mask_preview(input_path, output_path, mask_threshold, feather):
 @click.option("--ripple-wavelength", type=float, default=None, help="Ripple wavelength in pixels (default: 40.0).")
 @click.option("--sway-amplitude", type=float, default=None, help="Sway displacement in pixels (default: 6.0).")
 @click.option("--sway-freq", type=float, default=None, help="Sway spatial frequency (default: 1.0).")
+@click.option("--wind-amplitude", type=float, default=None, help="Wind gust displacement in pixels (default: 8.0).")
+@click.option("--wind-gustiness", type=float, default=None,
+              help="Wind gust rate multiplier -- higher gusts more often (default: 1.0).")
 @click.option("--flicker-strength", type=float, default=None, help="Flicker brightness swing, 0-1+ (default: 0.25).")
 @click.option("--smoke-opacity", type=float, default=None, help="Smoke blend strength (default: 0.35).")
+@click.option("--vapor-opacity", type=float, default=None, help="Water vapor/steam blend strength (default: 0.22).")
 @click.option("--feather", type=int, default=21, help="Mask edge softness (odd pixel radius).")
 @click.option("--grade/--no-grade", "apply_grade", default=True, help="Apply the lofi color grade.")
 @click.option("--grade-strength", type=float, default=1.0, help="Strength of the lofi grade.")
@@ -114,36 +116,34 @@ def mask_preview(input_path, output_path, mask_threshold, feather):
                    "Not compatible with --gif.")
 def from_photo(photo_path, output_path, effects, mask_path, duration, fps, speed,
                 rain_count, rain_opacity, snow_count, snow_opacity, dust_count, dust_opacity,
-                ripple_amplitude, ripple_wavelength, sway_amplitude, sway_freq, flicker_strength, smoke_opacity,
+                ripple_amplitude, ripple_wavelength, sway_amplitude, sway_freq,
+                wind_amplitude, wind_gustiness, flicker_strength, smoke_opacity, vapor_opacity,
                 feather, apply_grade, grade_strength, grain, also_gif, loop_duration):
     """Animate a single PHOTO_PATH into a looping cinemagraph using one or more procedural effects.
 
-    Effects: rain, snow, dust, ripple, sway, flicker, smoke.
+    Effects: rain, snow, dust, ripple, sway, wind, flicker, smoke, vapor.
     No source video needed -- motion is generated algorithmically. --speed
     controls how fast the motion moves regardless of --duration, so a 4s and
     a 20s clip of the same --speed look equally fast, just looping more or
     less often.
     """
-    # (option value, owning effect, effect_kwargs key)
-    per_effect_options = [
-        (rain_count, "rain", "count"), (rain_opacity, "rain", "opacity"),
-        (snow_count, "snow", "count"), (snow_opacity, "snow", "opacity"),
-        (dust_count, "dust", "count"), (dust_opacity, "dust", "opacity"),
-        (ripple_amplitude, "ripple", "amplitude"), (ripple_wavelength, "ripple", "wavelength"),
-        (sway_amplitude, "sway", "amplitude"), (sway_freq, "sway", "freq"),
-        (flicker_strength, "flicker", "strength"),
-        (smoke_opacity, "smoke", "opacity"),
-    ]
+    per_effect_options = {
+        "rain": {"count": rain_count, "opacity": rain_opacity},
+        "snow": {"count": snow_count, "opacity": snow_opacity},
+        "dust": {"count": dust_count, "opacity": dust_opacity},
+        "ripple": {"amplitude": ripple_amplitude, "wavelength": ripple_wavelength},
+        "sway": {"amplitude": sway_amplitude, "freq": sway_freq},
+        "wind": {"amplitude": wind_amplitude, "gustiness": wind_gustiness},
+        "flicker": {"strength": flicker_strength},
+        "smoke": {"opacity": smoke_opacity},
+        "vapor": {"opacity": vapor_opacity},
+    }
+    try:
+        effect_kwargs = validation.resolve_effect_kwargs(list(effects), per_effect_options)
+    except ValueError as e:
+        raise click.UsageError(str(e))
 
-    effect_kwargs = {}
-    for value, owning_effect, key in per_effect_options:
-        if value is None:
-            continue
-        if owning_effect not in effects:
-            raise click.UsageError(f"--{owning_effect}-{key} only applies when --effect {owning_effect} is included.")
-        effect_kwargs.setdefault(owning_effect, {})[key] = value
-
-    pipeline.make_cinemagraph_from_photo(
+    pipeline.save_cinemagraph_from_photo(
         photo_path=photo_path,
         output_path=output_path,
         effect=list(effects),

@@ -1,10 +1,15 @@
 __pycache__/
 *.pyc
+*.egg-info/
+build/
+dist/
+.venv/
+.pytest_cache/
+.coverage
 
 # generated outputs
 /output.mp4
-examples/test_input.mp4
-examples/test_output.mp4
-examples/test_output.gif
-examples/output_photo.mp4
-examples/test_mask.png
+examples/*.mp4
+examples/*.gif
+examples/*.png
+examples/*.jpg

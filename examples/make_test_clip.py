@@ -5,8 +5,8 @@ import numpy as np
 W, H, FPS, N = 320, 240, 30, 60
 
 
-def main():
-    writer = cv2.VideoWriter("examples/test_input.mp4", cv2.VideoWriter_fourcc(*"mp4v"), FPS, (W, H))
+def main(output_path="examples/test_input.mp4"):
+    writer = cv2.VideoWriter(str(output_path), cv2.VideoWriter_fourcc(*"mp4v"), FPS, (W, H))
     bg = np.full((H, W, 3), (60, 45, 35), dtype=np.uint8)  # warm dark background
     cv2.rectangle(bg, (40, 150), (280, 220), (90, 70, 50), -1)  # a "table"
     cv2.circle(bg, (160, 130), 30, (30, 30, 200), -1)  # a static "mug"
@@ -23,7 +23,8 @@ def main():
         frame = cv2.GaussianBlur(frame, (5, 5), 0)
         writer.write(frame)
     writer.release()
-    print("Wrote examples/test_input.mp4")
+    print(f"Wrote {output_path}")
+    return output_path
 
 
 if __name__ == "__main__":
