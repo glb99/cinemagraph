@@ -126,3 +126,35 @@ uv run pytest
 Covers the mask contract (`auto_motion_mask`/`load_mask`/`to_3ch`), the effect registry (loop-closure
 invariant, per-effect kwarg validation), and end-to-end smoke tests for both pipelines — all against
 synthetic fixtures generated on the fly, no checked-in test assets required.
+
+## API
+
+A minimal local HTTP API (FastAPI) wraps the same rendering code, for a future UI or scripted use
+without shelling out:
+
+```bash
+uv sync --extra api
+uv run uvicorn api.app:app --reload
+```
+
+`POST /render/video` / `POST /render/photo` accept a multipart file upload and return a `job_id`
+immediately (renders run in the background); `GET /jobs/{job_id}` polls status, `GET /jobs/{job_id}/file`
+downloads the result once done. `GET /effects` lists available effects, `GET /capabilities` reports
+optional features (currently just the not-yet-built semantic-mask sidecar, see `ml_sidecar/README.md`).
+No auth — this is meant for local/personal use, not as a hosted service.
+
+## Docker
+
+```bash
+docker compose up
+```
+
+Builds and runs the API on `localhost:8000`, with `./data` mounted for job input/output. The image
+only ever includes the `api` extra (opencv/numpy/click/fastapi) — never the heavy `ml` extra
+(torch/transformers), which is reserved for a separate sidecar container (not yet built).
+
+The CLI works the same way inside the container, overriding the default command:
+
+```bash
+docker run --rm -v "$(pwd)/data:/data" cinemagraph-tool cinemagraph from-photo /data/photo.jpg /data/out.mp4 --effect smoke
+```

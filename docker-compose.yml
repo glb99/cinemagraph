@@ -1,0 +1,24 @@
+services:
+  core:
+    build: .
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data:/data
+    environment:
+      - CINEMAGRAPH_DATA_DIR=/data
+      # Uncomment once ml-sidecar (below) actually exists:
+      # - ML_SIDECAR_URL=http://ml-sidecar:8001
+
+  # Stub -- ml_sidecar/ currently only has a README documenting the intended
+  # contract (POST /segment {image, prompt} -> mask.png), no Dockerfile or
+  # code yet. This entry reserves the seam: `core` degrades gracefully
+  # (GET /capabilities -> semantic_mask: false, POST /mask/semantic -> 503)
+  # whenever ML_SIDECAR_URL isn't set, which is the default. Once the
+  # sidecar is built, uncomment this and the ML_SIDECAR_URL line above, then
+  # run `docker compose --profile ml up`.
+  # ml-sidecar:
+  #   build: ./ml_sidecar
+  #   profiles: ["ml"]
+  #   ports:
+  #     - "8001:8001"

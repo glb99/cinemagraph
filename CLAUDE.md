@@ -17,15 +17,19 @@ element). Two independent input modes:
 Uses [uv](https://docs.astral.sh/uv/):
 
 ```bash
-uv sync
+uv sync                    # core CLI only (opencv/numpy/click/imageio) + dev dependency group
+uv sync --extra api        # + fastapi/uvicorn/httpx, for api/app.py
 ```
 
-Installs the `cinemagraph` package (editable) plus the `api` extra and `dev` dependency group into
-`.venv`. The heavy `ml` extra (torch/transformers, for the future semantic-mask sidecar) is declared
-in `pyproject.toml` but deliberately **not** synced by default — only pull it in explicitly
-(`uv sync --extra ml`) when working on that feature, since it doesn't belong in the core tool's venv.
+`dev` (pytest etc.) is a [PEP 735 dependency group](https://peps.python.org/pep-0735/), synced by
+default and never part of a real install's metadata. `api` and `ml` are `[project.optional-dependencies]`
+extras — real, installable features, opt-in via `--extra`. The heavy `ml` extra (torch/transformers,
+for the future semantic-mask sidecar) is declared in `pyproject.toml` but deliberately **not** synced
+by default, and shouldn't be added to the core tool's or the API's venv — only pull it in explicitly
+(`uv sync --extra ml`) when working on that feature in isolation.
 
-Tests: `uv run pytest`. No linter/formatter configured yet.
+Tests: `uv run pytest` (needs `--extra api` synced first, for the API smoke tests). No linter/formatter
+configured yet.
 
 ## Running
 
@@ -63,9 +67,15 @@ uv run cinemagraph from-photo examples/test_photo.jpg examples/test_output.mp4 -
 
 Package lives at `src/cinemagraph/` (src-layout, to keep `import cinemagraph` from ever silently
 resolving to the working copy instead of the installed package), with `cli.py` as a thin Click
-wrapper that only parses flags and calls into `cinemagraph.pipeline`. Two entry points,
-`make_cinemagraph` and `make_cinemagraph_from_photo` in `pipeline.py`, each stitch together the same
-set of stages in different order:
+wrapper that only parses flags and calls into `cinemagraph.pipeline`.
+
+`pipeline.py` is split into a **compute layer** (`render_video_cinemagraph`, `render_photo_cinemagraph`,
+`render_mask_preview` — pure-ish, return frames/masks as data, never touch the output path) and a
+**persist layer** (`save_cinemagraph_video`, `save_cinemagraph_from_photo`, `save_mask_preview` — thin
+wrappers that call the matching `render_*` then write to disk). `cli.py` uses the `save_*` wrappers;
+`api/app.py` uses the `render_*` functions directly since it wants control over exactly where output
+bytes land (a job-scoped directory). Each `render_*` stitches together the same set of stages in
+different order depending on video vs. photo input:
 
 - **`io_utils.py`** — reads/writes video (`cv2.VideoCapture`/`VideoWriter`) and GIFs (`imageio`).
   Whole clips are read into memory as a `list[np.ndarray]` — fine for the few-second clips this tool
@@ -99,15 +109,48 @@ set of stages in different order:
 
 ### Pipeline order
 
-**Video** (`make_cinemagraph`): read frames → auto-trim to best loop point → pick still frame →
-build mask (auto or loaded) → composite still+live per-frame via the mask → crossfade loop →
-grade → write.
+**Video** (`render_video_cinemagraph`): read frames → auto-trim to best loop point → pick still frame
+→ build mask (auto or loaded) → composite still+live per-frame via the mask → crossfade loop →
+grade. `save_cinemagraph_video` then writes the result (and optionally the mask preview PNG, GIF).
 
-**Photo** (`make_cinemagraph_from_photo`): read image → load mask (or none) → generate `n_frames`
-via the chosen effect (already loops perfectly, no crossfade needed) → grade → write.
+**Photo** (`render_photo_cinemagraph`): read image → load mask (or none) → generate `n_frames` via
+the chosen effect(s) (already loops perfectly, no crossfade needed) → grade. `save_cinemagraph_from_photo`
+then writes the result.
 
-Both pipelines converge on `io_utils.write_video` / `write_gif` for output, and share `grade.py`
-for the final color treatment.
+Both `save_*` wrappers converge on `io_utils.write_video` / `write_gif` for output; both `render_*`
+functions share `grade.py` for the final color treatment.
 
 Frames are `np.ndarray` in OpenCV's BGR uint8 format throughout; conversions to RGB only happen at
 GIF-write time.
+
+`validation.py` holds cross-entry-point request validation (currently: `resolve_effect_kwargs`,
+checking that `from-photo`'s per-effect override flags belong to a requested effect and are real
+overrides for it, per that effect's `allowed_kwargs`). It raises plain `ValueError` — a library
+concern — and each entry point translates that into its own error type (`cli.py` → `click.UsageError`,
+`api/app.py`'s effect-name check → HTTP 422).
+
+## API layer
+
+`api/` (sibling to `src/`, not part of the `cinemagraph` package — so the core library/CLI never
+gain `fastapi`/`uvicorn`/`httpx` as hard dependencies):
+
+- **`app.py`** — the FastAPI app and all routes. Kept thin like `cli.py`: routes only parse the
+  request, delegate to `cinemagraph.pipeline`/`api.jobs`, and shape the response.
+- **`jobs.py`** — in-process job tracking (`dict[str, Job]` in memory). No Celery/Redis — this is a
+  single-process, local, no-auth personal tool; job state doesn't survive a restart, which is an
+  accepted tradeoff, not an oversight.
+- **`schemas.py`** — pydantic request/response models.
+
+Renders (`POST /render/video`, `POST /render/photo`) accept a multipart file upload, save it into a
+job-scoped directory under `CINEMAGRAPH_DATA_DIR` (default `./data`), and run the matching `render_*`
++ write via a `BackgroundTasks`-scheduled function — the endpoint returns a `job_id` immediately.
+`GET /jobs/{job_id}` polls status (`pending`/`running`/`done`/`error`); `GET /jobs/{job_id}/file`
+downloads the finished output.
+
+`GET /capabilities` and `POST /mask/semantic` are the seam for the not-yet-built CLIPSeg sidecar
+(see `ml_sidecar/README.md`): both read `ML_SIDECAR_URL` from the environment **at request time**,
+never at startup, so the API always starts cleanly and simply reports the feature as unavailable
+(`503` for `/mask/semantic`, `{"semantic_mask": false}` from `/capabilities`) when the sidecar isn't
+configured or isn't reachable — never a `500` or a failed startup.
+
+Run locally: `uv run uvicorn api.app:app --reload` (needs `uv sync --extra api` first).
