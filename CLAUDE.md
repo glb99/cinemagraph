@@ -22,12 +22,12 @@ uv sync --extra server        # + fastapi/uvicorn/httpx, for server/app.py
 ```
 
 `dev` (pytest etc.) is a [PEP 735 dependency group](https://peps.python.org/pep-0735/), synced by
-default and never part of a real install's metadata. `server` and `ml` are
-`[project.optional-dependencies]` extras — real, installable features, opt-in via `--extra`. The `ml`
-extra (torch/transformers) predates `machine-learning/` becoming its own standalone project with its
-own `pyproject.toml`/deps; nothing in `cinemagraph` or `server` actually imports torch/transformers
-today, so this extra looks dead now rather than "not yet used" — worth confirming and removing rather
-than carrying it forward on the assumption it still means something.
+default and never part of a real install's metadata. `server` is the only
+`[project.optional-dependencies]` extra — a real, installable feature, opt-in via `--extra`. There
+used to also be an `ml` extra (torch/transformers) here, predating `machine-learning/` becoming its
+own standalone project with its own `pyproject.toml`/deps; removed once confirmed dead (nothing in
+`cinemagraph` or `server` ever imported torch/transformers, and the root `Dockerfile` explicitly
+excluded it from every build).
 
 Tests: `uv run pytest` (needs `--extra server` synced first, for the API smoke tests). No
 linter/formatter configured yet.

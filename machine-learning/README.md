@@ -15,8 +15,9 @@ Kubernetes.
 ## Why a separate service
 
 `CLIPSeg` needs `torch` + `transformers` — multiple GB of dependencies that have no business
-being in the core `cinemagraph` image (see the root `Dockerfile`, which only ever installs the
-`server` extra, never `ml`). Keeping it as a separate container means:
+being in the core `cinemagraph` image. The root project's own `pyproject.toml` has no `torch`
+dependency anywhere, not even as an unused optional extra — this is the only place those
+packages are declared. Keeping it as a separate container means:
 
 - The core image stays small and fast to build regardless of whether anyone ever uses semantic
   masking.

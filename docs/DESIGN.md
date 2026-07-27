@@ -155,7 +155,7 @@ cinemagraph-tool/
 ├── scripts/golden_check.py    # pixel-regression check, separate from pytest (see sec 6)
 ├── docs/experiments/          # lab notebook, one file per experiment
 ├── Dockerfile + docker-compose.yml   # core image (never torch); ML service gated off
-└── pyproject.toml             # uv-managed; extras: server, ml; dep-group: dev
+└── pyproject.toml             # uv-managed; extra: server; dep-group: dev
 ```
 
 This package was originally a top-level `api/` directory, then moved into `src/` (setuptools'
@@ -337,6 +337,7 @@ Decisions already made, with reasoning — so they aren't accidentally relitigat
 | A uv **workspace** was considered and rejected for `cinemagraph` + this package, not just for the heavy services | the uv docs' own criterion for rejecting a workspace is conflicting requirements or wanting separate venvs per member — neither applies here (no dependency conflict, same `requires-python`, and both need to be co-installed, not isolated). A workspace would have been *appropriate* for this pair; it just wasn't *necessary*, since they're already one distribution. The rejection that matters is the heavy-ML-services one below, whose criterion (`requires-python` intersection, torch version conflicts, wanting separate venvs) genuinely applies there |
 | Renamed `api` → `server` (directory, extra name, module paths) | matches [Immich](https://github.com/immich-app/immich/tree/main/server)'s convention for this exact role. "api" overclaimed: this package orchestrates rendering, music generation, sound-effect generation, and masking behind whatever door reaches it (HTTP today, conceivably something else later) — "api" describes only the protocol, not the job. It also collided with the FastAPI instance's own conventional name: `api.app:app` would have become `app.app:app` under the more obvious alternative rename ("app"), a stutter with a package literally named `app`; `server.app:app` doesn't have that problem. The `server` name change did *not* prompt renaming the distribution (`cinemagraph-tool`) or the `cinemagraph` package — those remain a separate, larger identity question, not resolved here |
 | Heavy ML = separate project, not uv workspace | shared lockfile would reintroduce torch into the core ([uv docs](https://docs.astral.sh/uv/concepts/projects/workspaces/)) |
+| Removed the root `ml` extra (`torch`/`transformers`) from `pyproject.toml` | predated `machine-learning/` becoming its own standalone project with its own deps; confirmed dead rather than assumed dead — nothing in `cinemagraph` or `server` ever imported those packages, and the root `Dockerfile` already excluded it from every build. Kept as a stray declaration it would have been a second, contradictory answer to "where do torch-class deps live" alongside the actual answer (an isolated service) |
 | `machine-learning/` naming (was `ml_sidecar/`) | matches [Immich](https://github.com/immich-app/immich/tree/main/machine-learning); "sidecar" wrongly implied same-pod k8s semantics |
 | Degradation checked per-request, never at startup | core must start and work with every optional satellite absent |
 | Jobs are in-memory and ephemeral | personal single-process tool; the *library* (§5.1), not jobs, is where persistence belongs |

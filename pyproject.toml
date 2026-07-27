@@ -22,7 +22,6 @@ server = [
     "python-multipart>=0.0.9,<1",
     "httpx>=0.27.0,<1",
 ]
-ml = ["torch>=2.2.0", "transformers>=4.40.0"]
 
 [dependency-groups]
 dev = ["pytest>=8.0.0", "pytest-cov", "httpx>=0.27.0,<1"]

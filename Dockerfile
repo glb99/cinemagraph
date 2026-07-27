@@ -1,7 +1,7 @@
-# Core image only: CLI + API, opencv/numpy/click/fastapi/uvicorn/httpx.
-# Deliberately excludes the `ml` extra (torch/transformers) -- that's the
-# separate machine-learning/ image (see machine-learning/README.md), kept out
-# of this image so it stays small and fast to build/pull.
+# Core image only: CLI + API, opencv/numpy/click/fastapi/uvicorn/httpx. Never
+# torch/transformers -- those live entirely in the separate machine-learning/
+# project (own pyproject.toml, own image, see machine-learning/README.md),
+# kept out of this image so it stays small and fast to build/pull.
 FROM ghcr.io/astral-sh/uv:python3.13-bookworm-slim
 
 WORKDIR /app
