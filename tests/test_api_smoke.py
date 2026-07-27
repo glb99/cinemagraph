@@ -12,6 +12,7 @@ from fastapi.testclient import TestClient
 @pytest.fixture
 def api_client(tmp_path, monkeypatch):
     monkeypatch.setenv("CINEMAGRAPH_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("CINEMAGRAPH_LIBRARY_DIR", str(tmp_path / "library"))
     import api.app as app_module
 
     importlib.reload(app_module)  # re-read CINEMAGRAPH_DATA_DIR for this test's tmp_path
@@ -94,3 +95,59 @@ def test_semantic_mask_without_sidecar_returns_503(api_client, test_photo):
             data={"prompt": "water"},
         )
     assert resp.status_code == 503
+
+
+def test_library_add_list_get_file_and_remove(api_client, test_photo):
+    with open(test_photo, "rb") as f:
+        resp = api_client.post(
+            "/library",
+            files={"upload": ("photo.jpg", f, "image/jpeg")},
+            data={"kind": "reference", "tags": "sky, concept"},
+        )
+    assert resp.status_code == 200, resp.text
+    added = resp.json()
+    assert added["original_filename"] == "photo.jpg"
+    assert set(added["tags"]) == {"sky", "concept"}
+    asset_id = added["id"]
+
+    listed = api_client.get("/library").json()
+    assert any(a["id"] == asset_id for a in listed)
+
+    fetched = api_client.get(f"/library/{asset_id}")
+    assert fetched.status_code == 200
+    assert fetched.json() == added
+
+    file_resp = api_client.get(f"/library/{asset_id}/file")
+    assert file_resp.status_code == 200
+    assert len(file_resp.content) > 0
+
+    delete_resp = api_client.delete(f"/library/{asset_id}")
+    assert delete_resp.status_code == 200
+
+    assert api_client.get(f"/library/{asset_id}").status_code == 404
+
+
+def test_library_add_rejects_unknown_kind(api_client, test_photo):
+    with open(test_photo, "rb") as f:
+        resp = api_client.post(
+            "/library",
+            files={"upload": ("photo.jpg", f, "image/jpeg")},
+            data={"kind": "not_a_real_kind"},
+        )
+    assert resp.status_code == 422
+
+
+def test_library_get_and_remove_missing_asset_return_404(api_client):
+    assert api_client.get("/library/does-not-exist").status_code == 404
+    assert api_client.delete("/library/does-not-exist").status_code == 404
+
+
+def test_library_list_filters_by_kind(api_client, test_photo, test_video):
+    with open(test_photo, "rb") as f:
+        api_client.post("/library", files={"upload": ("photo.jpg", f, "image/jpeg")}, data={"kind": "reference"})
+    with open(test_video, "rb") as f:
+        api_client.post("/library", files={"upload": ("input.mp4", f, "video/mp4")}, data={"kind": "source"})
+
+    result = api_client.get("/library", params={"kind": "source"}).json()
+    assert len(result) == 1
+    assert result[0]["kind"] == "source"

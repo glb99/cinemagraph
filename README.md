@@ -124,8 +124,20 @@ uv run pytest
 ```
 
 Covers the mask contract (`auto_motion_mask`/`load_mask`/`to_3ch`), the effect registry (loop-closure
-invariant, per-effect kwarg validation), and end-to-end smoke tests for both pipelines — all against
-synthetic fixtures generated on the fly, no checked-in test assets required.
+invariant, per-effect kwarg validation), the reference library, and end-to-end smoke tests for both
+pipelines and the API — all against synthetic fixtures generated on the fly, no checked-in test assets
+required.
+
+Separately, `scripts/golden_check.py` catches "the refactor silently changed the rendered pixels" —
+a regression class the tests above deliberately don't check (they verify output is *valid*, not that
+it matches previous output):
+
+```bash
+uv run python scripts/golden_check.py            # check against tests/golden/
+uv run python scripts/golden_check.py --bless     # (re)generate the blessed frames
+```
+
+See `docs/DESIGN.md` for why this is a separate script rather than a pytest test.
 
 ## API
 
@@ -142,6 +154,27 @@ immediately (renders run in the background); `GET /jobs/{job_id}` polls status, 
 downloads the result once done. `GET /effects` lists available effects, `GET /capabilities` reports
 optional features (currently just the not-yet-built semantic-mask service, see `machine-learning/README.md`).
 No auth — this is meant for local/personal use, not as a hosted service.
+
+## Reference library
+
+A persistent local store for source images/videos and generated outputs, so they can be found again
+later instead of being forgotten the moment a render finishes. Files are content-addressed (SHA-256 —
+adding the same file twice is a free no-op on disk) with metadata in a small SQLite index.
+
+```bash
+uv run cinemagraph library add photo.jpg --kind reference --tag sky --tag concept
+uv run cinemagraph library list --tag sky
+uv run cinemagraph library show <asset-id>
+uv run cinemagraph library rm <asset-id>
+```
+
+Storage location defaults to `~/.cinemagraph/library`, override with `CINEMAGRAPH_LIBRARY_DIR`. The
+same operations are available over the API: `POST /library`, `GET /library`, `GET /library/{id}`,
+`GET /library/{id}/file`, `DELETE /library/{id}`.
+
+Not yet wired into `make`/`from-photo` — you can catalog assets today, but rendering still takes a
+plain file path, not a library reference. That's a natural next step, not a limitation of the storage
+design.
 
 ## Docker
 

@@ -7,7 +7,7 @@ Usage:
 """
 import click
 
-from . import effects as effects_pkg, pipeline, validation
+from . import effects as effects_pkg, library, pipeline, validation
 
 
 @click.group()
@@ -160,6 +160,66 @@ def from_photo(photo_path, output_path, effects, mask_path, duration, fps, speed
         loop_duration=loop_duration,
     )
     click.echo(f"Saved cinemagraph to {output_path}")
+
+
+@cli.group()
+def library_group():
+    """Manage the local reference library (source images/videos, generated outputs)."""
+
+
+cli.add_command(library_group, name="library")
+
+
+@library_group.command("add")
+@click.argument("path", type=click.Path(exists=True, dir_okay=False))
+@click.option("--kind", type=click.Choice(library.KINDS), default="reference",
+              help="What this asset is for (default: reference).")
+@click.option("--tag", "tags", multiple=True, help="Repeat to add multiple tags.")
+def library_add(path, kind, tags):
+    """Register PATH in the library. Re-adding identical content updates its tags/kind."""
+    asset = library.add(path, kind=kind, tags=list(tags))
+    click.echo(f"{asset.id}  ({asset.kind})  {asset.original_filename}")
+
+
+@library_group.command("list")
+@click.option("--kind", type=click.Choice(library.KINDS), default=None)
+@click.option("--tag", default=None)
+def library_list_cmd(kind, tag):
+    """List library assets, optionally filtered by --kind and/or --tag."""
+    assets = library.list_assets(kind=kind, tag=tag)
+    if not assets:
+        click.echo("(empty)")
+        return
+    for asset in assets:
+        tag_str = ",".join(asset.tags) if asset.tags else "-"
+        click.echo(f"{asset.id[:12]}  {asset.kind:<10} {asset.added_at}  tags={tag_str}  {asset.original_filename}")
+
+
+@library_group.command("show")
+@click.argument("asset_id")
+def library_show(asset_id):
+    """Show full details for one asset."""
+    asset = library.get(asset_id)
+    if asset is None:
+        raise click.ClickException(f"No asset with id {asset_id}")
+    click.echo(f"id:        {asset.id}")
+    click.echo(f"kind:      {asset.kind}")
+    click.echo(f"filename:  {asset.original_filename}")
+    click.echo(f"added_at:  {asset.added_at}")
+    click.echo(f"tags:      {', '.join(asset.tags) or '(none)'}")
+    click.echo(f"provenance: {asset.provenance or '(none)'}")
+    click.echo(f"path:      {asset.path}")
+
+
+@library_group.command("rm")
+@click.argument("asset_id")
+@click.option("--keep-file/--delete-file", default=False, help="Keep the stored file on disk (default: delete it).")
+def library_rm(asset_id, keep_file):
+    """Remove an asset from the library."""
+    removed = library.remove(asset_id, delete_file=not keep_file)
+    if not removed:
+        raise click.ClickException(f"No asset with id {asset_id}")
+    click.echo(f"Removed {asset_id}")
 
 
 if __name__ == "__main__":

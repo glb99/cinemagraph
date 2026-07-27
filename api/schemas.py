@@ -15,3 +15,12 @@ class JobStatusResponse(BaseModel):
 
 class CapabilitiesResponse(BaseModel):
     semantic_mask: bool
+
+
+class AssetResponse(BaseModel):
+    id: str
+    kind: str
+    original_filename: str
+    added_at: str
+    tags: list[str]
+    provenance: dict | None = None

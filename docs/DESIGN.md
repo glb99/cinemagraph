@@ -93,9 +93,27 @@ workspace — a shared lockfile is exactly what the heavy/light split must avoid
 capability is a registered node behind one uniform interface, which let a giant ecosystem
 grow without core rewrites. Our `effects/base.py` registry
 (`Effect(name, family, precompute, apply, defaults, allowed_kwargs)` + `register()`) is
-the same pattern at small scale. Rule: **when a family of interchangeable things emerges,
-give it a registry**; the effect registry is the template. Candidate future registries:
-generation backends, mask sources.
+the same pattern at small scale.
+
+Two conditions both have to hold before reaching for this, not just "more than one option
+exists": the things being registered must be **genuine peers** (same call shape, same
+runtime tier, same availability guarantees), *and* the registry must live inside whichever
+module actually owns that capability -- never inside `cinemagraph` for something that
+isn't conceptually part of animating an image (§3.2's scope test still applies on top of
+this one).
+
+- **Effects** qualify: all local, synchronous, always-available Python functions of equal
+  weight. This is the one built so far.
+- **A multi-backend `generation/`**, if it ever gets a second real backend worth swapping
+  between, would qualify -- registered inside `generation/` itself, never in `cinemagraph`.
+- **Mask sourcing does not currently qualify**, and isn't one -- deliberately. Hand-painted
+  mask, auto-motion-detection, and a semantic-mask HTTP call aren't peers: the first two are
+  local/synchronous/always-available, the third is a remote call that can be absent or time
+  out. Today this is plain `if mask_path: ... else: ...` branching in `pipeline.py`
+  (see `render_video_cinemagraph`/`render_photo_cinemagraph`), which is the right amount of
+  structure for three fixed, structurally-different options -- a registry here would paper
+  over a real difference (sync-and-guaranteed vs. async-and-optional) rather than simplify
+  anything.
 
 ### 3.4 One engine, thin doors
 
@@ -120,10 +138,12 @@ that may be deleted next week is waste.
 
 ```
 cinemagraph-tool/
-├── src/cinemagraph/          # the stable core: pipeline, effects registry, mask, grade, loop, io
-├── api/                      # FastAPI door: background jobs, uploads; extra `api`
+├── src/cinemagraph/          # the stable core: pipeline, effects registry, mask, grade, loop, io, library
+├── api/                      # FastAPI door: background jobs, uploads, library routes; extra `api`
 ├── machine-learning/         # reserved seam (README-only): CLIPSeg semantic masking
-├── tests/                    # 26 tests: contracts, invariants, smoke (core + API)
+├── tests/                    # 44 tests: contracts, invariants, smoke (core + API + library)
+├── scripts/golden_check.py   # pixel-regression check, separate from pytest (see sec 6)
+├── docs/experiments/         # lab notebook, one file per experiment
 ├── Dockerfile + docker-compose.yml   # core image (never torch); ML service gated off
 └── pyproject.toml            # uv-managed; extras: api, ml; dep-group: dev
 ```
@@ -131,27 +151,32 @@ cinemagraph-tool/
 Key properties already in place: 9 combinable procedural effects (tone/particle families,
 perfect loops by construction), auto + hand-painted masking, lofi grade, arbitrary-length
 looped output, CLI/API parity on the happy path (API lacks fine-tuning knobs — known gap),
-graceful degradation when the ML service is absent (`/capabilities`, 503s).
+graceful degradation when the ML service is absent (`/capabilities`, 503s), a persistent
+content-addressed reference library (§5.1 — implemented; not yet wired into `make`/`from-photo`).
 
 ## 5. Feature roadmap (unordered — this is a lab, not a backlog)
 
-### 5.1 Reference library (local storage for images / videos / generated outputs)
+### 5.1 Reference library (local storage for images / videos / generated outputs) — IMPLEMENTED
 
-A persistent, queryable store of source material and outputs. Design direction, informed
-by [Hydrus](https://hydrusnetwork.github.io/hydrus/faq.html) (SQLite + hash-addressed
-files + tags-not-folders) and Immich (hashing for dedup):
+A persistent, queryable store of source material and outputs. Built per the design
+direction below, informed by [Hydrus](https://hydrusnetwork.github.io/hydrus/faq.html)
+(SQLite + hash-addressed files + tags-not-folders) and Immich (hashing for dedup):
 
 - `src/cinemagraph/library.py` — **core-tier** module (both CLI and API need it; it's
   about the tool's own data, unlike the API's ephemeral jobs).
-- Storage: files under a library root (probably content-addressed by hash — free dedup,
-  stable references), metadata in **SQLite via stdlib `sqlite3`** (zero new deps; flat
-  JSON acceptable as v0 if SQLite feels heavy on day one).
-- Assets carry: hash, kind (reference / source / generated), tags, provenance (which
-  prompt/render produced it — generated outputs should register automatically).
-- Surfaces: `cinemagraph library add|list|show`, `GET/POST /library` routes; `make`/
-  `from-photo` accept a library reference wherever they accept a path.
-- **This is the first persistent-state subsystem** — decide the library root location
-  (`~/.cinemagraph/`? `CINEMAGRAPH_DATA_DIR`?) before building, not after.
+- Storage: files content-addressed by SHA-256 under `<root>/objects/` (free dedup —
+  re-adding identical bytes is a no-op on disk, just a metadata touch), metadata in
+  **SQLite via stdlib `sqlite3`** (`<root>/index.sqlite3`, zero new deps).
+- Assets carry: hash (= id), kind (`reference`/`source`/`generated`), tags, provenance
+  (arbitrary JSON — e.g. which prompt/effect produced a generated output).
+- Root defaults to `~/.cinemagraph/library`, override via `CINEMAGRAPH_LIBRARY_DIR` —
+  decided independent of `CINEMAGRAPH_DATA_DIR` (the API's ephemeral per-job scratch
+  space) specifically so the library works from the CLI alone, no API involved.
+- Surfaces: `cinemagraph library add|list|show|rm`, `POST/GET/DELETE /library[/...]`
+  routes — both call the exact same `library.py` functions.
+- **Not yet done**: `make`/`from-photo` still take plain paths, not library references;
+  generated outputs don't yet auto-register. Natural follow-up, deliberately deferred
+  rather than bundled into the initial build.
 
 ### 5.2 Image generation (backend genuinely undecided)
 
@@ -198,8 +223,8 @@ Researched against solo-experimental reality, not team-production cargo culting.
 | **pytest on invariants** (adopted) | the safety net that makes aggressive refactors safe — proven during phases 2–3 |
 | **git branches as experiment isolation** | an experiment = a branch; merged if it survives, deleted if not. No tooling needed |
 | **Capability flags via env vars** (adopted) | `ML_SERVICE_URL` unset = feature off. This *is* the feature-flag system this project needs |
-| **`docs/experiments/` log** | one short markdown note per experiment (what/why/verdict) — the lab notebook. Costs minutes, saves re-running dead ends |
-| **Golden-frame checks** | tiny script comparing rendered frames against blessed PNGs; catches "the refactor changed the pixels" instantly, offline |
+| **`docs/experiments/` log** (adopted) | one short markdown note per experiment (what/why/verdict) — the lab notebook. Costs minutes, saves re-running dead ends |
+| **Golden-frame checks** (adopted) | `scripts/golden_check.py`, diffs rendered frames against blessed PNGs in `tests/golden/`; catches "the refactor changed the pixels" instantly, offline. Kept separate from `tests/` on purpose — it's a regression check, not a correctness contract |
 
 ### Explicitly rejected (for now), with reasons
 
@@ -229,6 +254,9 @@ Decisions already made, with reasoning — so they aren't accidentally relitigat
 | Degradation checked per-request, never at startup | core must start and work with every optional satellite absent |
 | Jobs are in-memory and ephemeral | personal single-process tool; the *library* (§5.1), not jobs, is where persistence belongs |
 | `version = "0"`, no semver | it's an application, not a published library |
+| `library.py` is core-tier, not under `api/` | both CLI and API need the same storage/lookup logic; unlike jobs, it must survive restarts |
+| `CINEMAGRAPH_LIBRARY_DIR` separate from `CINEMAGRAPH_DATA_DIR` | the library must work from the CLI alone; tying it to the API's job-scratch env var would make that impossible |
+| Golden-frame check is a script, not a pytest test | it's a regression check against *previous* output, not a correctness contract against a spec — different kind of thing, see §3.5 |
 
 ### Placement quick-test for anything new
 

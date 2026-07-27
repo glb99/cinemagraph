@@ -16,16 +16,17 @@ service isn't running.
 """
 import os
 import shutil
+import tempfile
 from pathlib import Path
 
 import httpx
 from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 
-from cinemagraph import effects as effects_pkg, pipeline, validation
+from cinemagraph import effects as effects_pkg, library, pipeline, validation
 
 from . import jobs
-from .schemas import CapabilitiesResponse, JobResponse, JobStatusResponse
+from .schemas import AssetResponse, CapabilitiesResponse, JobResponse, JobStatusResponse
 
 DATA_DIR = Path(os.environ.get("CINEMAGRAPH_DATA_DIR", "./data")).resolve()
 
@@ -157,6 +158,62 @@ async def job_file(job_id: str):
     if job is None or job.status != jobs.JobStatus.DONE or job.output_path is None:
         raise HTTPException(404, "Output not available")
     return FileResponse(str(job.output_path))
+
+
+def _asset_to_response(asset) -> AssetResponse:
+    return AssetResponse(
+        id=asset.id, kind=asset.kind, original_filename=asset.original_filename,
+        added_at=asset.added_at, tags=asset.tags, provenance=asset.provenance,
+    )
+
+
+@app.post("/library", response_model=AssetResponse)
+async def library_add(
+    upload: UploadFile = File(...),
+    kind: str = Form("reference"),
+    tags: str = Form(""),
+):
+    if kind not in library.KINDS:
+        raise HTTPException(422, f"Unknown kind '{kind}'. Choose from: {', '.join(library.KINDS)}")
+
+    with tempfile.NamedTemporaryFile(suffix=Path(upload.filename or "").suffix, delete=False) as tmp:
+        tmp.write(await upload.read())
+        tmp_path = Path(tmp.name)
+    try:
+        tag_list = [t.strip() for t in tags.split(",") if t.strip()]
+        asset = library.add(str(tmp_path), kind=kind, tags=tag_list, original_filename=upload.filename)
+    finally:
+        tmp_path.unlink(missing_ok=True)
+    return _asset_to_response(asset)
+
+
+@app.get("/library", response_model=list[AssetResponse])
+async def library_list(kind: str | None = None, tag: str | None = None):
+    return [_asset_to_response(a) for a in library.list_assets(kind=kind, tag=tag)]
+
+
+@app.get("/library/{asset_id}", response_model=AssetResponse)
+async def library_get(asset_id: str):
+    asset = library.get(asset_id)
+    if asset is None:
+        raise HTTPException(404, "Asset not found")
+    return _asset_to_response(asset)
+
+
+@app.get("/library/{asset_id}/file")
+async def library_file(asset_id: str):
+    asset = library.get(asset_id)
+    if asset is None:
+        raise HTTPException(404, "Asset not found")
+    return FileResponse(str(asset.path))
+
+
+@app.delete("/library/{asset_id}")
+async def library_remove(asset_id: str):
+    removed = library.remove(asset_id)
+    if not removed:
+        raise HTTPException(404, "Asset not found")
+    return {"removed": asset_id}
 
 
 @app.post("/mask/semantic")

@@ -106,6 +106,16 @@ different order depending on video vs. photo input:
   (see any existing module, e.g. `ripple.py`, for the pattern) — nothing else needs to change.
 - **`grade.py`** — shared by both pipelines. `lofi_grade` applies lifted blacks, warm shift,
   desaturation, vignette, and grain to a single frame; `apply_grade_to_frames` maps it over a list.
+- **`library.py`** — persistent reference library (source images/videos, generated outputs),
+  independent of the rendering pipeline. Content-addressed storage (SHA-256 hash = filename under
+  `<root>/objects/`, so re-adding identical bytes is a free no-op) with metadata in a small SQLite
+  index (`<root>/index.sqlite3`, stdlib `sqlite3`, no new dependency). Root defaults to
+  `~/.cinemagraph/library`, overridable via `CINEMAGRAPH_LIBRARY_DIR` — deliberately independent of
+  `CINEMAGRAPH_DATA_DIR` (the API's ephemeral per-job scratch space), since the library needs to work
+  from the CLI alone. Core-tier (not under `api/`) because both CLI and API need the same storage
+  logic — see `docs/DESIGN.md` sec 5.1 for the placement rationale. Not yet wired into
+  `make`/`from-photo` (they still take plain paths, not library references) — cataloging and
+  rendering are currently separate steps.
 
 ### Pipeline order
 
@@ -155,4 +165,20 @@ request time**, never at startup, so the API always starts cleanly and simply re
 unavailable (`503` for `/mask/semantic`, `{"semantic_mask": false}` from `/capabilities`) when that
 service isn't configured or isn't reachable — never a `500` or a failed startup.
 
+`POST /library`, `GET /library`, `GET /library/{id}`, `GET /library/{id}/file`,
+`DELETE /library/{id}` are thin routes over `cinemagraph.library` (uploads are staged to a temp file,
+hashed/copied into the library, then the temp file is discarded) — the exact same functions the
+`cinemagraph library` CLI subcommands call.
+
 Run locally: `uv run uvicorn api.app:app --reload` (needs `uv sync --extra api` first).
+
+## Design document and experiments log
+
+`docs/DESIGN.md` is the living design document: project vision, the experimental-by-nature
+architecture principles (capability tiers, seams-before-implementations, registries as the plugin
+mechanism), the feature roadmap, researched-and-reasoned lab tooling choices, and a decision log for
+every "why does X live here" call made so far — read it before making a structural decision that
+might already be answered there. `docs/experiments/` is a lab notebook, one short file per experiment
+(see `docs/experiments/TEMPLATE.md`) — write one especially when something *doesn't* pan out.
+`scripts/golden_check.py` is separate from `tests/`: it catches rendered-pixel regressions that the
+pytest suite deliberately doesn't check for (see that script's docstring).
