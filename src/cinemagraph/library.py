@@ -2,8 +2,8 @@
 generated outputs, so they can be looked up again later instead of being
 forgotten the moment a render finishes.
 
-This is deliberately a core-tier module (not under api/): both the CLI and
-the API need the same storage/lookup logic, and unlike api/jobs.py's
+This is deliberately a core-tier module (not under server/): both the CLI and
+the API need the same storage/lookup logic, and unlike server/jobs.py's
 in-memory, restart-losable job tracking, a library is meant to survive
 restarts by design -- it's about the tool's own data, not one HTTP
 request's bookkeeping. See docs/DESIGN.md sec 5.1 for the design rationale.

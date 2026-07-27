@@ -16,7 +16,7 @@ Kubernetes.
 
 `CLIPSeg` needs `torch` + `transformers` — multiple GB of dependencies that have no business
 being in the core `cinemagraph` image (see the root `Dockerfile`, which only ever installs the
-`api` extra, never `ml`). Keeping it as a separate container means:
+`server` extra, never `ml`). Keeping it as a separate container means:
 
 - The core image stays small and fast to build regardless of whether anyone ever uses semantic
   masking.
@@ -69,7 +69,7 @@ POST /segment
   service can feed the result straight into the existing mask pipeline unmodified.
 ```
 
-`api/app.py`'s `POST /mask/semantic` implements the client side of this contract (proxies the
+`server/app.py`'s `POST /mask/semantic` implements the client side of this contract (proxies the
 same multipart request through, converts an error/timeout from this service into a `503`
 rather than propagating a `500`, and returns the PNG bytes unmodified).
 

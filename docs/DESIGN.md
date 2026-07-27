@@ -78,7 +78,7 @@ Two orthogonal questions place every new capability:
 | Tier | Mechanism | Example |
 |---|---|---|
 | Core dependency | `[project.dependencies]` | opencv, numpy, click |
-| Optional, same env | `[project.optional-dependencies]` extra | `api` (fastapi/uvicorn) |
+| Optional, same env | `[project.optional-dependencies]` extra | `server` (fastapi/uvicorn) |
 | Light sibling module | own directory, root pyproject extra | `generation/` (planned, API-backend case) |
 | Isolated service | own directory, **own pyproject/lockfile/venv/container** | `machine-learning/` (torch-class deps) |
 
@@ -118,7 +118,7 @@ this one).
 ### 3.4 One engine, thin doors
 
 Doors (CLI, API, future UI) parse input and delegate; they hold no multi-step workflows.
-For the API that means `app.py` = routes, `api/service.py` = workflows — the standard
+For the API that means `app.py` = routes, `server/service.py` = workflows — the standard
 router/service split. (Note the original phrasing here invoked "entry-point modules are
 the hardest code to test" — that rationale doesn't actually apply to `app.py`, which is
 not a packaging entry point and is thoroughly TestClient-tested. The router/service split
@@ -146,15 +146,23 @@ that may be deleted next week is waste.
 
 ```
 cinemagraph-tool/
-├── src/cinemagraph/          # the stable core: pipeline, effects registry, mask, grade, loop, io, library
-├── api/                      # FastAPI door: app.py (routes) + service.py (workflows); extra `api`
-├── machine-learning/         # isolated service: CLIPSeg semantic masking (validated)
-├── tests/                    # 44 tests: contracts, invariants, smoke (core + API + library)
-├── scripts/golden_check.py   # pixel-regression check, separate from pytest (see sec 6)
-├── docs/experiments/         # lab notebook, one file per experiment
+├── src/
+│   ├── cinemagraph/           # the stable core: pipeline, effects registry, mask, grade, loop, io, library
+│   └── server/                # FastAPI door: app.py (routes) + service.py (workflows); extra `server`;
+│                               #   sibling package to cinemagraph, same distribution, no own pyproject
+├── machine-learning/          # isolated service: CLIPSeg semantic masking (validated)
+├── tests/                     # 51 tests: contracts, invariants, smoke (core + API + library)
+├── scripts/golden_check.py    # pixel-regression check, separate from pytest (see sec 6)
+├── docs/experiments/          # lab notebook, one file per experiment
 ├── Dockerfile + docker-compose.yml   # core image (never torch); ML service gated off
-└── pyproject.toml            # uv-managed; extras: api, ml; dep-group: dev
+└── pyproject.toml             # uv-managed; extras: server, ml; dep-group: dev
 ```
+
+This package was originally a top-level `api/` directory, then moved into `src/` (setuptools'
+package discovery never actually included it in a real build otherwise), then renamed from
+`api` to `server` (matching Immich's convention; "api" described only the one protocol it
+happens to speak, not what the package actually does — orchestrate rendering, music, sound
+effects, and masking behind whatever door reaches it). Both moves are in the decision log below.
 
 Key properties already in place: 9 combinable procedural effects (tone/particle families,
 perfect loops by construction), auto + hand-painted masking, lofi grade, arbitrary-length
@@ -207,7 +215,7 @@ CLIPSeg behind `POST /segment`, loaded via `transformers` (`CLIPSegProcessor`/
 an unversioned dependency on one person's repo staying reachable), whereas `transformers`
 is a real, maintained PyPI package that happens to support CLIPSeg as one of many
 architectures. Same distinction that matters for any future git-only research repo.
-`api/app.py`'s `/mask/semantic` proxy now returns the service's raw `image/png` bytes
+`server/app.py`'s `/mask/semantic` proxy now returns the service's raw `image/png` bytes
 unmodified (it previously called `.json()` on the response — a leftover from before this
 service existed — fixed when this was built). Same shape as `sound-effects/`: own
 `pyproject.toml`/`Dockerfile`, eager startup load, per-request inference. Validated
@@ -228,7 +236,7 @@ an isolated change.
 ### 5.5 API/CLI parity, then a thin web UI
 
 Close the known API gaps first (mask upload, per-effect overrides via the existing
-`validation.py` — note `api/app.py` had an aspirational unused `validation` import for
+`validation.py` — note `server/app.py` had an aspirational unused `validation` import for
 this, since removed, `/mask-preview` route, `--loop-duration`); the UI then needs nothing
 the API doesn't already offer. UI stays a thin client per §3.4 — candidate stack decided
 when we get there, not now.
@@ -250,7 +258,7 @@ they turned out to fall into genuinely different categories, not three instances
 same remaining work:
 
 - **Music — [ACE-Step](https://github.com/ace-step/ACE-Step) — done.** `POST
-  /generate/music` in `api/app.py`, via `ACESTEP_URL`. ACE-Step ships its own FastAPI
+  /generate/music` in `server/app.py`, via `ACESTEP_URL`. ACE-Step ships its own FastAPI
   server and published image (`ghcr.io/ace-step/ace-step-1.5:latest`) — there was no
   wrapper to build, only a client. That client is non-trivial anyway, because ACE-Step's
   own API is itself an async job queue (`release_task` → poll `query_result` →
@@ -264,7 +272,7 @@ same remaining work:
   validated for real.** The premature-to-build call from the first pass of this section
   was revisited and reversed: once sound-effect generation is meant to be a
   `cinemagraph-tool` feature (reachable via its own API, the way music now is), the
-  alternative to a thin wrapper isn't "no server" — it's `api/app.py` shelling out to
+  alternative to a thin wrapper isn't "no server" — it's `server/app.py` shelling out to
   the script as a subprocess, which is exactly the fragile pattern the project's own
   `RESEARCH.md` warns against (`"parsing stdout, argument quoting, blocking"`). A real
   consumer existing changes the calculus `RESEARCH.md` was reasoning about. Generation
@@ -324,33 +332,38 @@ Decisions already made, with reasoning — so they aren't accidentally relitigat
 | `src/` layout + uv + PEP 735 dep-groups | packaging bugs prevented; dev deps never leak into installs ([ref video](https://www.youtube.com/watch?v=mFyE9xgeKcA)) |
 | Effects: 1 registry replaced 5 parallel dicts | single registration point; ComfyUI-style extensibility |
 | `pipeline.py` compute/persist split | any new entry point gets rendering for free |
-| `api/` outside the package, inside the repo, **no** own pyproject | depends on core but core never depends on it; same env/image/release always — a second package would be pure indirection |
+| `server` (originally named `api`) is a sibling *package* to `cinemagraph` under `src/`, same distribution, **no** own pyproject | depends on core but core never depends on it; same env/image/release always — a second package would be pure indirection |
+| Moved the package from a top-level `api/` directory into `src/api/` | `[tool.setuptools.packages.find] where = ["src"]` only discovers packages under `src/`, so a top-level `api/` was silently never included in a real build — confirmed by inspecting an actual `uv build` wheel: no `api/*.py` in it, `pip install cinemagraph-tool[api]` installed FastAPI/uvicorn but not this project's own API code. It only worked in dev because `pythonpath = ["."]` (since removed) and running uvicorn from the repo root both put the repo root on `sys.path` as a side effect, masking the bug. It still isn't part of the `cinemagraph` package or importable from it — it's a sibling under `src/`, not a subpackage — so the core library/CLI still never gain `fastapi`/`uvicorn`/`httpx` as hard dependencies. This is *not* a uv workspace: uv workspaces are for genuinely separate projects with their own lockfile/venv (see the workspace decision below); `cinemagraph` and this package are two packages of the *same* distribution, which is what `packages.find` with multiple top-level packages under `src/` is for |
+| A uv **workspace** was considered and rejected for `cinemagraph` + this package, not just for the heavy services | the uv docs' own criterion for rejecting a workspace is conflicting requirements or wanting separate venvs per member — neither applies here (no dependency conflict, same `requires-python`, and both need to be co-installed, not isolated). A workspace would have been *appropriate* for this pair; it just wasn't *necessary*, since they're already one distribution. The rejection that matters is the heavy-ML-services one below, whose criterion (`requires-python` intersection, torch version conflicts, wanting separate venvs) genuinely applies there |
+| Renamed `api` → `server` (directory, extra name, module paths) | matches [Immich](https://github.com/immich-app/immich/tree/main/server)'s convention for this exact role. "api" overclaimed: this package orchestrates rendering, music generation, sound-effect generation, and masking behind whatever door reaches it (HTTP today, conceivably something else later) — "api" describes only the protocol, not the job. It also collided with the FastAPI instance's own conventional name: `api.app:app` would have become `app.app:app` under the more obvious alternative rename ("app"), a stutter with a package literally named `app`; `server.app:app` doesn't have that problem. The `server` name change did *not* prompt renaming the distribution (`cinemagraph-tool`) or the `cinemagraph` package — those remain a separate, larger identity question, not resolved here |
 | Heavy ML = separate project, not uv workspace | shared lockfile would reintroduce torch into the core ([uv docs](https://docs.astral.sh/uv/concepts/projects/workspaces/)) |
 | `machine-learning/` naming (was `ml_sidecar/`) | matches [Immich](https://github.com/immich-app/immich/tree/main/machine-learning); "sidecar" wrongly implied same-pod k8s semantics |
 | Degradation checked per-request, never at startup | core must start and work with every optional satellite absent |
 | Jobs are in-memory and ephemeral | personal single-process tool; the *library* (§5.1), not jobs, is where persistence belongs |
 | `version = "0"`, no semver | it's an application, not a published library |
-| `library.py` is core-tier, not under `api/` | both CLI and API need the same storage/lookup logic; unlike jobs, it must survive restarts |
+| `library.py` is core-tier, not under `server/` | both CLI and API need the same storage/lookup logic; unlike jobs, it must survive restarts |
 | `CINEMAGRAPH_LIBRARY_DIR` separate from `CINEMAGRAPH_DATA_DIR` | the library must work from the CLI alone; tying it to the API's job-scratch env var would make that impossible |
 | Golden-frame check is a script, not a pytest test | it's a regression check against *previous* output, not a correctness contract against a spec — different kind of thing, see §3.5 |
 | Vendoring ACE-Step's/any actively-developed upstream's source: rejected | copying code you don't maintain means owning its update churn forever; referencing its published image gets the same "one `docker compose up`" outcome for free |
 | ACE-Step referenced by published image, never a local `build: context: ../ACE-Step-1.5` | a relative path to a sibling directory only works on one machine with one exact folder layout; a registry image reference is portable |
 | Isolated services (`machine-learning/`, future audio wrapper) never share code with each other | that's exactly the coupling isolation exists to prevent; the actual shared surface (a `/health` route, "load model once") is a few lines — trivial duplication beats a shared dependency, same lesson as rejecting a uv workspace |
-| `api/_external_service.py` — one shared client helper, used by every optional-service route | this *is* safe to share: it never crosses the isolation boundary, since it's client-side code living in the one codebase (`api/`) that already calls every one of these services |
+| `server/_external_service.py` — one shared client helper, used by every optional-service route | this *is* safe to share: it never crosses the isolation boundary, since it's client-side code living in the one codebase (`server/`) that already calls every one of these services |
 | CLIPSeg must be loaded via `transformers`, never `pip install git+https://github.com/timojl/clipseg` | the original repo isn't a real PyPI package (git-install only); `transformers` is a maintained package that happens to support CLIPSeg as one of many architectures |
-| Reversed the "premature" call on the Stable Audio Open wrapper and built it | `RESEARCH.md`'s "wait until reload cost hurts" reasoning was written for a standalone script with no caller; once it's meant to be a `cinemagraph-tool` feature, the alternative to a wrapper is subprocess-shelling from `api/app.py`, which the same doc calls fragile — a real consumer changes which of that doc's own criteria applies |
+| Reversed the "premature" call on the Stable Audio Open wrapper and built it | `RESEARCH.md`'s "wait until reload cost hurts" reasoning was written for a standalone script with no caller; once it's meant to be a `cinemagraph-tool` feature, the alternative to a wrapper is subprocess-shelling from `server/app.py`, which the same doc calls fragile — a real consumer changes which of that doc's own criteria applies |
 | `sound-effects/` service built and code-reviewed but not vendored from a third party | unlike CLIPSeg/ACE-Step, this one *is* code this project owns and wrote (ported from the proven `audio-effect-generation` experiment) — "own the wrapper" was always the plan for this capability, this just executed it |
 | `machine-learning/` built following the exact `sound-effects/` shape (own pyproject/Dockerfile, eager startup load, raw-bytes response) | consistency across the two isolated services beats bespoke structure per service — a future third service should follow the same shape unless it has a genuine reason not to |
 | `/mask/semantic`'s proxy fixed to return raw `image/png` bytes instead of `.json()` | it was written before `machine-learning/`'s actual contract (a PNG mask, per its README) was implemented against; caught and fixed while building the real service, not left as a silent mismatch |
-| `api/service.py` split out of `app.py`; routes hold no workflows | the standard FastAPI router/service split ("routers should not do everything"). Concretely: `run_music_job`'s failure and timeout branches were unreachable through an HTTP round-trip and therefore untested — extracting them made 5 new unit tests possible. Adopted the router/service layer only; skipped `repositories/`/`models/`/DI-session layering from the same guides, which assumes a DB and team scale we don't have |
+| `server/service.py` split out of `app.py`; routes hold no workflows | the standard FastAPI router/service split ("routers should not do everything"). Concretely: `run_music_job`'s failure and timeout branches were unreachable through an HTTP round-trip and therefore untested — extracting them made 5 new unit tests possible. Adopted the router/service layer only; skipped `repositories/`/`models/`/DI-session layering from the same guides, which assumes a DB and team scale we don't have |
 | Prompt→mask chaining lives in `service.py`, not in the core library or the CLI | it's the one module allowed to know about *both* external services and the render pipeline; `cinemagraph/` still never learns HTTP exists, and `_external_service.py` still never learns renders exist |
 | CLI deliberately has no `--mask-prompt` | `cli.py` lives inside `src/cinemagraph/`, so giving it service access would require putting an HTTP client in the core package. The CLI keeps `--mask <file>`; chaining is an API-side capability. Revisit only if the CLI moves out of the package (which would be the moment a third entry point appears) |
 | `mask_prompt` errors the job rather than falling back to an unmasked render | silently animating the whole frame when segmentation is unavailable would produce something other than what was asked for — a wrong result is worse than a clear failure |
 
 ### Placement quick-test for anything new
 
-1. *Would this make sense if the API didn't exist?* No → `api/`. Yes → continue.
-2. *Does the core need it to animate an image/video?* No → sibling directory. Yes → `src/cinemagraph/`.
+1. *Would this make sense if the API didn't exist?* No → `src/server/`. Yes → continue.
+2. *Does the core need it to animate an image/video?* No → sibling directory (under `src/` if it's
+   part of this distribution and needs installing, e.g. `src/server/`; a top-level directory if it's
+   an independently-versioned project, e.g. `machine-learning/`). Yes → `src/cinemagraph/`.
 3. *Torch-class dependencies?* Yes → own project + container. No → extra on the root pyproject.
 
 ## 8. Reference projects

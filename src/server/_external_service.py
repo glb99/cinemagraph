@@ -4,7 +4,7 @@
 This is the one place this pattern is allowed to repeat across services --
 sharing it doesn't cross the isolation boundary between the actually-
 separate services (each still owns its own process, dependencies, and
-Dockerfile), because this module lives entirely inside api/, the single
+Dockerfile), because this module lives entirely inside server/, the single
 codebase that calls all of them. See docs/DESIGN.md sec 3.3 for why the
 services themselves are never allowed to share code with each other, only
 this client-side layer is.

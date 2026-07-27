@@ -22,7 +22,7 @@ every request:
 - /generate/music proxies to an ACE-Step API server (ACESTEP_URL) -- that
   one's a real job-queue API (release_task -> poll query_result -> download
   via /v1/audio), which is why it reuses this app's own job system
-  (api/jobs.py, GET /jobs/{id}, GET /jobs/{id}/file) rather than needing new
+  (server/jobs.py, GET /jobs/{id}, GET /jobs/{id}/file) rather than needing new
   status-tracking infrastructure: "poll a remote job queue and download the
   result" turned out to fit the same Job abstraction already built for
   local renders.

@@ -8,7 +8,7 @@ verbatim from the proven-working experiment at
 audio-effect-generation/generate_rain_stableaudio.py (see that project's
 RESEARCH.md for why a serving layer wasn't worth it there, as a standalone
 script -- it is here, since this service has a real caller now:
-cinemagraph-tool's own api/app.py POST /generate/sound-effect).
+cinemagraph-tool's own server/app.py POST /generate/sound-effect).
 """
 import io
 import random

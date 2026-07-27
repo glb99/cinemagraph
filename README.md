@@ -145,8 +145,8 @@ A minimal local HTTP API (FastAPI) wraps the same rendering code, for a future U
 without shelling out:
 
 ```bash
-uv sync --extra api
-uv run uvicorn api.app:app --reload
+uv sync --extra server
+uv run uvicorn server.app:app --reload
 ```
 
 `POST /render/video` / `POST /render/photo` accept a multipart file upload and return a `job_id`
@@ -211,7 +211,7 @@ docker compose up
 ```
 
 Builds and runs the API on `localhost:8000`, with `./data` mounted for job input/output. The image
-only ever includes the `api` extra (opencv/numpy/click/fastapi) — never `torch`/`transformers`, which
+only ever includes the `server` extra (opencv/numpy/click/fastapi) — never `torch`/`transformers`, which
 live only in the optional, separately-built `sound-effects` and `machine-learning` services:
 
 ```bash
@@ -232,7 +232,7 @@ docker run --rm -v "$(pwd)/data:/data" cinemagraph-tool cinemagraph from-photo /
 
 Both doors (CLI, API) sit on the same core library — neither duplicates rendering logic. The CLI
 calls `pipeline.py`'s `save_*` (persist-to-disk) side synchronously. The API delegates to
-`api/service.py`, which calls the same `save_*` functions inside a background job, so the route can
+`server/service.py`, which calls the same `save_*` functions inside a background job, so the route can
 return a `job_id` immediately instead of blocking the HTTP connection for the whole render.
 
 The `render_*` (pure-compute, returns frames) half of the compute/persist split is used today by
@@ -249,10 +249,10 @@ flowchart TB
     HttpUser -->|"multipart upload"| API
 
     subgraph EntryPoints["Doors in -- routes/flags parse and delegate, workflows live in service.py"]
-        CLI["cli.py<br/>Click: make / mask-preview / from-photo"]
-        API["api/app.py -- routes only<br/>FastAPI: /render/video /render/photo<br/>/jobs/id /jobs/id/file<br/>/effects /health /capabilities"]
-        Service["api/service.py -- workflows<br/>run_render_job / run_music_job<br/>run_sound_effect_job<br/>run_photo_semantic_mask_job"]
-        Jobs["api/jobs.py<br/>in-memory job dict<br/>pending / running / done / error"]
+        CLI["cinemagraph.cli<br/>Click: make / mask-preview / from-photo"]
+        API["server.app -- routes only<br/>FastAPI: /render/video /render/photo<br/>/jobs/id /jobs/id/file<br/>/effects /health /capabilities"]
+        Service["server.service -- workflows<br/>run_render_job / run_music_job<br/>run_sound_effect_job<br/>run_photo_semantic_mask_job"]
+        Jobs["server.jobs<br/>in-memory job dict<br/>pending / running / done / error"]
         API -->|"BackgroundTasks"| Service
         Service --> Jobs
     end
@@ -320,19 +320,21 @@ Key design decisions this reflects:
 
 - **One rendering engine, two doors in.** The CLI (synchronous) and the API (background job) never
   fork the actual rendering logic — both bottom out in the same `pipeline.py` functions.
-- **Routes don't hold workflows.** `api/app.py` parses and delegates; `api/service.py` holds the
+- **Routes don't hold workflows.** `server/app.py` parses and delegates; `server/service.py` holds the
   multi-step work, including the only code that knows about *both* external services and the render
   pipeline. That keeps the core library ignorant of HTTP and makes the workflows unit-testable
   without an HTTP round-trip.
 - **One effect registry, not five parallel structures.** Every effect (tone or particle) registers
   itself once in `base.py`; `animate_photo()` (inside `effects/`) resolves requested effects against
   that registry and always runs tone effects before particle effects, regardless of request order.
-- **Shared validation, translated per entry point.** `validation.py` raises plain `ValueError`; `cli.py`
-  turns that into a `click.UsageError`, `api/app.py` turns the equivalent check into an HTTP 422 — one
-  source of truth, two error shapes.
-- **The `machine-learning` service is a reserved seam, not a built feature** (named to match
-  [Immich](https://github.com/immich-app/immich/tree/main/machine-learning)'s convention for this same
-  shape of split). `machine-learning/` only holds a README documenting the intended contract. The core
-  image never depends on `torch`/`transformers`; `api/app.py` checks for the service at request time
-  and degrades to a clean `503` when it's absent, so the core
-  tool is never blocked on a feature that doesn't exist yet.
+- **`validation.py` exists but the API doesn't use it yet.** `cli.py`'s `from-photo` uses it to check
+  per-effect override flags belong to a requested effect, translating its plain `ValueError` into
+  `click.UsageError`. `server/app.py`'s own unknown-effect check is separate, hand-rolled logic that
+  happens to reach the same conclusion for the one case it covers (unknown effect name) — it doesn't
+  yet check per-effect overrides at all, since the API has no such flags. Real parity gap, not a
+  shared source of truth (see §5.5 of `docs/DESIGN.md`).
+- **The `machine-learning` service (CLIPSeg) is built and validated**, not just a reserved seam
+  (named to match [Immich](https://github.com/immich-app/immich/tree/main/machine-learning)'s
+  convention for this same shape of split). The core image never depends on `torch`/`transformers`;
+  `server/app.py` checks for the service at request time and degrades to a clean `503` when it's absent,
+  so the core tool is never blocked when the optional service isn't running.

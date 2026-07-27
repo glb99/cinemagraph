@@ -1,4 +1,4 @@
-"""Unit tests for api/service.py's workflows.
+"""Unit tests for server/service.py's workflows.
 
 These call the job functions directly rather than through a route. That's
 the point of the module existing: run_music_job's polling branches (remote
@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from api import jobs, service
+from server import jobs, service
 
 
 @pytest.fixture

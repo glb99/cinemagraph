@@ -17,19 +17,20 @@ element). Two independent input modes:
 Uses [uv](https://docs.astral.sh/uv/):
 
 ```bash
-uv sync                    # core CLI only (opencv/numpy/click/imageio) + dev dependency group
-uv sync --extra api        # + fastapi/uvicorn/httpx, for api/app.py
+uv sync                       # core CLI only (opencv/numpy/click/imageio) + dev dependency group
+uv sync --extra server        # + fastapi/uvicorn/httpx, for server/app.py
 ```
 
 `dev` (pytest etc.) is a [PEP 735 dependency group](https://peps.python.org/pep-0735/), synced by
-default and never part of a real install's metadata. `api` and `ml` are `[project.optional-dependencies]`
-extras — real, installable features, opt-in via `--extra`. The heavy `ml` extra (torch/transformers,
-for the future semantic-mask sidecar) is declared in `pyproject.toml` but deliberately **not** synced
-by default, and shouldn't be added to the core tool's or the API's venv — only pull it in explicitly
-(`uv sync --extra ml`) when working on that feature in isolation.
+default and never part of a real install's metadata. `server` and `ml` are
+`[project.optional-dependencies]` extras — real, installable features, opt-in via `--extra`. The `ml`
+extra (torch/transformers) predates `machine-learning/` becoming its own standalone project with its
+own `pyproject.toml`/deps; nothing in `cinemagraph` or `server` actually imports torch/transformers
+today, so this extra looks dead now rather than "not yet used" — worth confirming and removing rather
+than carrying it forward on the assumption it still means something.
 
-Tests: `uv run pytest` (needs `--extra api` synced first, for the API smoke tests). No linter/formatter
-configured yet.
+Tests: `uv run pytest` (needs `--extra server` synced first, for the API smoke tests). No
+linter/formatter configured yet.
 
 ## Running
 
@@ -72,7 +73,7 @@ wrapper that only parses flags and calls into `cinemagraph.pipeline`.
 `pipeline.py` is split into a **compute layer** (`render_video_cinemagraph`, `render_photo_cinemagraph`,
 `render_mask_preview` — pure-ish, return frames/masks as data, never touch the output path) and a
 **persist layer** (`save_cinemagraph_video`, `save_cinemagraph_from_photo`, `save_mask_preview` — thin
-wrappers that call the matching `render_*` then write to disk). Both `cli.py` and `api/service.py`
+wrappers that call the matching `render_*` then write to disk). Both `cli.py` and `server/service.py`
 use the `save_*` wrappers — the API just points them at a job-scoped directory. The `render_*`
 functions' actual consumers today are `scripts/golden_check.py` and `tests/test_pipeline_smoke.py`,
 which need frames rather than files. Each `render_*` stitches together the same set of stages in
@@ -113,7 +114,7 @@ different order depending on video vs. photo input:
   index (`<root>/index.sqlite3`, stdlib `sqlite3`, no new dependency). Root defaults to
   `~/.cinemagraph/library`, overridable via `CINEMAGRAPH_LIBRARY_DIR` — deliberately independent of
   `CINEMAGRAPH_DATA_DIR` (the API's ephemeral per-job scratch space), since the library needs to work
-  from the CLI alone. Core-tier (not under `api/`) because both CLI and API need the same storage
+  from the CLI alone. Core-tier (not under `server/`) because both CLI and API need the same storage
   logic — see `docs/DESIGN.md` sec 5.1 for the placement rationale. Not yet wired into
   `make`/`from-photo` (they still take plain paths, not library references) — cataloging and
   rendering are currently separate steps.
@@ -138,15 +139,29 @@ GIF-write time.
 checking that `from-photo`'s per-effect override flags belong to a requested effect and are real
 overrides for it, per that effect's `allowed_kwargs`). It raises plain `ValueError` — a library
 concern — and each entry point translates that into its own error type (`cli.py` → `click.UsageError`,
-`api/app.py`'s effect-name check → HTTP 422).
+`server/app.py`'s effect-name check → HTTP 422).
 
-## API layer
+## Server layer
 
-`api/` (sibling to `src/`, not part of the `cinemagraph` package — so the core library/CLI never
-gain `fastapi`/`uvicorn`/`httpx` as hard dependencies):
+`src/server/` (sibling *package* to `cinemagraph` under `src/`, in the same distribution, but not
+part of the `cinemagraph` package itself — so the core library/CLI never gain
+`fastapi`/`uvicorn`/`httpx` as hard dependencies). Named `server`, not `api`, matching
+[Immich](https://github.com/immich-app/immich/tree/main/server)'s convention for this same role — the
+old name overclaimed (this project is video + music + sound effects + masking, "api" describes only
+the one protocol it happens to speak) and would have collided with the FastAPI instance's own name
+(`server.app:app` reads cleanly; `app.app:app` would have been a stutter with a package literally
+called `app`).
+
+Also moved here from a top-level `api/` directory: setuptools'
+`[tool.setuptools.packages.find] where = ["src"]` only ever discovered packages under `src/`, so a
+top-level `api/` was never actually included in a real (non-editable) build — `pip install
+cinemagraph-tool[server]` installed FastAPI and uvicorn but not this code. Only worked during
+development because `pythonpath = ["."]` in pytest's config, and running uvicorn from the repo
+root, both put the repo root on `sys.path` as a side effect. Fixed by moving the directory, not by
+special-casing the packaging config further.
 
 - **`app.py`** — the FastAPI app and all routes. Kept thin like `cli.py`: routes only parse the
-  request, delegate to `cinemagraph.pipeline`/`api.jobs`/`api._external_service`, and shape the
+  request, delegate to `cinemagraph.pipeline`/`server.jobs`/`server._external_service`, and shape the
   response.
 - **`jobs.py`** — in-process job tracking (`dict[str, Job]` in memory). No Celery/Redis — this is a
   single-process, local, no-auth personal tool; job state doesn't survive a restart, which is an
@@ -158,12 +173,13 @@ gain `fastapi`/`uvicorn`/`httpx` as hard dependencies):
   background task too — `HTTPException` is a normal exception outside the request cycle, catch it
   and read `.detail`). This is the one place this pattern is allowed to repeat across services:
   sharing it doesn't cross the isolation boundary between the actually-separate services (each still
-  owns its own process/deps/Dockerfile), because it's client-side code living entirely inside `api/`,
-  the single codebase that calls all of them — see `docs/DESIGN.md` sec 3.3 for the full reasoning on
-  why the services *themselves* must never share code with each other, only this layer may.
+  owns its own process/deps/Dockerfile), because it's client-side code living entirely inside
+  `server/`, the single codebase that calls all of them — see `docs/DESIGN.md` sec 3.3 for the full
+  reasoning on why the services *themselves* must never share code with each other, only this layer
+  may.
 
-`api/app.py` holds **routes only** — parse, delegate to `api/service.py`, shape the response. Every
-multi-step workflow lives in `service.py` (`run_render_job`, `run_photo_semantic_mask_job`,
+`server/app.py` holds **routes only** — parse, delegate to `server/service.py`, shape the response.
+Every multi-step workflow lives in `service.py` (`run_render_job`, `run_photo_semantic_mask_job`,
 `run_music_job`, `run_sound_effect_job`). That's the standard FastAPI router/service split, and it's
 what makes those workflows unit-testable directly (`tests/test_api_service.py` covers ACE-Step's
 failure and timeout branches, which were unreachable through an HTTP round-trip when this code lived
@@ -216,7 +232,7 @@ failed startup.
 hashed/copied into the library, then the temp file is discarded) — the exact same functions the
 `cinemagraph library` CLI subcommands call.
 
-Run locally: `uv run uvicorn api.app:app --reload` (needs `uv sync --extra api` first).
+Run locally: `uv run uvicorn server.app:app --reload` (needs `uv sync --extra server` first).
 
 ## Design document and experiments log
 

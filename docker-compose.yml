@@ -30,7 +30,7 @@ services:
   # ACE-Step's own published image, referenced directly -- not vendored,
   # not built by us. Unlike machine-learning/, there's no wrapper for us to
   # write here at all: ACE-Step already ships its own FastAPI server (see
-  # api/app.py's /generate/music, which is a client of exactly this). Needs
+  # server/app.py's /generate/music, which is a client of exactly this). Needs
   # a GPU and a model download on first start (checkpoints/ volume caches
   # it across restarts). Uncomment plus the ACESTEP_URL line above, then
   # `docker compose --profile audio up`.

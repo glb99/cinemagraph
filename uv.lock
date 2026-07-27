@@ -60,15 +60,15 @@ dependencies = [
 ]
 
 [package.optional-dependencies]
-api = [
+ml = [
+    { name = "torch" },
+    { name = "transformers" },
+]
+server = [
     { name = "fastapi" },
     { name = "httpx" },
     { name = "python-multipart" },
     { name = "uvicorn", extra = ["standard"] },
-]
-ml = [
-    { name = "torch" },
-    { name = "transformers" },
 ]
 
 [package.dev-dependencies]
@@ -81,18 +81,18 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "click", specifier = ">=8.1.0,<9" },
-    { name = "fastapi", marker = "extra == 'api'", specifier = ">=0.110.0,<1" },
-    { name = "httpx", marker = "extra == 'api'", specifier = ">=0.27.0,<1" },
+    { name = "fastapi", marker = "extra == 'server'", specifier = ">=0.110.0,<1" },
+    { name = "httpx", marker = "extra == 'server'", specifier = ">=0.27.0,<1" },
     { name = "imageio", specifier = ">=2.34.0,<3" },
     { name = "imageio-ffmpeg", specifier = ">=0.4.9,<1" },
     { name = "numpy", specifier = ">=1.26.0,<3" },
     { name = "opencv-python-headless", specifier = ">=4.9.0,<5" },
-    { name = "python-multipart", marker = "extra == 'api'", specifier = ">=0.0.9,<1" },
+    { name = "python-multipart", marker = "extra == 'server'", specifier = ">=0.0.9,<1" },
     { name = "torch", marker = "extra == 'ml'", specifier = ">=2.2.0" },
     { name = "transformers", marker = "extra == 'ml'", specifier = ">=4.40.0" },
-    { name = "uvicorn", extras = ["standard"], marker = "extra == 'api'", specifier = ">=0.29.0,<1" },
+    { name = "uvicorn", extras = ["standard"], marker = "extra == 'server'", specifier = ">=0.29.0,<1" },
 ]
-provides-extras = ["api", "ml"]
+provides-extras = ["server", "ml"]
 
 [package.metadata.requires-dev]
 dev = [

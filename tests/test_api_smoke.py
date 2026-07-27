@@ -13,7 +13,7 @@ from fastapi.testclient import TestClient
 def api_client(tmp_path, monkeypatch):
     monkeypatch.setenv("CINEMAGRAPH_DATA_DIR", str(tmp_path / "data"))
     monkeypatch.setenv("CINEMAGRAPH_LIBRARY_DIR", str(tmp_path / "library"))
-    import api.app as app_module
+    import server.app as app_module
 
     importlib.reload(app_module)  # re-read CINEMAGRAPH_DATA_DIR for this test's tmp_path
     with TestClient(app_module.app) as client:

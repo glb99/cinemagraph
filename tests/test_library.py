@@ -1,6 +1,6 @@
 """Contract tests for the reference library: content-addressed storage +
 SQLite metadata. library_root() reads CINEMAGRAPH_LIBRARY_DIR fresh on every
-call (unlike api/app.py's DATA_DIR, which is cached at import time), so
+call (unlike server/app.py's DATA_DIR, which is cached at import time), so
 monkeypatch.setenv per test is enough -- no importlib.reload dance needed.
 """
 import pytest
