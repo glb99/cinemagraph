@@ -1,4 +1,4 @@
-# ml_sidecar (not yet built)
+# machine-learning (not yet built)
 
 Placeholder for the future CLIPSeg-based semantic-mask feature: given a
 photo and a text prompt ("water", "clouds", "the candle flame"), return a
@@ -8,9 +8,15 @@ PNG for `cinemagraph from-photo --mask ...`.
 This directory intentionally has no code or `Dockerfile` yet. The point of
 committing this README now, ahead of the implementation, is to reserve the
 integration seam in `api/app.py` (`GET /capabilities`, `POST /mask/semantic`)
-and in `docker-compose.yml` (the commented-out `ml-sidecar` service) — so
-building this later is a matter of filling in this directory and
+and in `docker-compose.yml` (the commented-out `machine-learning` service) —
+so building this later is a matter of filling in this directory and
 uncommenting two lines, not redesigning how the core API talks to it.
+
+Named to match the [Immich](https://github.com/immich-app/immich/tree/main/machine-learning)
+convention for this exact shape of split (core app + a separate, optional
+service for heavy vision-model work) — not called `ml_sidecar` because this
+is a standalone container/service with its own lifecycle, not a sidecar in
+the strict same-pod sense that term implies in Kubernetes.
 
 ## Why a separate service
 
@@ -23,8 +29,8 @@ it as a separate container means:
   ever uses semantic masking.
 - The core API works standalone with this feature simply reporting as
   unavailable (`GET /capabilities` → `{"semantic_mask": false}`,
-  `POST /mask/semantic` → `503`) whenever `ML_SIDECAR_URL` is unset or the
-  sidecar isn't reachable — checked at request time, never at startup.
+  `POST /mask/semantic` → `503`) whenever `ML_SERVICE_URL` is unset or the
+  service isn't reachable — checked at request time, never at startup.
 - The heavy dependency only needs installing/updating/patched for CVEs on
   machines actually running this feature.
 
@@ -48,9 +54,9 @@ GET /health
 ```
 
 `api/app.py`'s `POST /mask/semantic` already implements the client side of
-this contract (proxies the same multipart request through, converts a
-sidecar error/timeout into a `503` rather than propagating a `500`) — see
-that function's docstring for the exact behavior.
+this contract (proxies the same multipart request through, converts an
+error/timeout from this service into a `503` rather than propagating a
+`500`) — see that function's docstring for the exact behavior.
 
 ## Sketch of the eventual implementation
 
@@ -71,8 +77,8 @@ def segment(image_rgb, prompt: str) -> np.ndarray:
     return cv2.resize(probs, (image_rgb.shape[1], image_rgb.shape[0]))  # 0..1 heatmap
 ```
 
-Wrap that in a small FastAPI app (`ml_sidecar/app.py`), add a `Dockerfile`
-based on a CUDA or CPU-only PyTorch image depending on target hardware, and
-a `pyproject.toml` with the `ml` extra's dependencies
+Wrap that in a small FastAPI app (`machine-learning/app.py`), add a
+`Dockerfile` based on a CUDA or CPU-only PyTorch image depending on target
+hardware, and a `pyproject.toml` with the `ml` extra's dependencies
 (`torch`, `transformers`) as its actual requirements (not optional there —
 this service exists *only* to run them).

@@ -147,10 +147,12 @@ job-scoped directory under `CINEMAGRAPH_DATA_DIR` (default `./data`), and run th
 `GET /jobs/{job_id}` polls status (`pending`/`running`/`done`/`error`); `GET /jobs/{job_id}/file`
 downloads the finished output.
 
-`GET /capabilities` and `POST /mask/semantic` are the seam for the not-yet-built CLIPSeg sidecar
-(see `ml_sidecar/README.md`): both read `ML_SIDECAR_URL` from the environment **at request time**,
-never at startup, so the API always starts cleanly and simply reports the feature as unavailable
-(`503` for `/mask/semantic`, `{"semantic_mask": false}` from `/capabilities`) when the sidecar isn't
-configured or isn't reachable — never a `500` or a failed startup.
+`GET /capabilities` and `POST /mask/semantic` are the seam for the not-yet-built CLIPSeg service
+(see `machine-learning/README.md`, directory named to match
+[Immich](https://github.com/immich-app/immich/tree/main/machine-learning)'s convention for the same
+core-app-plus-optional-ML-service split): both read `ML_SERVICE_URL` from the environment **at
+request time**, never at startup, so the API always starts cleanly and simply reports the feature as
+unavailable (`503` for `/mask/semantic`, `{"semantic_mask": false}` from `/capabilities`) when that
+service isn't configured or isn't reachable — never a `500` or a failed startup.
 
 Run locally: `uv run uvicorn api.app:app --reload` (needs `uv sync --extra api` first).

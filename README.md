@@ -140,7 +140,7 @@ uv run uvicorn api.app:app --reload
 `POST /render/video` / `POST /render/photo` accept a multipart file upload and return a `job_id`
 immediately (renders run in the background); `GET /jobs/{job_id}` polls status, `GET /jobs/{job_id}/file`
 downloads the result once done. `GET /effects` lists available effects, `GET /capabilities` reports
-optional features (currently just the not-yet-built semantic-mask sidecar, see `ml_sidecar/README.md`).
+optional features (currently just the not-yet-built semantic-mask service, see `machine-learning/README.md`).
 No auth — this is meant for local/personal use, not as a hosted service.
 
 ## Docker
@@ -151,10 +151,110 @@ docker compose up
 
 Builds and runs the API on `localhost:8000`, with `./data` mounted for job input/output. The image
 only ever includes the `api` extra (opencv/numpy/click/fastapi) — never the heavy `ml` extra
-(torch/transformers), which is reserved for a separate sidecar container (not yet built).
+(torch/transformers), which is reserved for a separate `machine-learning` service (not yet built).
 
 The CLI works the same way inside the container, overriding the default command:
 
 ```bash
 docker run --rm -v "$(pwd)/data:/data" cinemagraph-tool cinemagraph from-photo /data/photo.jpg /data/out.mp4 --effect smoke
 ```
+
+## Architecture
+
+Both entry points (CLI, API) are thin wrappers around the same core library — neither duplicates
+rendering logic. The CLI calls the `save_*` (persist-to-disk) side of `pipeline.py`'s compute/persist
+split synchronously; the API calls the `render_*` (pure-compute) side inside a background job, so it
+can return a `job_id` immediately instead of blocking the HTTP connection for the whole render.
+
+```mermaid
+flowchart TB
+    TermUser["Terminal user"]
+    HttpUser["HTTP client / future web UI"]
+
+    TermUser --> CLI
+    HttpUser -->|"multipart upload"| API
+
+    subgraph EntryPoints["Entry points -- thin, no business logic"]
+        CLI["cli.py<br/>Click: make / mask-preview / from-photo"]
+        API["api/app.py<br/>FastAPI: /render/video /render/photo<br/>/jobs/id /jobs/id/file<br/>/effects /health /capabilities"]
+        Jobs["api/jobs.py<br/>in-memory job dict<br/>pending / running / done / error"]
+        API -->|"BackgroundTasks"| Jobs
+    end
+
+    CLI --> Validation
+    API --> Validation
+    Validation["validation.py<br/>resolve_effect_kwargs()<br/>ValueError to UsageError / HTTP 422"]
+
+    CLI --> Save
+    API --> Render
+    Jobs -.->|"writes job-scoped output under<br/>CINEMAGRAPH_DATA_DIR"| Save
+
+    subgraph CoreLib["src/cinemagraph -- core library"]
+        Save["pipeline.py<br/>save_cinemagraph_video()<br/>save_cinemagraph_from_photo()<br/>save_mask_preview()<br/>persist to disk"]
+        Render["pipeline.py<br/>render_video_cinemagraph()<br/>render_photo_cinemagraph()<br/>render_mask_preview()<br/>pure compute, returns frames"]
+        Save --> Render
+
+        IO["io_utils.py<br/>read_frames / read_image<br/>write_video / write_gif"]
+        Mask["mask.py<br/>auto_motion_mask() / load_mask()<br/>to_3ch()"]
+        Loop["loop.py -- video only<br/>find_best_loop_point()<br/>crossfade_loop()"]
+        Grade["grade.py<br/>lofi_grade() -- warm, desaturate,<br/>vignette, grain"]
+
+        subgraph Effects["effects/ -- plugin registry"]
+            Base["base.py<br/>Effect / EffectFamily<br/>register() / get() / names()"]
+            Tone["TONE family<br/>ripple, sway, wind, flicker, clouds<br/>sequential, shared running frame"]
+            Particle["PARTICLE family<br/>particles.py: rain, snow, dust<br/>additive, always composited last"]
+            Base --- Tone
+            Base --- Particle
+        end
+
+        Render --> IO
+        Render --> Mask
+        Render --> Loop
+        Render --> Grade
+        Render --> Effects
+        Save --> IO
+    end
+
+    API -->|"POST /mask/semantic, GET /capabilities<br/>503 if ML_SERVICE_URL unset/unreachable,<br/>checked per-request not at startup"| MLService
+
+    subgraph MachineLearning["machine-learning/ -- reserved seam, not yet built"]
+        MLService["CLIPSeg service<br/>torch + transformers<br/>POST /segment: image + prompt to mask"]
+    end
+```
+
+And the deployment view — how those same components map onto containers:
+
+```mermaid
+flowchart LR
+    subgraph CoreImage["core image (Dockerfile)"]
+        CoreApp["CLI + API<br/>opencv-headless, click,<br/>fastapi, uvicorn<br/>never torch"]
+    end
+
+    subgraph MLImage["machine-learning image (not yet built)"]
+        MLApp["CLIPSeg service<br/>torch + transformers<br/>gated behind --profile ml"]
+    end
+
+    DataVol[("./data volume")]
+
+    CoreImage -- "port 8000" --> Client(["client / browser"])
+    CoreImage --- DataVol
+    CoreImage -.->|"ML_SERVICE_URL<br/>(unset by default)"| MLImage
+```
+
+Key design decisions this reflects:
+
+- **One rendering engine, two doors in.** `pipeline.py`'s compute/persist split exists so the CLI
+  (synchronous, writes directly) and the API (async, returns frames for job-scoped handling) never
+  fork the actual rendering logic.
+- **One effect registry, not five parallel structures.** Every effect (tone or particle) registers
+  itself once in `base.py`; `animate_photo()` (inside `effects/`) resolves requested effects against
+  that registry and always runs tone effects before particle effects, regardless of request order.
+- **Shared validation, translated per entry point.** `validation.py` raises plain `ValueError`; `cli.py`
+  turns that into a `click.UsageError`, `api/app.py` turns the equivalent check into an HTTP 422 — one
+  source of truth, two error shapes.
+- **The `machine-learning` service is a reserved seam, not a built feature** (named to match
+  [Immich](https://github.com/immich-app/immich/tree/main/machine-learning)'s convention for this same
+  shape of split). `machine-learning/` only holds a README documenting the intended contract. The core
+  image never depends on `torch`/`transformers`; `api/app.py` checks for the service at request time
+  and degrades to a clean `503` when it's absent, so the core
+  tool is never blocked on a feature that doesn't exist yet.

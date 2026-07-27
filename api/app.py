@@ -8,10 +8,11 @@ same principle cli.py already follows).
 Renders run as FastAPI BackgroundTasks (no Celery/Redis -- this is a
 single-process, local, no-auth personal tool) and write into a job-scoped
 directory under CINEMAGRAPH_DATA_DIR. The semantic-mask route is a stub for
-a not-yet-built CLIPSeg sidecar: it degrades to a clean 503 rather than an
-error whenever ML_SIDECAR_URL isn't set or isn't reachable, checked fresh on
-every request rather than once at startup, so the API never fails to start
-just because the (optional) sidecar isn't running.
+a not-yet-built CLIPSeg service (see machine-learning/README.md): it
+degrades to a clean 503 rather than an error whenever ML_SERVICE_URL isn't
+set or isn't reachable, checked fresh on every request rather than once at
+startup, so the API never fails to start just because that (optional)
+service isn't running.
 """
 import os
 import shutil
@@ -31,8 +32,8 @@ DATA_DIR = Path(os.environ.get("CINEMAGRAPH_DATA_DIR", "./data")).resolve()
 app = FastAPI(title="cinemagraph-tool API")
 
 
-def _ml_sidecar_url() -> str | None:
-    return os.environ.get("ML_SIDECAR_URL")
+def _ml_service_url() -> str | None:
+    return os.environ.get("ML_SERVICE_URL")
 
 
 def _job_dir(job_id: str) -> Path:
@@ -62,12 +63,12 @@ async def health():
 
 @app.get("/capabilities", response_model=CapabilitiesResponse)
 async def capabilities():
-    sidecar_url = _ml_sidecar_url()
+    service_url = _ml_service_url()
     semantic_mask = False
-    if sidecar_url:
+    if service_url:
         try:
             async with httpx.AsyncClient(timeout=2.0) as client:
-                resp = await client.get(f"{sidecar_url}/health")
+                resp = await client.get(f"{service_url}/health")
                 semantic_mask = resp.status_code == 200
         except httpx.HTTPError:
             semantic_mask = False
@@ -160,18 +161,18 @@ async def job_file(job_id: str):
 
 @app.post("/mask/semantic")
 async def semantic_mask(image: UploadFile = File(...), prompt: str = Form(...)):
-    """Proxies to the (not-yet-built) CLIPSeg sidecar. Returns a clean 503,
-    not a 500, whenever the sidecar isn't configured or isn't reachable --
-    this is the seam that feature will plug into; see ml_sidecar/README.md.
+    """Proxies to the (not-yet-built) CLIPSeg service. Returns a clean 503,
+    not a 500, whenever that service isn't configured or isn't reachable --
+    this is the seam that feature will plug into; see machine-learning/README.md.
     """
-    sidecar_url = _ml_sidecar_url()
-    if not sidecar_url:
-        raise HTTPException(503, "Semantic masking is unavailable: no ML sidecar configured.")
+    service_url = _ml_service_url()
+    if not service_url:
+        raise HTTPException(503, "Semantic masking is unavailable: no ML service configured.")
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:
             files = {"image": (image.filename, await image.read(), image.content_type)}
-            resp = await client.post(f"{sidecar_url}/segment", data={"prompt": prompt}, files=files)
+            resp = await client.post(f"{service_url}/segment", data={"prompt": prompt}, files=files)
             resp.raise_for_status()
     except httpx.HTTPError:
-        raise HTTPException(503, "Semantic masking is unavailable: ML sidecar unreachable.")
+        raise HTTPException(503, "Semantic masking is unavailable: ML service unreachable.")
     return resp.json()
