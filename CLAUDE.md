@@ -72,9 +72,10 @@ wrapper that only parses flags and calls into `cinemagraph.pipeline`.
 `pipeline.py` is split into a **compute layer** (`render_video_cinemagraph`, `render_photo_cinemagraph`,
 `render_mask_preview` — pure-ish, return frames/masks as data, never touch the output path) and a
 **persist layer** (`save_cinemagraph_video`, `save_cinemagraph_from_photo`, `save_mask_preview` — thin
-wrappers that call the matching `render_*` then write to disk). `cli.py` uses the `save_*` wrappers;
-`api/app.py` uses the `render_*` functions directly since it wants control over exactly where output
-bytes land (a job-scoped directory). Each `render_*` stitches together the same set of stages in
+wrappers that call the matching `render_*` then write to disk). Both `cli.py` and `api/service.py`
+use the `save_*` wrappers — the API just points them at a job-scoped directory. The `render_*`
+functions' actual consumers today are `scripts/golden_check.py` and `tests/test_pipeline_smoke.py`,
+which need frames rather than files. Each `render_*` stitches together the same set of stages in
 different order depending on video vs. photo input:
 
 - **`io_utils.py`** — reads/writes video (`cv2.VideoCapture`/`VideoWriter`) and GIFs (`imageio`).
@@ -161,11 +162,22 @@ gain `fastapi`/`uvicorn`/`httpx` as hard dependencies):
   the single codebase that calls all of them — see `docs/DESIGN.md` sec 3.3 for the full reasoning on
   why the services *themselves* must never share code with each other, only this layer may.
 
+`api/app.py` holds **routes only** — parse, delegate to `api/service.py`, shape the response. Every
+multi-step workflow lives in `service.py` (`run_render_job`, `run_photo_semantic_mask_job`,
+`run_music_job`, `run_sound_effect_job`). That's the standard FastAPI router/service split, and it's
+what makes those workflows unit-testable directly (`tests/test_api_service.py` covers ACE-Step's
+failure and timeout branches, which were unreachable through an HTTP round-trip when this code lived
+in `app.py`). Note for anything async added there: FastAPI runs a *sync* BackgroundTask in a
+threadpool but an *async* one on the event loop, so a coroutine doing blocking render work must push
+it off the loop with `asyncio.to_thread` — `run_photo_semantic_mask_job` does.
+
 Renders (`POST /render/video`, `POST /render/photo`) accept a multipart file upload, save it into a
-job-scoped directory under `CINEMAGRAPH_DATA_DIR` (default `./data`), and run the matching `render_*`
-+ write via a `BackgroundTasks`-scheduled function — the endpoint returns a `job_id` immediately.
+job-scoped directory under `CINEMAGRAPH_DATA_DIR` (default `./data`), and run the matching `save_*`
+via a `BackgroundTasks`-scheduled function — the endpoint returns a `job_id` immediately.
 `GET /jobs/{job_id}` polls status (`pending`/`running`/`done`/`error`); `GET /jobs/{job_id}/file`
-downloads the finished output.
+downloads the finished output. `POST /render/photo` additionally accepts `mask_prompt`, which chains
+segmentation into the render (see below); the generated mask is kept in the job directory, and the
+job errors rather than falling back to an unmasked render if the ML service is unavailable.
 
 Three more routes are optional-external-service seams, all using `_external_service.py`:
 

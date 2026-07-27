@@ -117,10 +117,18 @@ this one).
 
 ### 3.4 One engine, thin doors
 
-All entry points (CLI, API, future UI) are dumb wiring over the same library calls —
-no business logic in entry-point modules, ever (they're the hardest code to test).
-`pipeline.py`'s compute/persist split (`render_*` returns data, `save_*` writes) exists
-precisely so new doors need zero engine changes.
+Doors (CLI, API, future UI) parse input and delegate; they hold no multi-step workflows.
+For the API that means `app.py` = routes, `api/service.py` = workflows — the standard
+router/service split. (Note the original phrasing here invoked "entry-point modules are
+the hardest code to test" — that rationale doesn't actually apply to `app.py`, which is
+not a packaging entry point and is thoroughly TestClient-tested. The router/service split
+is justified on its own merits, not by that borrowed argument.)
+
+`pipeline.py`'s compute/persist split (`render_*` returns data, `save_*` writes) exists so
+new doors need zero engine changes. Worth recording honestly: the predicted consumer of
+`render_*` was the API, but the API writes to disk and uses `save_*`. The actual consumers
+are `scripts/golden_check.py` and the pipeline tests. The split is still right; the
+prediction about who'd need it was wrong.
 
 ### 3.5 Invariants get tests; experiments don't (yet)
 
@@ -139,7 +147,7 @@ that may be deleted next week is waste.
 ```
 cinemagraph-tool/
 ├── src/cinemagraph/          # the stable core: pipeline, effects registry, mask, grade, loop, io, library
-├── api/                      # FastAPI door: background jobs, uploads, library routes; extra `api`
+├── api/                      # FastAPI door: app.py (routes) + service.py (workflows); extra `api`
 ├── machine-learning/         # isolated service: CLIPSeg semantic masking (validated)
 ├── tests/                    # 44 tests: contracts, invariants, smoke (core + API + library)
 ├── scripts/golden_check.py   # pixel-regression check, separate from pytest (see sec 6)
@@ -220,9 +228,15 @@ an isolated change.
 ### 5.5 API/CLI parity, then a thin web UI
 
 Close the known API gaps first (mask upload, per-effect overrides via the existing
-`validation.py`, `/mask-preview` route, `--loop-duration`); the UI then needs nothing
+`validation.py` — note `api/app.py` had an aspirational unused `validation` import for
+this, since removed, `/mask-preview` route, `--loop-duration`); the UI then needs nothing
 the API doesn't already offer. UI stays a thin client per §3.4 — candidate stack decided
 when we get there, not now.
+
+Parity is deliberately *not* symmetric in one direction: `POST /render/photo`'s
+`mask_prompt` (segment-then-render in one call) has no CLI equivalent, because the CLI
+lives inside the core package and can't reach an HTTP client without putting one there.
+See the decision log.
 
 ### 5.6 Long-form assembly (furthest out)
 
@@ -328,6 +342,10 @@ Decisions already made, with reasoning — so they aren't accidentally relitigat
 | `sound-effects/` service built and code-reviewed but not vendored from a third party | unlike CLIPSeg/ACE-Step, this one *is* code this project owns and wrote (ported from the proven `audio-effect-generation` experiment) — "own the wrapper" was always the plan for this capability, this just executed it |
 | `machine-learning/` built following the exact `sound-effects/` shape (own pyproject/Dockerfile, eager startup load, raw-bytes response) | consistency across the two isolated services beats bespoke structure per service — a future third service should follow the same shape unless it has a genuine reason not to |
 | `/mask/semantic`'s proxy fixed to return raw `image/png` bytes instead of `.json()` | it was written before `machine-learning/`'s actual contract (a PNG mask, per its README) was implemented against; caught and fixed while building the real service, not left as a silent mismatch |
+| `api/service.py` split out of `app.py`; routes hold no workflows | the standard FastAPI router/service split ("routers should not do everything"). Concretely: `run_music_job`'s failure and timeout branches were unreachable through an HTTP round-trip and therefore untested — extracting them made 5 new unit tests possible. Adopted the router/service layer only; skipped `repositories/`/`models/`/DI-session layering from the same guides, which assumes a DB and team scale we don't have |
+| Prompt→mask chaining lives in `service.py`, not in the core library or the CLI | it's the one module allowed to know about *both* external services and the render pipeline; `cinemagraph/` still never learns HTTP exists, and `_external_service.py` still never learns renders exist |
+| CLI deliberately has no `--mask-prompt` | `cli.py` lives inside `src/cinemagraph/`, so giving it service access would require putting an HTTP client in the core package. The CLI keeps `--mask <file>`; chaining is an API-side capability. Revisit only if the CLI moves out of the package (which would be the moment a third entry point appears) |
+| `mask_prompt` errors the job rather than falling back to an unmasked render | silently animating the whole frame when segmentation is unavailable would produce something other than what was asked for — a wrong result is worse than a clear failure |
 
 ### Placement quick-test for anything new
 

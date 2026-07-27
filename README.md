@@ -161,7 +161,17 @@ blocking startup) whenever the service isn't configured or isn't reachable:
   `machine-learning/`, a small FastAPI wrapper around CLIPSeg (loaded via `transformers`) that
   ships with this repo (own `pyproject.toml`/`Dockerfile`, isolated from the core's
   dependencies — see that directory's README). Configure with `ML_SERVICE_URL`;
-  `docker compose --profile ml up machine-learning` runs it locally.
+  `docker compose --profile ml up machine-learning` runs it locally. `POST /render/photo`'s
+  `mask_prompt` field chains this straight into a render:
+
+  ```bash
+  curl -X POST http://localhost:8000/render/photo \
+    -F "input_file=@photo.jpg" -F "effect=wind" -F "mask_prompt=clouds"
+  ```
+
+  One request instead of segment-save-then-render by hand. The generated mask is kept in the
+  job directory so a disappointing result can be inspected. If the service is unavailable the
+  job fails rather than silently rendering unmasked. No CLI equivalent — see `docs/DESIGN.md`.
 - **`POST /generate/music`** — music generation via an [ACE-Step](https://github.com/ace-step/ACE-Step)
   API server (`prompt`, `lyrics`, `duration`, `thinking` form fields). ACE-Step already ships its own
   server — nothing to build, just point at a running instance. Its API is itself a job queue, so this
@@ -220,10 +230,15 @@ docker run --rm -v "$(pwd)/data:/data" cinemagraph-tool cinemagraph from-photo /
 
 ## Architecture
 
-Both entry points (CLI, API) are thin wrappers around the same core library — neither duplicates
-rendering logic. The CLI calls the `save_*` (persist-to-disk) side of `pipeline.py`'s compute/persist
-split synchronously; the API calls the `render_*` (pure-compute) side inside a background job, so it
-can return a `job_id` immediately instead of blocking the HTTP connection for the whole render.
+Both doors (CLI, API) sit on the same core library — neither duplicates rendering logic. The CLI
+calls `pipeline.py`'s `save_*` (persist-to-disk) side synchronously. The API delegates to
+`api/service.py`, which calls the same `save_*` functions inside a background job, so the route can
+return a `job_id` immediately instead of blocking the HTTP connection for the whole render.
+
+The `render_*` (pure-compute, returns frames) half of the compute/persist split is used today by
+`scripts/golden_check.py` and the pipeline tests, which genuinely need frames rather than files —
+not by the API, which is happy writing into its job directory. The split still earns its keep, just
+for a different consumer than originally predicted.
 
 ```mermaid
 flowchart TB
@@ -233,20 +248,21 @@ flowchart TB
     TermUser --> CLI
     HttpUser -->|"multipart upload"| API
 
-    subgraph EntryPoints["Entry points -- thin, no business logic"]
+    subgraph EntryPoints["Doors in -- routes/flags parse and delegate, workflows live in service.py"]
         CLI["cli.py<br/>Click: make / mask-preview / from-photo"]
-        API["api/app.py<br/>FastAPI: /render/video /render/photo<br/>/jobs/id /jobs/id/file<br/>/effects /health /capabilities"]
+        API["api/app.py -- routes only<br/>FastAPI: /render/video /render/photo<br/>/jobs/id /jobs/id/file<br/>/effects /health /capabilities"]
+        Service["api/service.py -- workflows<br/>run_render_job / run_music_job<br/>run_sound_effect_job<br/>run_photo_semantic_mask_job"]
         Jobs["api/jobs.py<br/>in-memory job dict<br/>pending / running / done / error"]
-        API -->|"BackgroundTasks"| Jobs
+        API -->|"BackgroundTasks"| Service
+        Service --> Jobs
     end
 
     CLI --> Validation
-    API --> Validation
-    Validation["validation.py<br/>resolve_effect_kwargs()<br/>ValueError to UsageError / HTTP 422"]
+    Validation["validation.py<br/>resolve_effect_kwargs()<br/>ValueError to UsageError<br/>(API doesn't use this yet -- parity gap)"]
 
     CLI --> Save
-    API --> Render
-    Jobs -.->|"writes job-scoped output under<br/>CINEMAGRAPH_DATA_DIR"| Save
+    Service --> Save
+    Jobs -.->|"job-scoped output under<br/>CINEMAGRAPH_DATA_DIR"| Save
 
     subgraph CoreLib["src/cinemagraph -- core library"]
         Save["pipeline.py<br/>save_cinemagraph_video()<br/>save_cinemagraph_from_photo()<br/>save_mask_preview()<br/>persist to disk"]
@@ -302,9 +318,12 @@ flowchart LR
 
 Key design decisions this reflects:
 
-- **One rendering engine, two doors in.** `pipeline.py`'s compute/persist split exists so the CLI
-  (synchronous, writes directly) and the API (async, returns frames for job-scoped handling) never
-  fork the actual rendering logic.
+- **One rendering engine, two doors in.** The CLI (synchronous) and the API (background job) never
+  fork the actual rendering logic — both bottom out in the same `pipeline.py` functions.
+- **Routes don't hold workflows.** `api/app.py` parses and delegates; `api/service.py` holds the
+  multi-step work, including the only code that knows about *both* external services and the render
+  pipeline. That keeps the core library ignorant of HTTP and makes the workflows unit-testable
+  without an HTTP round-trip.
 - **One effect registry, not five parallel structures.** Every effect (tone or particle) registers
   itself once in `base.py`; `animate_photo()` (inside `effects/`) resolves requested effects against
   that registry and always runs tone effects before particle effects, regardless of request order.

@@ -1,24 +1,27 @@
-"""FastAPI entry point.
+"""FastAPI routes.
 
-Kept deliberately thin: routes only parse the request, delegate to
-cinemagraph.pipeline / api.jobs / api._external_service, and shape the
-response. No business logic lives here -- see CLAUDE.md's note on
-entry-point-module discipline (the same principle cli.py already follows).
+Routes only: parse the request, delegate to service.py, shape the response.
+Every multi-step workflow lives in service.py instead -- the router/service
+split that's standard practice for FastAPI projects, and which additionally
+makes those workflows unit-testable without an HTTP round-trip. See
+docs/DESIGN.md's decision log.
 
 Renders run as FastAPI BackgroundTasks (no Celery/Redis -- this is a
 single-process, local, no-auth personal tool) and write into a job-scoped
 directory under CINEMAGRAPH_DATA_DIR.
 
-Three routes talk to optional external services via _external_service.py's
-shared call_optional_service()/service_available() helpers, both of which
-degrade to a clean 503/false rather than erroring whenever the service
-isn't configured or isn't reachable, checked fresh on every request:
+Routes that talk to optional external services do so via
+_external_service.py's shared call_optional_service()/service_available()
+helpers, both of which degrade to a clean 503/false rather than erroring
+whenever the service isn't configured or isn't reachable, checked fresh on
+every request:
 
-- /mask/semantic proxies to a not-yet-built CLIPSeg service (ML_SERVICE_URL;
-  see machine-learning/README.md).
+- /mask/semantic proxies to the machine-learning/ CLIPSeg service
+  (ML_SERVICE_URL). POST /render/photo's mask_prompt field chains that same
+  segmentation straight into a render.
 - /generate/music proxies to an ACE-Step API server (ACESTEP_URL) -- that
   one's a real job-queue API (release_task -> poll query_result -> download
-  via /v1/audio), which is why it reuses this file's own job system
+  via /v1/audio), which is why it reuses this app's own job system
   (api/jobs.py, GET /jobs/{id}, GET /jobs/{id}/file) rather than needing new
   status-tracking infrastructure: "poll a remote job queue and download the
   result" turned out to fit the same Job abstraction already built for
@@ -26,30 +29,25 @@ isn't configured or isn't reachable, checked fresh on every request:
 - /generate/sound-effect proxies to the sound-effects/ service
   (SOUND_EFFECTS_URL) -- unlike ACE-Step, that service's own /generate call
   is synchronous (one request, one response with the finished audio), but
-  it still runs as a background job here since generation genuinely takes
-  tens of seconds to minutes and the caller shouldn't have to hold the
-  connection open for that.
+  it still runs as a background job since generation genuinely takes tens of
+  seconds to minutes and the caller shouldn't hold the connection open.
 """
-import asyncio
-import json
 import os
 import shutil
 import tempfile
 from pathlib import Path
 
+
 from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, Response
 
-from cinemagraph import effects as effects_pkg, library, pipeline, validation
+from cinemagraph import effects as effects_pkg, library, pipeline
 
-from . import jobs
+from . import jobs, service
 from ._external_service import call_optional_service, service_available
 from .schemas import AssetResponse, CapabilitiesResponse, JobResponse, JobStatusResponse
 
 DATA_DIR = Path(os.environ.get("CINEMAGRAPH_DATA_DIR", "./data")).resolve()
-
-MUSIC_POLL_INTERVAL_SECONDS = 2.0
-MUSIC_POLL_MAX_ATTEMPTS = 150  # ~5 minutes total
 
 app = FastAPI(title="cinemagraph-tool API")
 
@@ -63,15 +61,6 @@ def _job_dir(job_id: str) -> Path:
 async def _save_upload(upload: UploadFile, dest: Path) -> None:
     with dest.open("wb") as f:
         shutil.copyfileobj(upload.file, f)
-
-
-def _run_job(job_id: str, render_fn, output_path: Path, **kwargs) -> None:
-    jobs.mark_running(job_id)
-    try:
-        render_fn(output_path=str(output_path), **kwargs)
-        jobs.mark_done(job_id, output_path)
-    except Exception as e:
-        jobs.mark_error(job_id, str(e))
 
 
 @app.get("/health")
@@ -111,7 +100,7 @@ async def render_video(
     output_path = job_dir / "output.mp4"
 
     background_tasks.add_task(
-        _run_job, job.id, pipeline.save_cinemagraph_video, output_path,
+        service.run_render_job, job.id, pipeline.save_cinemagraph_video, output_path,
         input_path=str(input_path), mask_threshold=mask_threshold, feather=feather,
         apply_grade=apply_grade, grade_strength=grade_strength, grain=grain, also_gif=also_gif,
     )
@@ -123,6 +112,7 @@ async def render_photo(
     background_tasks: BackgroundTasks,
     input_file: UploadFile = File(...),
     effect: list[str] = Form(...),
+    mask_prompt: str | None = Form(None),
     duration: float = Form(4.0),
     fps: int = Form(30),
     speed: float = Form(1.0),
@@ -132,6 +122,15 @@ async def render_photo(
     grain: float = Form(0.03),
     also_gif: bool = Form(False),
 ):
+    """Render a photo cinemagraph.
+
+    Supplying mask_prompt (e.g. "clouds", "sun") segments the photo via the
+    machine-learning service first and renders with that mask, instead of
+    animating the whole frame. The job errors with a 503-style message if
+    that service isn't configured/reachable -- the render is not silently
+    run unmasked, since that would quietly produce something other than what
+    was asked for.
+    """
     unknown = [e for e in effect if e not in effects_pkg.EFFECTS]
     if unknown:
         raise HTTPException(422, f"Unknown effect(s) {unknown}. Choose from: {', '.join(effects_pkg.EFFECTS)}")
@@ -142,12 +141,22 @@ async def render_photo(
     await _save_upload(input_file, input_path)
     output_path = job_dir / "output.mp4"
 
-    background_tasks.add_task(
-        _run_job, job.id, pipeline.save_cinemagraph_from_photo, output_path,
-        photo_path=str(input_path), effect=effect, duration=duration, fps=fps, speed=speed,
-        feather=feather, apply_grade=apply_grade, grade_strength=grade_strength, grain=grain,
-        also_gif=also_gif,
+    render_kwargs = dict(
+        effect=effect, duration=duration, fps=fps, speed=speed, feather=feather,
+        apply_grade=apply_grade, grade_strength=grade_strength, grain=grain, also_gif=also_gif,
     )
+
+    if mask_prompt:
+        background_tasks.add_task(
+            service.run_photo_semantic_mask_job, job.id, output_path,
+            photo_path=input_path, mask_path=job_dir / "mask.png", mask_prompt=mask_prompt,
+            **render_kwargs,
+        )
+    else:
+        background_tasks.add_task(
+            service.run_render_job, job.id, pipeline.save_cinemagraph_from_photo, output_path,
+            photo_path=str(input_path), **render_kwargs,
+        )
     return JobResponse(job_id=job.id)
 
 
@@ -242,47 +251,6 @@ async def semantic_mask(image: UploadFile = File(...), prompt: str = Form(...)):
     return Response(content=resp.content, media_type="image/png")
 
 
-async def _run_music_job(job_id: str, output_path: Path, *, prompt: str, lyrics: str, duration: float, thinking: bool) -> None:
-    """Drives ACE-Step's own job-queue API to completion: create a task,
-    poll until it reports success/failure, download the resulting audio.
-    ACE-Step's response envelope wraps everything in {"data": ..., "code": ...};
-    see docs/DESIGN.md / the acestep-docs skill's API.md for the full contract.
-    """
-    jobs.mark_running(job_id)
-    try:
-        create_resp = await call_optional_service(
-            "ACESTEP_URL", "POST", "/release_task", service_name="Music generation",
-            json={"prompt": prompt, "lyrics": lyrics, "audio_duration": duration, "thinking": thinking},
-        )
-        task_id = create_resp.json()["data"]["task_id"]
-
-        result = None
-        for _ in range(MUSIC_POLL_MAX_ATTEMPTS):
-            await asyncio.sleep(MUSIC_POLL_INTERVAL_SECONDS)
-            query_resp = await call_optional_service(
-                "ACESTEP_URL", "POST", "/query_result", service_name="Music generation",
-                json={"task_id_list": [task_id]},
-            )
-            entry = query_resp.json()["data"][0]
-            if entry["status"] == 1:
-                result = json.loads(entry["result"])[0]
-                break
-            if entry["status"] == 2:
-                raise RuntimeError("ACE-Step reported generation failure.")
-        if result is None:
-            raise RuntimeError(f"ACE-Step generation timed out after {MUSIC_POLL_MAX_ATTEMPTS} polls.")
-
-        audio_resp = await call_optional_service(
-            "ACESTEP_URL", "GET", result["file"], service_name="Music generation", timeout=60.0,
-        )
-        output_path.write_bytes(audio_resp.content)
-        jobs.mark_done(job_id, output_path)
-    except HTTPException as e:
-        jobs.mark_error(job_id, e.detail)
-    except Exception as e:
-        jobs.mark_error(job_id, str(e))
-
-
 @app.post("/generate/music", response_model=JobResponse)
 async def generate_music(
     background_tasks: BackgroundTasks,
@@ -301,25 +269,10 @@ async def generate_music(
     output_path = job_dir / "output.mp3"
 
     background_tasks.add_task(
-        _run_music_job, job.id, output_path,
+        service.run_music_job, job.id, output_path,
         prompt=prompt, lyrics=lyrics, duration=duration, thinking=thinking,
     )
     return JobResponse(job_id=job.id)
-
-
-async def _run_sound_effect_job(job_id: str, output_path: Path, *, prompt: str, duration: float) -> None:
-    jobs.mark_running(job_id)
-    try:
-        resp = await call_optional_service(
-            "SOUND_EFFECTS_URL", "POST", "/generate", service_name="Sound effect generation",
-            json={"prompt": prompt, "duration": duration}, timeout=300.0,
-        )
-        output_path.write_bytes(resp.content)
-        jobs.mark_done(job_id, output_path)
-    except HTTPException as e:
-        jobs.mark_error(job_id, e.detail)
-    except Exception as e:
-        jobs.mark_error(job_id, str(e))
 
 
 @app.post("/generate/sound-effect", response_model=JobResponse)
@@ -338,6 +291,6 @@ async def generate_sound_effect(
     output_path = job_dir / "output.wav"
 
     background_tasks.add_task(
-        _run_sound_effect_job, job.id, output_path, prompt=prompt, duration=duration,
+        service.run_sound_effect_job, job.id, output_path, prompt=prompt, duration=duration,
     )
     return JobResponse(job_id=job.id)
