@@ -191,6 +191,12 @@ sibling given diffusion's much larger resource profile than segmentation).
 
 CLIPSeg behind `POST /segment`; the API's `/mask/semantic` proxy and capability flag
 already exist. Building this = filling one directory + uncommenting two compose lines.
+When it's built: load CLIPSeg via `transformers` (`CLIPSegProcessor`/
+`CLIPSegForImageSegmentation`, checkpoint `CIDAS/clipseg-rd64-refined`), **not** via
+`timojl/clipseg` directly — that repo isn't on PyPI (only `pip install git+https://...`,
+an unversioned dependency on one person's repo staying reachable), whereas `transformers`
+is a real, maintained PyPI package that happens to support CLIPSeg as one of many
+architectures. Same distinction that matters for any future git-only research repo.
 
 ### 5.4 Effect realism improvements
 
@@ -210,6 +216,44 @@ when we get there, not now.
 
 Sequencing multiple loops into a full video (crossfades, timing, maybe audio-reactive
 cuts). ffmpeg-concat-level tooling first; anything smarter is speculative.
+
+### 5.7 Audio (music + sound effects) — music generation IMPLEMENTED
+
+Three candidate models were researched (see decision log below for the full comparison);
+they turned out to fall into genuinely different categories, not three instances of the
+same remaining work:
+
+- **Music — [ACE-Step](https://github.com/ace-step/ACE-Step) — done.** `POST
+  /generate/music` in `api/app.py`, via `ACESTEP_URL`. ACE-Step ships its own FastAPI
+  server and published image (`ghcr.io/ace-step/ace-step-1.5:latest`) — there was no
+  wrapper to build, only a client. That client is non-trivial anyway, because ACE-Step's
+  own API is itself an async job queue (`release_task` → poll `query_result` →
+  `/v1/audio`); `_run_music_job` drives that queue inside our own `BackgroundTasks` job,
+  reusing the existing `GET /jobs/{id}`/`GET /jobs/{id}/file` routes rather than adding
+  new ones — the generic `Job` abstraction turned out to cover "poll a remote job queue"
+  as well as "run a local render," with no changes needed to `jobs.py`.
+- **Sound effects — Stable Audio Open, via the `audio-effect-generation` experiment —
+  proven but not wrapped.** Unlike ACE-Step, neither Stability AI's `stable-audio-tools`
+  nor CLIPSeg's `timojl/clipseg` ship any server — both are libraries only. But
+  `generate_rain_stableaudio.py` already produces real, working output (proof: two
+  committed `.wav` files) — the hard, uncertain part (does this model produce usable
+  ambience for this project) is answered. What's left is mechanical: wrap the already-
+  working generation call in a small FastAPI service, same shape as `machine-learning/`
+  was always meant to be. Per §3.5, deliberately not built yet — infrastructure gets
+  added when experimental code stabilizes, and per the project's own `RESEARCH.md`,
+  a server only earns its complexity once repeated same-session calls make the
+  per-invocation model-reload cost actually hurt (single-person, occasional-use doesn't
+  meet that bar yet).
+- **CLIPSeg** — same "own the wrapper" category as Stable Audio Open (§5.3), but *behind*
+  it in validation maturity: nothing has confirmed CLIPSeg's segmentation quality is
+  actually good enough for this project's images yet, whereas Stable Audio Open's output
+  is already proven.
+
+Community Docker images exist for Stable Audio Open (e.g.
+`ashleykleynhans/stable-audio-tools-docker`) but are deliberately not used — unlike
+ACE-Step's maintainer-published image, these are unaudited third-party wrappers with no
+accountability equivalent to a real package registry entry; not a trust level worth
+extending to something that needs GPU access.
 
 ## 6. Laboratory tooling — what earns its place and what doesn't
 
@@ -257,6 +301,11 @@ Decisions already made, with reasoning — so they aren't accidentally relitigat
 | `library.py` is core-tier, not under `api/` | both CLI and API need the same storage/lookup logic; unlike jobs, it must survive restarts |
 | `CINEMAGRAPH_LIBRARY_DIR` separate from `CINEMAGRAPH_DATA_DIR` | the library must work from the CLI alone; tying it to the API's job-scratch env var would make that impossible |
 | Golden-frame check is a script, not a pytest test | it's a regression check against *previous* output, not a correctness contract against a spec — different kind of thing, see §3.5 |
+| Vendoring ACE-Step's/any actively-developed upstream's source: rejected | copying code you don't maintain means owning its update churn forever; referencing its published image gets the same "one `docker compose up`" outcome for free |
+| ACE-Step referenced by published image, never a local `build: context: ../ACE-Step-1.5` | a relative path to a sibling directory only works on one machine with one exact folder layout; a registry image reference is portable |
+| Isolated services (`machine-learning/`, future audio wrapper) never share code with each other | that's exactly the coupling isolation exists to prevent; the actual shared surface (a `/health` route, "load model once") is a few lines — trivial duplication beats a shared dependency, same lesson as rejecting a uv workspace |
+| `api/_external_service.py` — one shared client helper, used by every optional-service route | this *is* safe to share: it never crosses the isolation boundary, since it's client-side code living in the one codebase (`api/`) that already calls every one of these services |
+| CLIPSeg must be loaded via `transformers`, never `pip install git+https://github.com/timojl/clipseg` | the original repo isn't a real PyPI package (git-install only); `transformers` is a maintained package that happens to support CLIPSeg as one of many architectures |
 
 ### Placement quick-test for anything new
 

@@ -15,6 +15,7 @@ class JobStatusResponse(BaseModel):
 
 class CapabilitiesResponse(BaseModel):
     semantic_mask: bool
+    music_generation: bool
 
 
 class AssetResponse(BaseModel):

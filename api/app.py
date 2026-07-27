@@ -1,40 +1,51 @@
 """FastAPI entry point.
 
 Kept deliberately thin: routes only parse the request, delegate to
-cinemagraph.pipeline / api.jobs, and shape the response. No business logic
-lives here -- see CLAUDE.md's note on entry-point-module discipline (the
-same principle cli.py already follows).
+cinemagraph.pipeline / api.jobs / api._external_service, and shape the
+response. No business logic lives here -- see CLAUDE.md's note on
+entry-point-module discipline (the same principle cli.py already follows).
 
 Renders run as FastAPI BackgroundTasks (no Celery/Redis -- this is a
 single-process, local, no-auth personal tool) and write into a job-scoped
-directory under CINEMAGRAPH_DATA_DIR. The semantic-mask route is a stub for
-a not-yet-built CLIPSeg service (see machine-learning/README.md): it
-degrades to a clean 503 rather than an error whenever ML_SERVICE_URL isn't
-set or isn't reachable, checked fresh on every request rather than once at
-startup, so the API never fails to start just because that (optional)
-service isn't running.
+directory under CINEMAGRAPH_DATA_DIR.
+
+Two routes talk to optional external services via _external_service.py's
+shared call_optional_service()/service_available() helpers, both of which
+degrade to a clean 503/false rather than erroring whenever the service
+isn't configured or isn't reachable, checked fresh on every request:
+
+- /mask/semantic proxies to a not-yet-built CLIPSeg service (ML_SERVICE_URL;
+  see machine-learning/README.md).
+- /generate/music proxies to an ACE-Step API server (ACESTEP_URL) -- that
+  one's a real job-queue API (release_task -> poll query_result -> download
+  via /v1/audio), which is why it reuses this file's own job system
+  (api/jobs.py, GET /jobs/{id}, GET /jobs/{id}/file) rather than needing new
+  status-tracking infrastructure: "poll a remote job queue and download the
+  result" turned out to fit the same Job abstraction already built for
+  local renders.
 """
+import asyncio
+import json
 import os
 import shutil
 import tempfile
 from pathlib import Path
 
-import httpx
 from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 
 from cinemagraph import effects as effects_pkg, library, pipeline, validation
 
 from . import jobs
+from ._external_service import call_optional_service, service_available
 from .schemas import AssetResponse, CapabilitiesResponse, JobResponse, JobStatusResponse
 
 DATA_DIR = Path(os.environ.get("CINEMAGRAPH_DATA_DIR", "./data")).resolve()
 
+MUSIC_POLL_INTERVAL_SECONDS = 2.0
+MUSIC_POLL_MAX_ATTEMPTS = 150  # ~5 minutes total
+
 app = FastAPI(title="cinemagraph-tool API")
-
-
-def _ml_service_url() -> str | None:
-    return os.environ.get("ML_SERVICE_URL")
 
 
 def _job_dir(job_id: str) -> Path:
@@ -64,16 +75,10 @@ async def health():
 
 @app.get("/capabilities", response_model=CapabilitiesResponse)
 async def capabilities():
-    service_url = _ml_service_url()
-    semantic_mask = False
-    if service_url:
-        try:
-            async with httpx.AsyncClient(timeout=2.0) as client:
-                resp = await client.get(f"{service_url}/health")
-                semantic_mask = resp.status_code == 200
-        except httpx.HTTPError:
-            semantic_mask = False
-    return CapabilitiesResponse(semantic_mask=semantic_mask)
+    return CapabilitiesResponse(
+        semantic_mask=await service_available("ML_SERVICE_URL"),
+        music_generation=await service_available("ACESTEP_URL"),
+    )
 
 
 @app.get("/effects")
@@ -222,14 +227,74 @@ async def semantic_mask(image: UploadFile = File(...), prompt: str = Form(...)):
     not a 500, whenever that service isn't configured or isn't reachable --
     this is the seam that feature will plug into; see machine-learning/README.md.
     """
-    service_url = _ml_service_url()
-    if not service_url:
-        raise HTTPException(503, "Semantic masking is unavailable: no ML service configured.")
-    try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            files = {"image": (image.filename, await image.read(), image.content_type)}
-            resp = await client.post(f"{service_url}/segment", data={"prompt": prompt}, files=files)
-            resp.raise_for_status()
-    except httpx.HTTPError:
-        raise HTTPException(503, "Semantic masking is unavailable: ML service unreachable.")
+    files = {"image": (image.filename, await image.read(), image.content_type)}
+    resp = await call_optional_service(
+        "ML_SERVICE_URL", "POST", "/segment", service_name="Semantic masking",
+        data={"prompt": prompt}, files=files,
+    )
     return resp.json()
+
+
+async def _run_music_job(job_id: str, output_path: Path, *, prompt: str, lyrics: str, duration: float, thinking: bool) -> None:
+    """Drives ACE-Step's own job-queue API to completion: create a task,
+    poll until it reports success/failure, download the resulting audio.
+    ACE-Step's response envelope wraps everything in {"data": ..., "code": ...};
+    see docs/DESIGN.md / the acestep-docs skill's API.md for the full contract.
+    """
+    jobs.mark_running(job_id)
+    try:
+        create_resp = await call_optional_service(
+            "ACESTEP_URL", "POST", "/release_task", service_name="Music generation",
+            json={"prompt": prompt, "lyrics": lyrics, "audio_duration": duration, "thinking": thinking},
+        )
+        task_id = create_resp.json()["data"]["task_id"]
+
+        result = None
+        for _ in range(MUSIC_POLL_MAX_ATTEMPTS):
+            await asyncio.sleep(MUSIC_POLL_INTERVAL_SECONDS)
+            query_resp = await call_optional_service(
+                "ACESTEP_URL", "POST", "/query_result", service_name="Music generation",
+                json={"task_id_list": [task_id]},
+            )
+            entry = query_resp.json()["data"][0]
+            if entry["status"] == 1:
+                result = json.loads(entry["result"])[0]
+                break
+            if entry["status"] == 2:
+                raise RuntimeError("ACE-Step reported generation failure.")
+        if result is None:
+            raise RuntimeError(f"ACE-Step generation timed out after {MUSIC_POLL_MAX_ATTEMPTS} polls.")
+
+        audio_resp = await call_optional_service(
+            "ACESTEP_URL", "GET", result["file"], service_name="Music generation", timeout=60.0,
+        )
+        output_path.write_bytes(audio_resp.content)
+        jobs.mark_done(job_id, output_path)
+    except HTTPException as e:
+        jobs.mark_error(job_id, e.detail)
+    except Exception as e:
+        jobs.mark_error(job_id, str(e))
+
+
+@app.post("/generate/music", response_model=JobResponse)
+async def generate_music(
+    background_tasks: BackgroundTasks,
+    prompt: str = Form(""),
+    lyrics: str = Form(""),
+    duration: float = Form(30.0),
+    thinking: bool = Form(True),
+):
+    """Proxies to an ACE-Step API server. Same degrade-cleanly contract as
+    /mask/semantic: reuses this file's own job system rather than adding new
+    status-tracking routes -- GET /jobs/{job_id} and /jobs/{job_id}/file
+    already work for this without any changes.
+    """
+    job = jobs.create_job()
+    job_dir = _job_dir(job.id)
+    output_path = job_dir / "output.mp3"
+
+    background_tasks.add_task(
+        _run_music_job, job.id, output_path,
+        prompt=prompt, lyrics=lyrics, duration=duration, thinking=thinking,
+    )
+    return JobResponse(job_id=job.id)

@@ -152,8 +152,19 @@ uv run uvicorn api.app:app --reload
 `POST /render/video` / `POST /render/photo` accept a multipart file upload and return a `job_id`
 immediately (renders run in the background); `GET /jobs/{job_id}` polls status, `GET /jobs/{job_id}/file`
 downloads the result once done. `GET /effects` lists available effects, `GET /capabilities` reports
-optional features (currently just the not-yet-built semantic-mask service, see `machine-learning/README.md`).
-No auth — this is meant for local/personal use, not as a hosted service.
+optional features. No auth — this is meant for local/personal use, not as a hosted service.
+
+Two routes proxy to optional external services, both degrading to a clean `503` (never a `500`, never
+blocking startup) whenever the service isn't configured or isn't reachable:
+
+- **`POST /mask/semantic`** — semantic masking via a not-yet-built CLIPSeg service, see
+  `machine-learning/README.md`. Configure with `ML_SERVICE_URL`.
+- **`POST /generate/music`** — music generation via an [ACE-Step](https://github.com/ace-step/ACE-Step)
+  API server (`prompt`, `lyrics`, `duration`, `thinking` form fields). Unlike the semantic-mask seam,
+  ACE-Step already ships its own server — nothing to build, just point at a running instance. Its API
+  is itself a job queue, so this route drives it to completion in the background and reuses the *same*
+  `GET /jobs/{job_id}` / `GET /jobs/{job_id}/file` you'd use for a render, rather than adding new
+  status routes. Configure with `ACESTEP_URL`.
 
 ## Reference library
 

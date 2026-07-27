@@ -145,11 +145,21 @@ concern — and each entry point translates that into its own error type (`cli.p
 gain `fastapi`/`uvicorn`/`httpx` as hard dependencies):
 
 - **`app.py`** — the FastAPI app and all routes. Kept thin like `cli.py`: routes only parse the
-  request, delegate to `cinemagraph.pipeline`/`api.jobs`, and shape the response.
+  request, delegate to `cinemagraph.pipeline`/`api.jobs`/`api._external_service`, and shape the
+  response.
 - **`jobs.py`** — in-process job tracking (`dict[str, Job]` in memory). No Celery/Redis — this is a
   single-process, local, no-auth personal tool; job state doesn't survive a restart, which is an
   accepted tradeoff, not an oversight.
 - **`schemas.py`** — pydantic request/response models.
+- **`_external_service.py`** — shared client helper for calling *optional external services*:
+  `service_available(env_var)` (boolean, for `/capabilities`) and `call_optional_service(env_var,
+  method, path, ...)` (raises `HTTPException(503)` on missing/unreachable, safe to call from a
+  background task too — `HTTPException` is a normal exception outside the request cycle, catch it
+  and read `.detail`). This is the one place this pattern is allowed to repeat across services:
+  sharing it doesn't cross the isolation boundary between the actually-separate services (each still
+  owns its own process/deps/Dockerfile), because it's client-side code living entirely inside `api/`,
+  the single codebase that calls all of them — see `docs/DESIGN.md` sec 3.3 for the full reasoning on
+  why the services *themselves* must never share code with each other, only this layer may.
 
 Renders (`POST /render/video`, `POST /render/photo`) accept a multipart file upload, save it into a
 job-scoped directory under `CINEMAGRAPH_DATA_DIR` (default `./data`), and run the matching `render_*`
@@ -157,13 +167,26 @@ job-scoped directory under `CINEMAGRAPH_DATA_DIR` (default `./data`), and run th
 `GET /jobs/{job_id}` polls status (`pending`/`running`/`done`/`error`); `GET /jobs/{job_id}/file`
 downloads the finished output.
 
-`GET /capabilities` and `POST /mask/semantic` are the seam for the not-yet-built CLIPSeg service
-(see `machine-learning/README.md`, directory named to match
-[Immich](https://github.com/immich-app/immich/tree/main/machine-learning)'s convention for the same
-core-app-plus-optional-ML-service split): both read `ML_SERVICE_URL` from the environment **at
-request time**, never at startup, so the API always starts cleanly and simply reports the feature as
-unavailable (`503` for `/mask/semantic`, `{"semantic_mask": false}` from `/capabilities`) when that
-service isn't configured or isn't reachable — never a `500` or a failed startup.
+Two more routes are optional-external-service seams, both using `_external_service.py`:
+
+- **`POST /mask/semantic`** — for the not-yet-built CLIPSeg service (see `machine-learning/README.md`,
+  directory named to match [Immich](https://github.com/immich-app/immich/tree/main/machine-learning)'s
+  convention for the same core-app-plus-optional-ML-service split). Env var `ML_SERVICE_URL`.
+- **`POST /generate/music`** — proxies to an [ACE-Step](https://github.com/ace-step/ACE-Step) API
+  server. Env var `ACESTEP_URL`. Unlike CLIPSeg, ACE-Step already ships its own FastAPI server and a
+  published image (`ghcr.io/ace-step/ace-step-1.5:latest`, see `docker-compose.yml`'s commented
+  `acestep` service) — there is no wrapper for this project to write, only a client. That client is
+  more involved than `/mask/semantic`'s single proxied call because ACE-Step's own API is itself an
+  async job queue (`POST /release_task` → poll `POST /query_result` → `GET /v1/audio`): `app.py`'s
+  `_run_music_job` drives that queue to completion inside *our* `BackgroundTasks` job, which is why
+  `POST /generate/music` needs no new status/download routes of its own — `GET /jobs/{job_id}` and
+  `GET /jobs/{job_id}/file` already work for it unchanged. (Full request/response contract: ACE-Step's
+  own `docs/api/API.md`, reachable via its `acestep-docs` skill.)
+
+Both routes read their env var **at request time**, never at startup, so the API always starts cleanly
+and simply reports the feature as unavailable (`503` from the `POST` route, `false` from
+`GET /capabilities`) when that service isn't configured or isn't reachable — never a `500` or a
+failed startup.
 
 `POST /library`, `GET /library`, `GET /library/{id}`, `GET /library/{id}/file`,
 `DELETE /library/{id}` are thin routes over `cinemagraph.library` (uploads are staged to a temp file,

@@ -26,10 +26,10 @@ def test_health(api_client):
     assert resp.json() == {"status": "ok"}
 
 
-def test_capabilities_without_sidecar_configured(api_client):
+def test_capabilities_without_optional_services_configured(api_client):
     resp = api_client.get("/capabilities")
     assert resp.status_code == 200
-    assert resp.json() == {"semantic_mask": False}
+    assert resp.json() == {"semantic_mask": False, "music_generation": False}
 
 
 def test_list_effects(api_client):
@@ -95,6 +95,21 @@ def test_semantic_mask_without_sidecar_returns_503(api_client, test_photo):
             data={"prompt": "water"},
         )
     assert resp.status_code == 503
+
+
+def test_generate_music_without_acestep_configured_reports_job_error(api_client):
+    """/generate/music always returns 200 with a job_id (per the job-queue
+    contract) -- the "service unavailable" outcome shows up as that job's
+    status, not as an HTTP error on the initial request. TestClient runs
+    BackgroundTasks synchronously, so the job has already failed by the
+    time this call returns."""
+    resp = api_client.post("/generate/music", data={"prompt": "ambient synth pad"})
+    assert resp.status_code == 200, resp.text
+    job_id = resp.json()["job_id"]
+
+    status = api_client.get(f"/jobs/{job_id}").json()
+    assert status["status"] == "error", status
+    assert "ACESTEP_URL" in status["error"]
 
 
 def test_library_add_list_get_file_and_remove(api_client, test_photo):
