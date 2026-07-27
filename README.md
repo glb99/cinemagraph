@@ -157,8 +157,11 @@ optional features. No auth — this is meant for local/personal use, not as a ho
 Three routes proxy to optional external services, all degrading to a clean `503` (never a `500`, never
 blocking startup) whenever the service isn't configured or isn't reachable:
 
-- **`POST /mask/semantic`** — semantic masking via a not-yet-built CLIPSeg service, see
-  `machine-learning/README.md`. Configure with `ML_SERVICE_URL`.
+- **`POST /mask/semantic`** — semantic masking (`image`, `prompt` form fields) via
+  `machine-learning/`, a small FastAPI wrapper around CLIPSeg (loaded via `transformers`) that
+  ships with this repo (own `pyproject.toml`/`Dockerfile`, isolated from the core's
+  dependencies — see that directory's README). Configure with `ML_SERVICE_URL`;
+  `docker compose --profile ml up machine-learning` runs it locally.
 - **`POST /generate/music`** — music generation via an [ACE-Step](https://github.com/ace-step/ACE-Step)
   API server (`prompt`, `lyrics`, `duration`, `thinking` form fields). ACE-Step already ships its own
   server — nothing to build, just point at a running instance. Its API is itself a job queue, so this
@@ -199,16 +202,15 @@ docker compose up
 
 Builds and runs the API on `localhost:8000`, with `./data` mounted for job input/output. The image
 only ever includes the `api` extra (opencv/numpy/click/fastapi) — never `torch`/`transformers`, which
-live only in the optional, separately-built `sound-effects` service and the not-yet-built
-`machine-learning` service:
+live only in the optional, separately-built `sound-effects` and `machine-learning` services:
 
 ```bash
 docker compose --profile audio up      # core + sound-effects (Stable Audio Open)
+docker compose --profile ml up         # core + machine-learning (CLIPSeg)
 ```
 
-`machine-learning` and `acestep` (ACE-Step's own published image) are also declared in
-`docker-compose.yml`, commented out until built / until you have one running — see the file for the
-env vars each needs uncommented alongside it.
+`acestep` (ACE-Step's own published image) is also declared in `docker-compose.yml`, commented out
+until you have an instance running — see the file for the env var to uncomment alongside it.
 
 The CLI works the same way inside the container, overriding the default command:
 
@@ -274,7 +276,7 @@ flowchart TB
 
     API -->|"POST /mask/semantic, GET /capabilities<br/>503 if ML_SERVICE_URL unset/unreachable,<br/>checked per-request not at startup"| MLService
 
-    subgraph MachineLearning["machine-learning/ -- reserved seam, not yet built"]
+    subgraph MachineLearning["machine-learning/ -- isolated service"]
         MLService["CLIPSeg service<br/>torch + transformers<br/>POST /segment: image + prompt to mask"]
     end
 ```
@@ -287,7 +289,7 @@ flowchart LR
         CoreApp["CLI + API<br/>opencv-headless, click,<br/>fastapi, uvicorn<br/>never torch"]
     end
 
-    subgraph MLImage["machine-learning image (not yet built)"]
+    subgraph MLImage["machine-learning image"]
         MLApp["CLIPSeg service<br/>torch + transformers<br/>gated behind --profile ml"]
     end
 

@@ -169,9 +169,12 @@ downloads the finished output.
 
 Three more routes are optional-external-service seams, all using `_external_service.py`:
 
-- **`POST /mask/semantic`** — for the not-yet-built CLIPSeg service (see `machine-learning/README.md`,
-  directory named to match [Immich](https://github.com/immich-app/immich/tree/main/machine-learning)'s
-  convention for the same core-app-plus-optional-ML-service split). Env var `ML_SERVICE_URL`.
+- **`POST /mask/semantic`** — proxies to `machine-learning/`, a small FastAPI service **this project
+  owns and built** wrapping CLIPSeg (loaded via `transformers`, not the `timojl/clipseg` repo — that
+  one isn't a real PyPI package) — see that directory's own README for its contract and how to run it.
+  Directory named to match [Immich](https://github.com/immich-app/immich/tree/main/machine-learning)'s
+  convention for the same core-app-plus-optional-ML-service split. Env var `ML_SERVICE_URL`. Response
+  is proxied through as raw `image/png` bytes, same as the request came back from the service.
 - **`POST /generate/music`** — proxies to an [ACE-Step](https://github.com/ace-step/ACE-Step) API
   server. Env var `ACESTEP_URL`. ACE-Step already ships its own FastAPI server and a published image
   (`ghcr.io/ace-step/ace-step-1.5:latest`, see `docker-compose.yml`'s commented `acestep` service) —

@@ -38,8 +38,9 @@ Three different situations, not one:
       (`api/app.py`'s `_run_music_job`, `tests/test_api_smoke.py`). Real end-to-end
       validation against a *running* ACE-Step server is still needed — not done in this
       session (no GPU/server available here); do that before considering this fully proven.
-- [x] Adopted — CLIPSeg must be loaded via `transformers`, not `timojl/clipseg` directly,
-      once §5.3 gets built.
+- [x] **Adopted (follow-up same day)** — CLIPSeg loaded via `transformers`, not
+      `timojl/clipseg` directly. `machine-learning/` built and validated end-to-end
+      against a real GPU — see the follow-up section below.
 - [x] **Adopted (follow-up same day)** — Stable Audio Open wrapper: built (`sound-effects/`)
       and validated for real, not just against the "service absent" path. On reflection the
       "wait until it stabilizes" call was reasoning about the wrong trigger — see
@@ -63,6 +64,37 @@ Not validated: the `sound-effects/Dockerfile` itself (Docker Desktop wasn't runn
 starting it plus a fresh multi-GB `torch` download wasn't worth the time given the
 Python-level logic was already this thoroughly proven). If the container ever fails to
 build, start here.
+
+## Follow-up: CLIPSeg wrapper built (same day)
+
+Built `machine-learning/` following the exact shape validated by `sound-effects/`:
+`app.py` (FastAPI, eager startup load, `/health`, `/segment`), `pyproject.toml`
+(`py-modules = ["app"]`, `torch`/`transformers`/`pillow` deps), `Dockerfile` (same
+COPY-before-install ordering fixed for `sound-effects/`). `api/app.py`'s `/mask/semantic`
+proxy had a latent bug caught in the process — it called `.json()` on the CLIPSeg
+response instead of returning the raw PNG bytes the service actually contract to return;
+fixed to `Response(content=resp.content, media_type="image/png")`, matching how
+`/generate/sound-effect` already handled its own binary response.
+
+**Follow-up in the same session**: ran it for real. `audio-effect-generation`'s existing
+venv already had `torch` 2.6.0+cu124 (CUDA available) and `transformers` 5.14.1 installed,
+so `uvicorn app:app --app-dir machine-learning --port 8004` ran against it directly, no
+new install needed:
+- `GET /health` → `{"status": "ok", "device": "cuda"}`; CLIPSeg weights (462 tensors)
+  loaded from the HF Hub cache in under a second.
+- `POST /segment` on `examples/test_photo.jpg` with `prompt=sky` → real 200, a 480x320
+  8-bit grayscale PNG matching the input's exact dimensions, pixel values spanning 0–229
+  (confirms it's a real heatmap, not a blank/degenerate response) — the logits tensor
+  came back 3-dim (no batch dim issue in this `transformers` version), so `app.py`'s
+  `segment()` needed no changes.
+- Full chain: started `cinemagraph-tool`'s own API with `ML_SERVICE_URL` pointed at the
+  running service → `GET /capabilities` correctly flipped `semantic_mask` to `true` →
+  `POST /mask/semantic` returned the identical PNG bytes through the proxy.
+
+Both test servers stopped afterward. All three optional services (`sound-effects/`,
+`machine-learning/`, ACE-Step client) are now built; two of the three (sound-effects,
+machine-learning) are validated against a live model, the third (ACE-Step) only against
+the absent-service degradation path.
 
 ## Notes
 

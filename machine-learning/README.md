@@ -1,84 +1,85 @@
-# machine-learning (not yet built)
+# machine-learning
 
-Placeholder for the future CLIPSeg-based semantic-mask feature: given a
-photo and a text prompt ("water", "clouds", "the candle flame"), return a
-soft mask locating that content — an alternative to hand-painting a mask
-PNG for `cinemagraph from-photo --mask ...`.
-
-This directory intentionally has no code or `Dockerfile` yet. The point of
-committing this README now, ahead of the implementation, is to reserve the
-integration seam in `api/app.py` (`GET /capabilities`, `POST /mask/semantic`)
-and in `docker-compose.yml` (the commented-out `machine-learning` service) —
-so building this later is a matter of filling in this directory and
-uncommenting two lines, not redesigning how the core API talks to it.
+Isolated FastAPI service wrapping [CLIPSeg](https://huggingface.co/CIDAS/clipseg-rd64-refined)
+(via [`transformers`](https://huggingface.co/docs/transformers/model_doc/clipseg)) for
+text-prompted semantic masking ("water", "clouds", "the candle flame") — the model backing
+`cinemagraph-tool`'s `POST /mask/semantic`, an alternative to hand-painting a mask PNG for
+`cinemagraph from-photo --mask ...`.
 
 Named to match the [Immich](https://github.com/immich-app/immich/tree/main/machine-learning)
-convention for this exact shape of split (core app + a separate, optional
-service for heavy vision-model work) — not called `ml_sidecar` because this
-is a standalone container/service with its own lifecycle, not a sidecar in
-the strict same-pod sense that term implies in Kubernetes.
+convention for this exact shape of split (core app + a separate, optional service for heavy
+vision-model work) — not called `ml_sidecar` because this is a standalone container/service
+with its own lifecycle, not a sidecar in the strict same-pod sense that term implies in
+Kubernetes.
 
 ## Why a separate service
 
-`CLIPSeg` needs `torch` + `transformers` — multiple GB of dependencies that
-have no business being in the core `cinemagraph` image (see the root
-`Dockerfile`, which only ever installs the `api` extra, never `ml`). Keeping
-it as a separate container means:
+`CLIPSeg` needs `torch` + `transformers` — multiple GB of dependencies that have no business
+being in the core `cinemagraph` image (see the root `Dockerfile`, which only ever installs the
+`api` extra, never `ml`). Keeping it as a separate container means:
 
-- The core image stays small and fast to build regardless of whether anyone
-  ever uses semantic masking.
-- The core API works standalone with this feature simply reporting as
-  unavailable (`GET /capabilities` → `{"semantic_mask": false}`,
-  `POST /mask/semantic` → `503`) whenever `ML_SERVICE_URL` is unset or the
-  service isn't reachable — checked at request time, never at startup.
-- The heavy dependency only needs installing/updating/patched for CVEs on
-  machines actually running this feature.
+- The core image stays small and fast to build regardless of whether anyone ever uses semantic
+  masking.
+- The core API works standalone with this feature simply reporting as unavailable
+  (`GET /capabilities` → `{"semantic_mask": false}`, `POST /mask/semantic` → `503`) whenever
+  `ML_SERVICE_URL` is unset or the service isn't reachable — checked at request time, never at
+  startup.
+- The heavy dependency only needs installing/updating/patched for CVEs on machines actually
+  running this feature.
 
-## Intended contract
+CLIPSeg is loaded through `transformers`'s own `CLIPSegProcessor`/`CLIPSegForImageSegmentation`
+rather than the `timojl/clipseg` repo directly — the latter isn't a real PyPI package (only
+`pip install git+https://...`), unlike `transformers`, which is.
+
+## Running it
+
+```bash
+cd machine-learning
+uv run uvicorn app:app --port 8004
+```
+
+`uv run` auto-creates this directory's own `.venv` and installs from its own `pyproject.toml`
+the first time it's called — same `uv`-first workflow as the root project, just a separate
+project/lockfile per the isolation-boundary rule (see `docs/DESIGN.md` §3.2/§7). Plain
+`pip install . && uvicorn app:app --port 8004` works too if you'd rather manage the venv
+yourself.
+
+Or via Docker Compose from the repo root: `docker compose --profile ml up machine-learning`.
+
+First request (or startup, since the model loads eagerly) downloads the CLIPSeg weights from
+the Hugging Face Hub — cached afterward (`HF_HOME`/`/cache` volume in the Dockerfile/compose
+entry). CPU-capable but slower; a GPU (CUDA) is picked up automatically if available
+(`torch.cuda.is_available()`).
+
+## API
 
 ```
+GET /health
+  200 {"status": "ok", "device": "cuda" | "cpu"}
+
 POST /segment
   multipart/form-data:
     image: <file>
     prompt: <string>   e.g. "water", "clouds", "the candle flame"
 
   200 OK
-  multipart or application/octet-stream: a grayscale PNG mask, same
-  dimensions as the input image, white = matches the prompt / black =
-  doesn't -- the same white-on-black convention cinemagraph.mask.load_mask()
-  already expects from a hand-painted mask, so the core service can feed
-  the result straight into the existing mask pipeline unmodified.
-
-GET /health
-  200 OK once the model is loaded and ready to serve requests.
+  image/png: a grayscale PNG mask, same dimensions as the input image, white = matches
+  the prompt / black = doesn't -- the same white-on-black convention
+  cinemagraph.mask.load_mask() already expects from a hand-painted mask, so the core
+  service can feed the result straight into the existing mask pipeline unmodified.
 ```
 
-`api/app.py`'s `POST /mask/semantic` already implements the client side of
-this contract (proxies the same multipart request through, converts an
-error/timeout from this service into a `503` rather than propagating a
-`500`) — see that function's docstring for the exact behavior.
+`api/app.py`'s `POST /mask/semantic` implements the client side of this contract (proxies the
+same multipart request through, converts an error/timeout from this service into a `503`
+rather than propagating a `500`, and returns the PNG bytes unmodified).
 
-## Sketch of the eventual implementation
+## Validated
 
-(Not built yet — this is a starting point for whoever picks this up.)
-
-```python
-from transformers import CLIPSegProcessor, CLIPSegForImageSegmentation
-import torch
-
-processor = CLIPSegProcessor.from_pretrained("CIDAS/clipseg-rd64-refined")
-model = CLIPSegForImageSegmentation.from_pretrained("CIDAS/clipseg-rd64-refined")
-
-def segment(image_rgb, prompt: str) -> np.ndarray:
-    inputs = processor(text=[prompt], images=[image_rgb], return_tensors="pt")
-    with torch.no_grad():
-        logits = model(**inputs).logits
-    probs = torch.sigmoid(logits[0]).numpy()
-    return cv2.resize(probs, (image_rgb.shape[1], image_rgb.shape[0]))  # 0..1 heatmap
-```
-
-Wrap that in a small FastAPI app (`machine-learning/app.py`), add a
-`Dockerfile` based on a CUDA or CPU-only PyTorch image depending on target
-hardware, and a `pyproject.toml` with the `ml` extra's dependencies
-(`torch`, `transformers`) as its actual requirements (not optional there —
-this service exists *only* to run them).
+Manually, end-to-end, against a real GPU (RTX 4060, using `audio-effect-generation`'s existing
+venv which already had `torch`/`transformers` installed): `GET /health` → `{"status": "ok",
+"device": "cuda"}`; `POST /segment` on `examples/test_photo.jpg` with `prompt=sky` → real 200,
+a 480x320 8-bit grayscale PNG (matching the input's dimensions exactly), pixel values spanning
+0–229 (not blank/degenerate). Also validated the full chain through `cinemagraph-tool`'s own
+`POST /mask/semantic` with `ML_SERVICE_URL` pointed at the running service → `GET /capabilities`
+correctly flipped `semantic_mask` to `true` → the identical PNG bytes came back through the
+proxy. See `docs/experiments/2026-07-27-audio-model-serving-research.md` for details.

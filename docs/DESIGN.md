@@ -140,7 +140,7 @@ that may be deleted next week is waste.
 cinemagraph-tool/
 ├── src/cinemagraph/          # the stable core: pipeline, effects registry, mask, grade, loop, io, library
 ├── api/                      # FastAPI door: background jobs, uploads, library routes; extra `api`
-├── machine-learning/         # reserved seam (README-only): CLIPSeg semantic masking
+├── machine-learning/         # isolated service: CLIPSeg semantic masking (validated)
 ├── tests/                    # 44 tests: contracts, invariants, smoke (core + API + library)
 ├── scripts/golden_check.py   # pixel-regression check, separate from pytest (see sec 6)
 ├── docs/experiments/         # lab notebook, one file per experiment
@@ -151,8 +151,12 @@ cinemagraph-tool/
 Key properties already in place: 9 combinable procedural effects (tone/particle families,
 perfect loops by construction), auto + hand-painted masking, lofi grade, arbitrary-length
 looped output, CLI/API parity on the happy path (API lacks fine-tuning knobs — known gap),
-graceful degradation when the ML service is absent (`/capabilities`, 503s), a persistent
-content-addressed reference library (§5.1 — implemented; not yet wired into `make`/`from-photo`).
+graceful degradation when any optional service is absent (`/capabilities`, 503s), a
+persistent content-addressed reference library (§5.1 — implemented; not yet wired into
+`make`/`from-photo`), and three optional external services behind that degradation seam:
+`sound-effects/` (Stable Audio Open, validated end-to-end), `machine-learning/` (CLIPSeg,
+validated end-to-end), and a client to ACE-Step's own server (music generation, only the
+absent-service path proven).
 
 ## 5. Feature roadmap (unordered — this is a lab, not a backlog)
 
@@ -187,16 +191,24 @@ cheapest to stand up. A local-model backend, if ever chosen, becomes an isolated
 (own pyproject, own container — same tier as `machine-learning/`, possibly a separate
 sibling given diffusion's much larger resource profile than segmentation).
 
-### 5.3 Semantic masking (`machine-learning/`, contract already reserved)
+### 5.3 Semantic masking (`machine-learning/`) — IMPLEMENTED, validated
 
-CLIPSeg behind `POST /segment`; the API's `/mask/semantic` proxy and capability flag
-already exist. Building this = filling one directory + uncommenting two compose lines.
-When it's built: load CLIPSeg via `transformers` (`CLIPSegProcessor`/
+CLIPSeg behind `POST /segment`, loaded via `transformers` (`CLIPSegProcessor`/
 `CLIPSegForImageSegmentation`, checkpoint `CIDAS/clipseg-rd64-refined`), **not** via
 `timojl/clipseg` directly — that repo isn't on PyPI (only `pip install git+https://...`,
 an unversioned dependency on one person's repo staying reachable), whereas `transformers`
 is a real, maintained PyPI package that happens to support CLIPSeg as one of many
 architectures. Same distinction that matters for any future git-only research repo.
+`api/app.py`'s `/mask/semantic` proxy now returns the service's raw `image/png` bytes
+unmodified (it previously called `.json()` on the response — a leftover from before this
+service existed — fixed when this was built). Same shape as `sound-effects/`: own
+`pyproject.toml`/`Dockerfile`, eager startup load, per-request inference. Validated
+end-to-end against a real GPU (RTX 4060, reusing `audio-effect-generation`'s existing
+`torch`/`transformers` install): standalone `POST /segment` on a real photo produced a
+correctly-sized, non-degenerate grayscale PNG, and the full chain through
+`cinemagraph-tool`'s own `POST /mask/semantic` (with `ML_SERVICE_URL` pointed at it)
+round-tripped the identical bytes. See `machine-learning/README.md`'s Validated section
+and `docs/experiments/2026-07-27-audio-model-serving-research.md`.
 
 ### 5.4 Effect realism improvements
 
@@ -249,10 +261,11 @@ same remaining work:
   full chain through `cinemagraph-tool`'s own `POST /generate/sound-effect` → job
   polling → file download. Not validated: the Docker build itself (Docker wasn't running
   in the validating session) — Python-level logic is proven, containerization isn't.
-- **CLIPSeg** — same "own the wrapper" category as Stable Audio Open, but *behind* it in
-  validation maturity: nothing has confirmed CLIPSeg's segmentation quality is actually
-  good enough for this project's images yet, whereas both audio models' output is now
-  proven. Still not built.
+See §5.3 for the fourth capability in this same family: **semantic masking —
+CLIPSeg, wrapped in `machine-learning/` — built and validated for real**, same "own the
+wrapper" category as Stable Audio Open. Segmentation *quality* for this project's actual
+images (as opposed to "does the service work at all") still hasn't been judged by eye
+across a range of prompts/photos — that's a usage question, not a plumbing one.
 
 Community Docker images exist for Stable Audio Open (e.g.
 `ashleykleynhans/stable-audio-tools-docker`) but are deliberately not used — unlike
@@ -313,6 +326,8 @@ Decisions already made, with reasoning — so they aren't accidentally relitigat
 | CLIPSeg must be loaded via `transformers`, never `pip install git+https://github.com/timojl/clipseg` | the original repo isn't a real PyPI package (git-install only); `transformers` is a maintained package that happens to support CLIPSeg as one of many architectures |
 | Reversed the "premature" call on the Stable Audio Open wrapper and built it | `RESEARCH.md`'s "wait until reload cost hurts" reasoning was written for a standalone script with no caller; once it's meant to be a `cinemagraph-tool` feature, the alternative to a wrapper is subprocess-shelling from `api/app.py`, which the same doc calls fragile — a real consumer changes which of that doc's own criteria applies |
 | `sound-effects/` service built and code-reviewed but not vendored from a third party | unlike CLIPSeg/ACE-Step, this one *is* code this project owns and wrote (ported from the proven `audio-effect-generation` experiment) — "own the wrapper" was always the plan for this capability, this just executed it |
+| `machine-learning/` built following the exact `sound-effects/` shape (own pyproject/Dockerfile, eager startup load, raw-bytes response) | consistency across the two isolated services beats bespoke structure per service — a future third service should follow the same shape unless it has a genuine reason not to |
+| `/mask/semantic`'s proxy fixed to return raw `image/png` bytes instead of `.json()` | it was written before `machine-learning/`'s actual contract (a PNG mask, per its README) was implemented against; caught and fixed while building the real service, not left as a silent mismatch |
 
 ### Placement quick-test for anything new
 

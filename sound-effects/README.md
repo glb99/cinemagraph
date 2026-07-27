@@ -21,9 +21,14 @@ capability that happens to serve the same ambient-video goal.
 
 ```bash
 cd sound-effects
-pip install .
-uvicorn app:app --port 8003
+uv run uvicorn app:app --port 8003
 ```
+
+`uv run` auto-creates this directory's own `.venv` and installs from its own `pyproject.toml`
+the first time it's called — same `uv`-first workflow as the root project, just a separate
+project/lockfile per the isolation-boundary rule (see `docs/DESIGN.md` §3.2/§7). Plain
+`pip install . && uvicorn app:app --port 8003` works too if you'd rather manage the venv
+yourself.
 
 Or via Docker Compose from the repo root: `docker compose --profile audio up sound-effects`.
 

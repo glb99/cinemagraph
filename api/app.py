@@ -38,7 +38,7 @@ import tempfile
 from pathlib import Path
 
 from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, UploadFile
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 
 from cinemagraph import effects as effects_pkg, library, pipeline, validation
 
@@ -230,16 +230,16 @@ async def library_remove(asset_id: str):
 
 @app.post("/mask/semantic")
 async def semantic_mask(image: UploadFile = File(...), prompt: str = Form(...)):
-    """Proxies to the (not-yet-built) CLIPSeg service. Returns a clean 503,
+    """Proxies to the machine-learning (CLIPSeg) service. Returns a clean 503,
     not a 500, whenever that service isn't configured or isn't reachable --
-    this is the seam that feature will plug into; see machine-learning/README.md.
+    see machine-learning/README.md for the /segment contract this proxies.
     """
     files = {"image": (image.filename, await image.read(), image.content_type)}
     resp = await call_optional_service(
         "ML_SERVICE_URL", "POST", "/segment", service_name="Semantic masking",
-        data={"prompt": prompt}, files=files,
+        data={"prompt": prompt}, files=files, timeout=60.0,
     )
-    return resp.json()
+    return Response(content=resp.content, media_type="image/png")
 
 
 async def _run_music_job(job_id: str, output_path: Path, *, prompt: str, lyrics: str, duration: float, thinking: bool) -> None:
