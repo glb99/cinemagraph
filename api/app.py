@@ -9,7 +9,7 @@ Renders run as FastAPI BackgroundTasks (no Celery/Redis -- this is a
 single-process, local, no-auth personal tool) and write into a job-scoped
 directory under CINEMAGRAPH_DATA_DIR.
 
-Two routes talk to optional external services via _external_service.py's
+Three routes talk to optional external services via _external_service.py's
 shared call_optional_service()/service_available() helpers, both of which
 degrade to a clean 503/false rather than erroring whenever the service
 isn't configured or isn't reachable, checked fresh on every request:
@@ -23,6 +23,12 @@ isn't configured or isn't reachable, checked fresh on every request:
   status-tracking infrastructure: "poll a remote job queue and download the
   result" turned out to fit the same Job abstraction already built for
   local renders.
+- /generate/sound-effect proxies to the sound-effects/ service
+  (SOUND_EFFECTS_URL) -- unlike ACE-Step, that service's own /generate call
+  is synchronous (one request, one response with the finished audio), but
+  it still runs as a background job here since generation genuinely takes
+  tens of seconds to minutes and the caller shouldn't have to hold the
+  connection open for that.
 """
 import asyncio
 import json
@@ -78,6 +84,7 @@ async def capabilities():
     return CapabilitiesResponse(
         semantic_mask=await service_available("ML_SERVICE_URL"),
         music_generation=await service_available("ACESTEP_URL"),
+        sound_effect_generation=await service_available("SOUND_EFFECTS_URL"),
     )
 
 
@@ -296,5 +303,41 @@ async def generate_music(
     background_tasks.add_task(
         _run_music_job, job.id, output_path,
         prompt=prompt, lyrics=lyrics, duration=duration, thinking=thinking,
+    )
+    return JobResponse(job_id=job.id)
+
+
+async def _run_sound_effect_job(job_id: str, output_path: Path, *, prompt: str, duration: float) -> None:
+    jobs.mark_running(job_id)
+    try:
+        resp = await call_optional_service(
+            "SOUND_EFFECTS_URL", "POST", "/generate", service_name="Sound effect generation",
+            json={"prompt": prompt, "duration": duration}, timeout=300.0,
+        )
+        output_path.write_bytes(resp.content)
+        jobs.mark_done(job_id, output_path)
+    except HTTPException as e:
+        jobs.mark_error(job_id, e.detail)
+    except Exception as e:
+        jobs.mark_error(job_id, str(e))
+
+
+@app.post("/generate/sound-effect", response_model=JobResponse)
+async def generate_sound_effect(
+    background_tasks: BackgroundTasks,
+    prompt: str = Form(...),
+    duration: float = Form(10.0),
+):
+    """Proxies to the sound-effects/ service (Stable Audio Open). Unlike
+    ACE-Step, that service answers in one synchronous call -- still run as
+    a background job here since generation takes real time and shouldn't
+    block the HTTP connection.
+    """
+    job = jobs.create_job()
+    job_dir = _job_dir(job.id)
+    output_path = job_dir / "output.wav"
+
+    background_tasks.add_task(
+        _run_sound_effect_job, job.id, output_path, prompt=prompt, duration=duration,
     )
     return JobResponse(job_id=job.id)

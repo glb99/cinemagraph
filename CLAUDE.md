@@ -167,24 +167,32 @@ job-scoped directory under `CINEMAGRAPH_DATA_DIR` (default `./data`), and run th
 `GET /jobs/{job_id}` polls status (`pending`/`running`/`done`/`error`); `GET /jobs/{job_id}/file`
 downloads the finished output.
 
-Two more routes are optional-external-service seams, both using `_external_service.py`:
+Three more routes are optional-external-service seams, all using `_external_service.py`:
 
 - **`POST /mask/semantic`** — for the not-yet-built CLIPSeg service (see `machine-learning/README.md`,
   directory named to match [Immich](https://github.com/immich-app/immich/tree/main/machine-learning)'s
   convention for the same core-app-plus-optional-ML-service split). Env var `ML_SERVICE_URL`.
 - **`POST /generate/music`** — proxies to an [ACE-Step](https://github.com/ace-step/ACE-Step) API
-  server. Env var `ACESTEP_URL`. Unlike CLIPSeg, ACE-Step already ships its own FastAPI server and a
-  published image (`ghcr.io/ace-step/ace-step-1.5:latest`, see `docker-compose.yml`'s commented
-  `acestep` service) — there is no wrapper for this project to write, only a client. That client is
-  more involved than `/mask/semantic`'s single proxied call because ACE-Step's own API is itself an
-  async job queue (`POST /release_task` → poll `POST /query_result` → `GET /v1/audio`): `app.py`'s
-  `_run_music_job` drives that queue to completion inside *our* `BackgroundTasks` job, which is why
-  `POST /generate/music` needs no new status/download routes of its own — `GET /jobs/{job_id}` and
+  server. Env var `ACESTEP_URL`. ACE-Step already ships its own FastAPI server and a published image
+  (`ghcr.io/ace-step/ace-step-1.5:latest`, see `docker-compose.yml`'s commented `acestep` service) —
+  there is no wrapper for this project to write, only a client. That client is more involved than
+  `/mask/semantic`'s single proxied call because ACE-Step's own API is itself an async job queue
+  (`POST /release_task` → poll `POST /query_result` → `GET /v1/audio`): `app.py`'s `_run_music_job`
+  drives that queue to completion inside *our* `BackgroundTasks` job, which is why `POST
+  /generate/music` needs no new status/download routes of its own — `GET /jobs/{job_id}` and
   `GET /jobs/{job_id}/file` already work for it unchanged. (Full request/response contract: ACE-Step's
   own `docs/api/API.md`, reachable via its `acestep-docs` skill.)
+- **`POST /generate/sound-effect`** — proxies to `sound-effects/`, a small FastAPI service **this
+  project owns and built** (unlike ACE-Step) wrapping Stable Audio Open — see that directory's own
+  README for its contract and how to run it. Env var `SOUND_EFFECTS_URL`. Unlike ACE-Step's job queue,
+  that service's own `POST /generate` is a single synchronous call; `_run_sound_effect_job` still runs
+  it as a background job here purely because generation takes real time (tens of seconds to a couple
+  minutes) and the HTTP connection shouldn't be held open for it. Validated end-to-end against a real
+  GPU (both the service standalone and the full chain through this API) — see
+  `docs/experiments/2026-07-27-audio-model-serving-research.md`.
 
-Both routes read their env var **at request time**, never at startup, so the API always starts cleanly
-and simply reports the feature as unavailable (`503` from the `POST` route, `false` from
+All three routes read their env var **at request time**, never at startup, so the API always starts
+cleanly and simply reports the feature as unavailable (`503` from the `POST` route, `false` from
 `GET /capabilities`) when that service isn't configured or isn't reachable — never a `500` or a
 failed startup.
 

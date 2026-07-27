@@ -217,7 +217,7 @@ when we get there, not now.
 Sequencing multiple loops into a full video (crossfades, timing, maybe audio-reactive
 cuts). ffmpeg-concat-level tooling first; anything smarter is speculative.
 
-### 5.7 Audio (music + sound effects) — music generation IMPLEMENTED
+### 5.7 Audio (music + sound effects) — both IMPLEMENTED
 
 Three candidate models were researched (see decision log below for the full comparison);
 they turned out to fall into genuinely different categories, not three instances of the
@@ -231,23 +231,28 @@ same remaining work:
   `/v1/audio`); `_run_music_job` drives that queue inside our own `BackgroundTasks` job,
   reusing the existing `GET /jobs/{id}`/`GET /jobs/{id}/file` routes rather than adding
   new ones — the generic `Job` abstraction turned out to cover "poll a remote job queue"
-  as well as "run a local render," with no changes needed to `jobs.py`.
-- **Sound effects — Stable Audio Open, via the `audio-effect-generation` experiment —
-  proven but not wrapped.** Unlike ACE-Step, neither Stability AI's `stable-audio-tools`
-  nor CLIPSeg's `timojl/clipseg` ship any server — both are libraries only. But
-  `generate_rain_stableaudio.py` already produces real, working output (proof: two
-  committed `.wav` files) — the hard, uncertain part (does this model produce usable
-  ambience for this project) is answered. What's left is mechanical: wrap the already-
-  working generation call in a small FastAPI service, same shape as `machine-learning/`
-  was always meant to be. Per §3.5, deliberately not built yet — infrastructure gets
-  added when experimental code stabilizes, and per the project's own `RESEARCH.md`,
-  a server only earns its complexity once repeated same-session calls make the
-  per-invocation model-reload cost actually hurt (single-person, occasional-use doesn't
-  meet that bar yet).
-- **CLIPSeg** — same "own the wrapper" category as Stable Audio Open (§5.3), but *behind*
-  it in validation maturity: nothing has confirmed CLIPSeg's segmentation quality is
-  actually good enough for this project's images yet, whereas Stable Audio Open's output
-  is already proven.
+  as well as "run a local render," with no changes needed to `jobs.py`. **Not yet
+  validated against a live server** — no GPU/running instance was available to test
+  against; only the "service absent" degradation path is proven.
+- **Sound effects — Stable Audio Open, wrapped in `sound-effects/` — done, and
+  validated for real.** The premature-to-build call from the first pass of this section
+  was revisited and reversed: once sound-effect generation is meant to be a
+  `cinemagraph-tool` feature (reachable via its own API, the way music now is), the
+  alternative to a thin wrapper isn't "no server" — it's `api/app.py` shelling out to
+  the script as a subprocess, which is exactly the fragile pattern the project's own
+  `RESEARCH.md` warns against (`"parsing stdout, argument quoting, blocking"`). A real
+  consumer existing changes the calculus `RESEARCH.md` was reasoning about. Generation
+  logic ported verbatim from `audio-effect-generation/generate_rain_stableaudio.py`; the
+  wrapper's only addition is loading the model once at startup instead of per-call.
+  Validated end-to-end on a real GPU (RTX 4060, model already cached): the service
+  standalone (`POST /generate` → valid 44.1kHz stereo WAV, correct duration) *and* the
+  full chain through `cinemagraph-tool`'s own `POST /generate/sound-effect` → job
+  polling → file download. Not validated: the Docker build itself (Docker wasn't running
+  in the validating session) — Python-level logic is proven, containerization isn't.
+- **CLIPSeg** — same "own the wrapper" category as Stable Audio Open, but *behind* it in
+  validation maturity: nothing has confirmed CLIPSeg's segmentation quality is actually
+  good enough for this project's images yet, whereas both audio models' output is now
+  proven. Still not built.
 
 Community Docker images exist for Stable Audio Open (e.g.
 `ashleykleynhans/stable-audio-tools-docker`) but are deliberately not used — unlike
@@ -306,6 +311,8 @@ Decisions already made, with reasoning — so they aren't accidentally relitigat
 | Isolated services (`machine-learning/`, future audio wrapper) never share code with each other | that's exactly the coupling isolation exists to prevent; the actual shared surface (a `/health` route, "load model once") is a few lines — trivial duplication beats a shared dependency, same lesson as rejecting a uv workspace |
 | `api/_external_service.py` — one shared client helper, used by every optional-service route | this *is* safe to share: it never crosses the isolation boundary, since it's client-side code living in the one codebase (`api/`) that already calls every one of these services |
 | CLIPSeg must be loaded via `transformers`, never `pip install git+https://github.com/timojl/clipseg` | the original repo isn't a real PyPI package (git-install only); `transformers` is a maintained package that happens to support CLIPSeg as one of many architectures |
+| Reversed the "premature" call on the Stable Audio Open wrapper and built it | `RESEARCH.md`'s "wait until reload cost hurts" reasoning was written for a standalone script with no caller; once it's meant to be a `cinemagraph-tool` feature, the alternative to a wrapper is subprocess-shelling from `api/app.py`, which the same doc calls fragile — a real consumer changes which of that doc's own criteria applies |
+| `sound-effects/` service built and code-reviewed but not vendored from a third party | unlike CLIPSeg/ACE-Step, this one *is* code this project owns and wrote (ported from the proven `audio-effect-generation` experiment) — "own the wrapper" was always the plan for this capability, this just executed it |
 
 ### Placement quick-test for anything new
 

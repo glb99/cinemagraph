@@ -29,7 +29,11 @@ def test_health(api_client):
 def test_capabilities_without_optional_services_configured(api_client):
     resp = api_client.get("/capabilities")
     assert resp.status_code == 200
-    assert resp.json() == {"semantic_mask": False, "music_generation": False}
+    assert resp.json() == {
+        "semantic_mask": False,
+        "music_generation": False,
+        "sound_effect_generation": False,
+    }
 
 
 def test_list_effects(api_client):
@@ -110,6 +114,20 @@ def test_generate_music_without_acestep_configured_reports_job_error(api_client)
     status = api_client.get(f"/jobs/{job_id}").json()
     assert status["status"] == "error", status
     assert "ACESTEP_URL" in status["error"]
+
+
+def test_generate_sound_effect_without_service_configured_reports_job_error(api_client):
+    """Same shape as the music-generation test above -- see that test's
+    docstring. Validated for real against a live sound-effects/ instance
+    outside the test suite (GPU required, not available in CI); see
+    docs/experiments/."""
+    resp = api_client.post("/generate/sound-effect", data={"prompt": "gentle wind chimes"})
+    assert resp.status_code == 200, resp.text
+    job_id = resp.json()["job_id"]
+
+    status = api_client.get(f"/jobs/{job_id}").json()
+    assert status["status"] == "error", status
+    assert "SOUND_EFFECTS_URL" in status["error"]
 
 
 def test_library_add_list_get_file_and_remove(api_client, test_photo):

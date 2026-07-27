@@ -154,17 +154,21 @@ immediately (renders run in the background); `GET /jobs/{job_id}` polls status, 
 downloads the result once done. `GET /effects` lists available effects, `GET /capabilities` reports
 optional features. No auth — this is meant for local/personal use, not as a hosted service.
 
-Two routes proxy to optional external services, both degrading to a clean `503` (never a `500`, never
+Three routes proxy to optional external services, all degrading to a clean `503` (never a `500`, never
 blocking startup) whenever the service isn't configured or isn't reachable:
 
 - **`POST /mask/semantic`** — semantic masking via a not-yet-built CLIPSeg service, see
   `machine-learning/README.md`. Configure with `ML_SERVICE_URL`.
 - **`POST /generate/music`** — music generation via an [ACE-Step](https://github.com/ace-step/ACE-Step)
-  API server (`prompt`, `lyrics`, `duration`, `thinking` form fields). Unlike the semantic-mask seam,
-  ACE-Step already ships its own server — nothing to build, just point at a running instance. Its API
-  is itself a job queue, so this route drives it to completion in the background and reuses the *same*
-  `GET /jobs/{job_id}` / `GET /jobs/{job_id}/file` you'd use for a render, rather than adding new
-  status routes. Configure with `ACESTEP_URL`.
+  API server (`prompt`, `lyrics`, `duration`, `thinking` form fields). ACE-Step already ships its own
+  server — nothing to build, just point at a running instance. Its API is itself a job queue, so this
+  route drives it to completion in the background and reuses the *same* `GET /jobs/{job_id}` /
+  `GET /jobs/{job_id}/file` you'd use for a render. Configure with `ACESTEP_URL`.
+- **`POST /generate/sound-effect`** — ambient/SFX generation (`prompt`, `duration` form fields) via
+  `sound-effects/`, a small FastAPI wrapper around Stable Audio Open that ships with this repo (own
+  `pyproject.toml`/`Dockerfile`, isolated from the core's dependencies — see that directory's README).
+  Configure with `SOUND_EFFECTS_URL`; `docker compose --profile audio up sound-effects` runs it
+  locally. Validated end-to-end against a real GPU — see `docs/experiments/`.
 
 ## Reference library
 
@@ -194,8 +198,17 @@ docker compose up
 ```
 
 Builds and runs the API on `localhost:8000`, with `./data` mounted for job input/output. The image
-only ever includes the `api` extra (opencv/numpy/click/fastapi) — never the heavy `ml` extra
-(torch/transformers), which is reserved for a separate `machine-learning` service (not yet built).
+only ever includes the `api` extra (opencv/numpy/click/fastapi) — never `torch`/`transformers`, which
+live only in the optional, separately-built `sound-effects` service and the not-yet-built
+`machine-learning` service:
+
+```bash
+docker compose --profile audio up      # core + sound-effects (Stable Audio Open)
+```
+
+`machine-learning` and `acestep` (ACE-Step's own published image) are also declared in
+`docker-compose.yml`, commented out until built / until you have one running — see the file for the
+env vars each needs uncommented alongside it.
 
 The CLI works the same way inside the container, overriding the default command:
 

@@ -11,6 +11,8 @@ services:
       # - ML_SERVICE_URL=http://machine-learning:8001
       # Uncomment once you're running the acestep service (below):
       # - ACESTEP_URL=http://acestep:8001
+      # Uncomment once you're running the sound-effects service (below):
+      # - SOUND_EFFECTS_URL=http://sound-effects:8003
 
   # Stub -- machine-learning/ currently only has a README documenting the
   # intended contract (POST /segment {image, prompt} -> mask.png), no
@@ -50,3 +52,19 @@ services:
   #           - driver: nvidia
   #             count: all
   #             capabilities: [gpu]
+
+  # sound-effects/ -- built and validated (see docs/experiments/), unlike
+  # machine-learning/ above this is real, working code we own, so this
+  # entry is active rather than commented. Still gated behind the same
+  # profile so it never starts unintentionally (CPU-capable per its
+  # Dockerfile, but noticeably faster with a GPU -- add a `deploy:` block
+  # matching acestep's above if you want to pass one through). Model
+  # weights download from the HF Hub on first start and are cached in the
+  # mounted volume across restarts. `docker compose --profile audio up`.
+  sound-effects:
+    build: ./sound-effects
+    profiles: ["audio"]
+    ports:
+      - "8003:8003"
+    volumes:
+      - ./data/sound-effects-cache:/cache/huggingface

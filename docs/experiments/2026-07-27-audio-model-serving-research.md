@@ -40,13 +40,34 @@ Three different situations, not one:
       session (no GPU/server available here); do that before considering this fully proven.
 - [x] Adopted — CLIPSeg must be loaded via `transformers`, not `timojl/clipseg` directly,
       once §5.3 gets built.
-- [ ] Inconclusive — Stable Audio Open wrapper: not built. Next experiment, if picked up:
-      wrap `generate_rain_stableaudio.py`'s logic in a minimal FastAPI service and confirm
-      the "load once, don't reload per-request" change doesn't affect output quality.
+- [x] **Adopted (follow-up same day)** — Stable Audio Open wrapper: built (`sound-effects/`)
+      and validated for real, not just against the "service absent" path. On reflection the
+      "wait until it stabilizes" call was reasoning about the wrong trigger — see
+      `docs/DESIGN.md`'s decision log for why a real consumer (this project's own API)
+      changes when a wrapper is justified, independent of call-volume/reload-cost.
+
+## Follow-up validation (same day)
+
+Used `audio-effect-generation`'s existing venv (already had `torch`/`stable-audio-tools`
+installed, model weights already cached) to actually run `sound-effects/app.py` against a
+real GPU (RTX 4060) rather than just reviewing the code:
+- `GET /health` → `{"status": "ok", "device": "cuda"}`
+- `POST /generate` (prompt: "gentle wind chimes in a light breeze", 5s, 50 steps) → valid
+  200, 44.1kHz stereo WAV, exactly 5.0s (confirms the trim-to-requested-duration logic
+  works) — real audio output sent to the user, not just a byte-count check.
+- Full chain: `cinemagraph-tool`'s own `POST /generate/sound-effect` with
+  `SOUND_EFFECTS_URL` pointed at the running service → `GET /capabilities` correctly
+  flipped `sound_effect_generation` to `true` → job completed → file downloaded correctly.
+
+Not validated: the `sound-effects/Dockerfile` itself (Docker Desktop wasn't running and
+starting it plus a fresh multi-GB `torch` download wasn't worth the time given the
+Python-level logic was already this thoroughly proven). If the container ever fails to
+build, start here.
 
 ## Notes
 
 `api/_external_service.py`'s shared client helper (`call_optional_service`/
-`service_available`) came out of this — used by both the CLIPSeg proxy and the ACE-Step
-client, since both live in `api/`'s single codebase and don't cross the isolation boundary
-that keeps the *services themselves* from sharing code. See `docs/DESIGN.md` decision log.
+`service_available`) came out of this — used by the CLIPSeg proxy, the ACE-Step client,
+*and* the sound-effects client, since all three live in `api/`'s single codebase and don't
+cross the isolation boundary that keeps the *services themselves* from sharing code. See
+`docs/DESIGN.md` decision log.
