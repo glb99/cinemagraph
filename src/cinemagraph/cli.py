@@ -40,22 +40,25 @@ def make(input_path, output_path, mask_path, still_frame_index, blend_frames, au
          mask_threshold, feather, apply_grade, grade_strength, grain, also_gif, mask_preview_path,
          loop_duration):
     """Turn INPUT_PATH into a looping cinemagraph at OUTPUT_PATH."""
-    pipeline.save_cinemagraph_video(
-        input_path=input_path,
-        output_path=output_path,
-        mask_path=mask_path,
-        still_frame_index=still_frame_index,
-        blend_frames=blend_frames,
-        auto_trim_loop=auto_trim,
-        mask_threshold=mask_threshold,
-        feather=feather,
-        apply_grade=apply_grade,
-        grade_strength=grade_strength,
-        grain=grain,
-        also_gif=also_gif,
-        mask_preview_path=mask_preview_path,
-        loop_duration=loop_duration,
-    )
+    try:
+        pipeline.save_cinemagraph_video(
+            input_path=input_path,
+            output_path=output_path,
+            mask_path=mask_path,
+            still_frame_index=still_frame_index,
+            blend_frames=blend_frames,
+            auto_trim_loop=auto_trim,
+            mask_threshold=mask_threshold,
+            feather=feather,
+            apply_grade=apply_grade,
+            grade_strength=grade_strength,
+            grain=grain,
+            also_gif=also_gif,
+            mask_preview_path=mask_preview_path,
+            loop_duration=loop_duration,
+        )
+    except ValueError as e:
+        raise click.UsageError(str(e))
     click.echo(f"Saved cinemagraph to {output_path}")
 
 
@@ -143,22 +146,25 @@ def from_photo(photo_path, output_path, effects, mask_path, duration, fps, speed
     except ValueError as e:
         raise click.UsageError(str(e))
 
-    pipeline.save_cinemagraph_from_photo(
-        photo_path=photo_path,
-        output_path=output_path,
-        effect=list(effects),
-        mask_path=mask_path,
-        duration=duration,
-        fps=fps,
-        speed=speed,
-        effect_kwargs=effect_kwargs,
-        feather=feather,
-        apply_grade=apply_grade,
-        grade_strength=grade_strength,
-        grain=grain,
-        also_gif=also_gif,
-        loop_duration=loop_duration,
-    )
+    try:
+        pipeline.save_cinemagraph_from_photo(
+            photo_path=photo_path,
+            output_path=output_path,
+            effect=list(effects),
+            mask_path=mask_path,
+            duration=duration,
+            fps=fps,
+            speed=speed,
+            effect_kwargs=effect_kwargs,
+            feather=feather,
+            apply_grade=apply_grade,
+            grade_strength=grade_strength,
+            grain=grain,
+            also_gif=also_gif,
+            loop_duration=loop_duration,
+        )
+    except ValueError as e:
+        raise click.UsageError(str(e))
     click.echo(f"Saved cinemagraph to {output_path}")
 
 

@@ -76,6 +76,116 @@ def test_render_video_then_job_status(api_client, test_video):
     assert status["status"] == "done", status
 
 
+def _hand_painted_mask_bytes(w=160, h=100):
+    """Same fixture-building approach as tests/test_mask.py's contract test."""
+    import cv2
+    import numpy as np
+
+    mask = np.zeros((h, w), dtype=np.uint8)
+    mask[10:30, 20:60] = 255
+    ok, encoded = cv2.imencode(".png", mask)
+    assert ok
+    return encoded.tobytes()
+
+
+def test_render_video_accepts_uploaded_mask_and_loop_controls(api_client, test_video):
+    """Parity check: still_frame_index/blend_frames/auto_trim/mask upload were
+    CLI-only (`make`) until this was added to /render/video."""
+    with open(test_video, "rb") as f:
+        resp = api_client.post(
+            "/render/video",
+            files={
+                "input_file": ("input.mp4", f, "video/mp4"),
+                "mask": ("mask.png", _hand_painted_mask_bytes(), "image/png"),
+            },
+            data={"still_frame_index": "0", "blend_frames": "5", "auto_trim": "false"},
+        )
+    assert resp.status_code == 200, resp.text
+    status = api_client.get(f"/jobs/{resp.json()['job_id']}").json()
+    assert status["status"] == "done", status
+
+
+def test_render_video_rejects_loop_duration_with_gif(api_client, test_video):
+    with open(test_video, "rb") as f:
+        resp = api_client.post(
+            "/render/video",
+            files={"input_file": ("input.mp4", f, "video/mp4")},
+            data={"also_gif": "true", "loop_duration": "60"},
+        )
+    assert resp.status_code == 422
+
+
+def test_render_photo_accepts_uploaded_mask_and_per_effect_overrides(api_client, test_photo):
+    """Parity check: a hand-painted mask and per-effect overrides (--rain-count
+    etc. on the CLI) were previously only reachable through the CLI."""
+    with open(test_photo, "rb") as f:
+        resp = api_client.post(
+            "/render/photo",
+            files={
+                "input_file": ("photo.jpg", f, "image/jpeg"),
+                "mask": ("mask.png", _hand_painted_mask_bytes(480, 320), "image/png"),
+            },
+            data={"effect": ["dust"], "duration": "1.0", "fps": "10", "dust_count": "5"},
+        )
+    assert resp.status_code == 200, resp.text
+    status = api_client.get(f"/jobs/{resp.json()['job_id']}").json()
+    assert status["status"] == "done", status
+
+
+def test_render_photo_rejects_override_for_effect_not_requested(api_client, test_photo):
+    """Same rule the CLI enforces via validation.resolve_effect_kwargs:
+    --rain-count only makes sense alongside --effect rain."""
+    with open(test_photo, "rb") as f:
+        resp = api_client.post(
+            "/render/photo",
+            files={"input_file": ("photo.jpg", f, "image/jpeg")},
+            data={"effect": ["dust"], "rain_count": "150"},
+        )
+    assert resp.status_code == 422
+    assert "rain" in resp.text
+
+
+def test_render_photo_rejects_mask_and_mask_prompt_together(api_client, test_photo):
+    with open(test_photo, "rb") as f:
+        resp = api_client.post(
+            "/render/photo",
+            files={
+                "input_file": ("photo.jpg", f, "image/jpeg"),
+                "mask": ("mask.png", _hand_painted_mask_bytes(480, 320), "image/png"),
+            },
+            data={"effect": ["dust"], "mask_prompt": "sky"},
+        )
+    assert resp.status_code == 422
+
+
+def test_render_photo_rejects_loop_duration_with_gif(api_client, test_photo):
+    with open(test_photo, "rb") as f:
+        resp = api_client.post(
+            "/render/photo",
+            files={"input_file": ("photo.jpg", f, "image/jpeg")},
+            data={"effect": ["dust"], "also_gif": "true", "loop_duration": "60"},
+        )
+    assert resp.status_code == 422
+
+
+def test_mask_preview_then_job_status_and_download(api_client, test_video):
+    """API equivalent of `cinemagraph mask-preview`."""
+    with open(test_video, "rb") as f:
+        resp = api_client.post(
+            "/mask-preview",
+            files={"input_file": ("input.mp4", f, "video/mp4")},
+        )
+    assert resp.status_code == 200, resp.text
+    job_id = resp.json()["job_id"]
+
+    status = api_client.get(f"/jobs/{job_id}").json()
+    assert status["status"] == "done", status
+
+    file_resp = api_client.get(f"/jobs/{job_id}/file")
+    assert file_resp.status_code == 200
+    assert file_resp.content[:8] == b"\x89PNG\r\n\x1a\n"  # PNG magic bytes
+
+
 def test_render_photo_rejects_unknown_effect(api_client, test_photo):
     with open(test_photo, "rb") as f:
         resp = api_client.post(

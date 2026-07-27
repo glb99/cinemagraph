@@ -20,7 +20,7 @@ from . import loop as loop_mod
 from . import mask as mask_mod
 
 _LOOP_DURATION_GIF_ERROR = (
-    "--gif isn't supported together with --loop-duration (the GIF would be enormous); drop one of them."
+    "loop_duration and also_gif can't be used together (the GIF would be enormous); drop one of them."
 )
 
 

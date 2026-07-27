@@ -166,8 +166,9 @@ effects, and masking behind whatever door reaches it). Both moves are in the dec
 
 Key properties already in place: 9 combinable procedural effects (tone/particle families,
 perfect loops by construction), auto + hand-painted masking, lofi grade, arbitrary-length
-looped output, CLI/API parity on the happy path (API lacks fine-tuning knobs — known gap),
-graceful degradation when any optional service is absent (`/capabilities`, 503s), a
+looped output, full CLI/API parity (mask upload, per-effect overrides, `loop_duration`, a
+`/mask-preview` route — see §5.5), graceful degradation when any optional service is absent
+(`/capabilities`, 503s), a
 persistent content-addressed reference library (§5.1 — implemented; not yet wired into
 `make`/`from-photo`), and three optional external services behind that degradation seam:
 `sound-effects/` (Stable Audio Open, validated end-to-end), `machine-learning/` (CLIPSeg,
@@ -233,13 +234,22 @@ depth), true advection for smoke/vapor (translation, not in-place brightness mod
 flow direction derived from mask shape. Pure `effects/` work; the registry means each is
 an isolated change.
 
-### 5.5 API/CLI parity, then a thin web UI
+### 5.5 API/CLI parity — DONE, then a thin web UI
 
-Close the known API gaps first (mask upload, per-effect overrides via the existing
-`validation.py` — note `server/app.py` had an aspirational unused `validation` import for
-this, since removed, `/mask-preview` route, `--loop-duration`); the UI then needs nothing
-the API doesn't already offer. UI stays a thin client per §3.4 — candidate stack decided
-when we get there, not now.
+`POST /render/video` and `POST /render/photo` now accept everything `make`/`from-photo` do: mask
+upload (in addition to the API-only `mask_prompt` semantic path), per-effect overrides validated
+through the same `validation.resolve_effect_kwargs()` the CLI uses (`server/app.py`'s earlier
+unused `validation` import was the tell that this was planned but not wired up — it's wired up
+now), and `loop_duration`. A new `POST /mask-preview` route matches `cinemagraph mask-preview`.
+Verified against a live server, not just TestClient: uploaded mask + `dust_count` override on
+`/render/photo`, and a real `/mask-preview` job producing a downloadable PNG — see
+`docs/experiments/`. Found and fixed in the process: `make`/`from-photo` let the
+`loop_duration`+`also_gif` conflict raise a raw uncaught `ValueError` (a Python traceback) on the
+CLI, unlike the effect-override validation which was already caught — now both routes and both
+CLI commands translate it into their entry point's normal error shape (422 / `UsageError`).
+
+The UI (whenever built) needs nothing the API doesn't already offer. UI stays a thin client per
+§3.4 — candidate stack decided when we get there, not now.
 
 Parity is deliberately *not* symmetric in one direction: `POST /render/photo`'s
 `mask_prompt` (segment-then-render in one call) has no CLI equivalent, because the CLI
@@ -358,6 +368,9 @@ Decisions already made, with reasoning — so they aren't accidentally relitigat
 | Prompt→mask chaining lives in `service.py`, not in the core library or the CLI | it's the one module allowed to know about *both* external services and the render pipeline; `cinemagraph/` still never learns HTTP exists, and `_external_service.py` still never learns renders exist |
 | CLI deliberately has no `--mask-prompt` | `cli.py` lives inside `src/cinemagraph/`, so giving it service access would require putting an HTTP client in the core package. The CLI keeps `--mask <file>`; chaining is an API-side capability. Revisit only if the CLI moves out of the package (which would be the moment a third entry point appears) |
 | `mask_prompt` errors the job rather than falling back to an unmasked render | silently animating the whole frame when segmentation is unavailable would produce something other than what was asked for — a wrong result is worse than a clear failure |
+| Closed the API/CLI parity gap: mask upload, per-effect overrides, `loop_duration`, `/mask-preview` all added to the API | these were feature-complete on the CLI and simply never carried over when the API was built; `validation.resolve_effect_kwargs` already had no CLI dependency (raises plain `ValueError`, not `click.UsageError`), so wiring it into `server/app.py` was direct, not a rewrite |
+| Fixed `loop_duration`+`also_gif` to raise a catchable error on the CLI, not just the API | found while adding the same check to the API routes: `make`/`from-photo` never caught `pipeline.py`'s `ValueError` for this specific conflict, so it surfaced as a raw traceback — an old bug, unrelated to the API work, fixed because building the API-side check made the gap obvious |
+| `_LOOP_DURATION_GIF_ERROR`'s message reworded to name the field, not the flag | it's now surfaced through both a `click.UsageError` and an HTTP 422 `detail`; "`--gif`"/"`--loop-duration`" reads correctly in one and confusingly in the other, so the message names `also_gif`/`loop_duration` instead, which reads fine either way |
 
 ### Placement quick-test for anything new
 

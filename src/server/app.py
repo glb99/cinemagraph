@@ -10,6 +10,13 @@ Renders run as FastAPI BackgroundTasks (no Celery/Redis -- this is a
 single-process, local, no-auth personal tool) and write into a job-scoped
 directory under CINEMAGRAPH_DATA_DIR.
 
+/render/video and /render/photo have full parity with the CLI's `make` and
+`from-photo` commands (mask upload, per-effect overrides via
+cinemagraph.validation, loop_duration, etc.) -- both entry points validate
+through the same functions and reject the same bad combinations, just
+translated into a click.UsageError on one side and an HTTP 422 on the other.
+/mask-preview is the API equivalent of `cinemagraph mask-preview`.
+
 Routes that talk to optional external services do so via
 _external_service.py's shared call_optional_service()/service_available()
 helpers, both of which degrade to a clean 503/false rather than erroring
@@ -41,7 +48,7 @@ from pathlib import Path
 from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, Response
 
-from cinemagraph import effects as effects_pkg, library, pipeline
+from cinemagraph import effects as effects_pkg, library, pipeline, validation
 
 from . import jobs, service
 from ._external_service import call_optional_service, service_available
@@ -86,23 +93,39 @@ async def list_effects():
 async def render_video(
     background_tasks: BackgroundTasks,
     input_file: UploadFile = File(...),
+    mask: UploadFile | None = File(None),
+    still_frame_index: int = Form(0),
+    blend_frames: int = Form(10),
+    auto_trim: bool = Form(True),
     mask_threshold: int = Form(25),
     feather: int = Form(21),
     apply_grade: bool = Form(True),
     grade_strength: float = Form(1.0),
     grain: float = Form(0.03),
     also_gif: bool = Form(False),
+    loop_duration: float | None = Form(None),
 ):
+    if loop_duration and also_gif:
+        raise HTTPException(422, pipeline._LOOP_DURATION_GIF_ERROR)
+
     job = jobs.create_job()
     job_dir = _job_dir(job.id)
     input_path = job_dir / (input_file.filename or "input")
     await _save_upload(input_file, input_path)
     output_path = job_dir / "output.mp4"
 
+    mask_path = None
+    if mask is not None:
+        mask_path = job_dir / (mask.filename or "mask.png")
+        await _save_upload(mask, mask_path)
+
     background_tasks.add_task(
         service.run_render_job, job.id, pipeline.save_cinemagraph_video, output_path,
-        input_path=str(input_path), mask_threshold=mask_threshold, feather=feather,
+        input_path=str(input_path), mask_path=str(mask_path) if mask_path else None,
+        still_frame_index=still_frame_index, blend_frames=blend_frames, auto_trim_loop=auto_trim,
+        mask_threshold=mask_threshold, feather=feather,
         apply_grade=apply_grade, grade_strength=grade_strength, grain=grain, also_gif=also_gif,
+        loop_duration=loop_duration,
     )
     return JobResponse(job_id=job.id)
 
@@ -112,28 +135,68 @@ async def render_photo(
     background_tasks: BackgroundTasks,
     input_file: UploadFile = File(...),
     effect: list[str] = Form(...),
+    mask: UploadFile | None = File(None),
     mask_prompt: str | None = Form(None),
     duration: float = Form(4.0),
     fps: int = Form(30),
     speed: float = Form(1.0),
+    rain_count: int | None = Form(None),
+    rain_opacity: float | None = Form(None),
+    snow_count: int | None = Form(None),
+    snow_opacity: float | None = Form(None),
+    dust_count: int | None = Form(None),
+    dust_opacity: float | None = Form(None),
+    ripple_amplitude: float | None = Form(None),
+    ripple_wavelength: float | None = Form(None),
+    sway_amplitude: float | None = Form(None),
+    sway_freq: float | None = Form(None),
+    wind_amplitude: float | None = Form(None),
+    wind_gustiness: float | None = Form(None),
+    flicker_strength: float | None = Form(None),
+    smoke_opacity: float | None = Form(None),
+    vapor_opacity: float | None = Form(None),
     feather: int = Form(21),
     apply_grade: bool = Form(True),
     grade_strength: float = Form(1.0),
     grain: float = Form(0.03),
     also_gif: bool = Form(False),
+    loop_duration: float | None = Form(None),
 ):
     """Render a photo cinemagraph.
 
-    Supplying mask_prompt (e.g. "clouds", "sun") segments the photo via the
-    machine-learning service first and renders with that mask, instead of
-    animating the whole frame. The job errors with a 503-style message if
-    that service isn't configured/reachable -- the render is not silently
-    run unmasked, since that would quietly produce something other than what
-    was asked for.
+    Supply at most one of `mask` (a hand-painted mask file, same convention
+    as the CLI's --mask) or `mask_prompt` (e.g. "clouds", "sun" -- segments
+    the photo via the machine-learning service first and renders with that
+    mask; the job errors with a 503-style message if that service isn't
+    configured/reachable, rather than silently rendering unmasked). Per-effect
+    overrides (rain_count, ripple_amplitude, etc.) mirror the CLI's per-effect
+    flags one-for-one and go through the same validation.resolve_effect_kwargs
+    check, so an override for an effect that wasn't requested is a 422 here
+    exactly as it's a click.UsageError on the CLI.
     """
     unknown = [e for e in effect if e not in effects_pkg.EFFECTS]
     if unknown:
         raise HTTPException(422, f"Unknown effect(s) {unknown}. Choose from: {', '.join(effects_pkg.EFFECTS)}")
+    if mask is not None and mask_prompt:
+        raise HTTPException(422, "Supply either `mask` or `mask_prompt`, not both.")
+    if loop_duration and also_gif:
+        raise HTTPException(422, pipeline._LOOP_DURATION_GIF_ERROR)
+
+    per_effect_options = {
+        "rain": {"count": rain_count, "opacity": rain_opacity},
+        "snow": {"count": snow_count, "opacity": snow_opacity},
+        "dust": {"count": dust_count, "opacity": dust_opacity},
+        "ripple": {"amplitude": ripple_amplitude, "wavelength": ripple_wavelength},
+        "sway": {"amplitude": sway_amplitude, "freq": sway_freq},
+        "wind": {"amplitude": wind_amplitude, "gustiness": wind_gustiness},
+        "flicker": {"strength": flicker_strength},
+        "smoke": {"opacity": smoke_opacity},
+        "vapor": {"opacity": vapor_opacity},
+    }
+    try:
+        effect_kwargs = validation.resolve_effect_kwargs(effect, per_effect_options)
+    except ValueError as e:
+        raise HTTPException(422, str(e))
 
     job = jobs.create_job()
     job_dir = _job_dir(job.id)
@@ -144,6 +207,7 @@ async def render_photo(
     render_kwargs = dict(
         effect=effect, duration=duration, fps=fps, speed=speed, feather=feather,
         apply_grade=apply_grade, grade_strength=grade_strength, grain=grain, also_gif=also_gif,
+        effect_kwargs=effect_kwargs, loop_duration=loop_duration,
     )
 
     if mask_prompt:
@@ -153,10 +217,40 @@ async def render_photo(
             **render_kwargs,
         )
     else:
+        mask_path = None
+        if mask is not None:
+            mask_path = job_dir / (mask.filename or "mask.png")
+            await _save_upload(mask, mask_path)
         background_tasks.add_task(
             service.run_render_job, job.id, pipeline.save_cinemagraph_from_photo, output_path,
-            photo_path=str(input_path), **render_kwargs,
+            photo_path=str(input_path), mask_path=str(mask_path) if mask_path else None,
+            **render_kwargs,
         )
+    return JobResponse(job_id=job.id)
+
+
+@app.post("/mask-preview", response_model=JobResponse)
+async def mask_preview(
+    background_tasks: BackgroundTasks,
+    input_file: UploadFile = File(...),
+    mask_threshold: int = Form(25),
+    feather: int = Form(21),
+):
+    """Preview the auto-detected motion mask for a video clip as a PNG,
+    without rendering the full cinemagraph -- the API equivalent of
+    `cinemagraph mask-preview`. Useful for checking/tuning mask_threshold
+    before committing to a full /render/video call.
+    """
+    job = jobs.create_job()
+    job_dir = _job_dir(job.id)
+    input_path = job_dir / (input_file.filename or "input")
+    await _save_upload(input_file, input_path)
+    output_path = job_dir / "mask.png"
+
+    background_tasks.add_task(
+        service.run_render_job, job.id, pipeline.save_mask_preview, output_path,
+        input_path=str(input_path), mask_threshold=mask_threshold, feather=feather,
+    )
     return JobResponse(job_id=job.id)
 
 

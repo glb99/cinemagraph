@@ -258,7 +258,8 @@ flowchart TB
     end
 
     CLI --> Validation
-    Validation["validation.py<br/>resolve_effect_kwargs()<br/>ValueError to UsageError<br/>(API doesn't use this yet -- parity gap)"]
+    API --> Validation
+    Validation["validation.py<br/>resolve_effect_kwargs()<br/>ValueError to UsageError (CLI) / HTTP 422 (API)"]
 
     CLI --> Save
     Service --> Save
@@ -327,12 +328,12 @@ Key design decisions this reflects:
 - **One effect registry, not five parallel structures.** Every effect (tone or particle) registers
   itself once in `base.py`; `animate_photo()` (inside `effects/`) resolves requested effects against
   that registry and always runs tone effects before particle effects, regardless of request order.
-- **`validation.py` exists but the API doesn't use it yet.** `cli.py`'s `from-photo` uses it to check
-  per-effect override flags belong to a requested effect, translating its plain `ValueError` into
-  `click.UsageError`. `server/app.py`'s own unknown-effect check is separate, hand-rolled logic that
-  happens to reach the same conclusion for the one case it covers (unknown effect name) — it doesn't
-  yet check per-effect overrides at all, since the API has no such flags. Real parity gap, not a
-  shared source of truth (see §5.5 of `docs/DESIGN.md`).
+- **`validation.py` is genuinely shared now.** Both `cli.py`'s `from-photo` and `server/app.py`'s
+  `POST /render/photo` call the same `resolve_effect_kwargs()`, translating its plain `ValueError`
+  into `click.UsageError` on one side and HTTP 422 on the other — one source of truth, two error
+  shapes, not two separate implementations that happen to agree. The unknown-effect check is still
+  separate, hand-rolled logic on both sides (it's a one-line membership test, not worth a shared
+  function for).
 - **The `machine-learning` service (CLIPSeg) is built and validated**, not just a reserved seam
   (named to match [Immich](https://github.com/immich-app/immich/tree/main/machine-learning)'s
   convention for this same shape of split). The core image never depends on `torch`/`transformers`;
