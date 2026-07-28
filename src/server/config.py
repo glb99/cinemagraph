@@ -9,12 +9,13 @@ it was captured at import time -- which is exactly what FastAPI's documented
 settings-via-dependency pattern exists to avoid.
 
 Scope note: this deliberately does NOT cover CINEMAGRAPH_LIBRARY_DIR, which
-`cinemagraph.library` reads itself. That module is core-tier, and core's
-dependencies are opencv/numpy/click/imageio -- `pydantic` only arrives with
-the `server` extra, so importing settings there would drag a server-tier
-dependency into the core library and break the tier discipline in
-docs/DESIGN.md sec 3.2. Two config mechanisms instead of three is the
-correct outcome here, not a half-finished migration.
+the `asset_library` package reads itself. That package has zero dependencies
+beyond the stdlib by design (it needs to work from the CLI alone, and from
+any future service, with no server extras installed) -- `pydantic` only
+arrives with the `server` extra, so importing settings there would drag a
+server-tier dependency into a package that's meant to stay usable standalone,
+breaking the tier discipline in docs/DESIGN.md sec 3.2. Two config mechanisms
+instead of three is the correct outcome here, not a half-finished migration.
 """
 from dataclasses import dataclass
 from functools import lru_cache

@@ -12,8 +12,8 @@ from server.config import Settings, get_settings
 
 @pytest.fixture
 def api_client(tmp_path, monkeypatch):
-    # CINEMAGRAPH_LIBRARY_DIR is read by cinemagraph.library directly (core-tier,
-    # not part of server.config.Settings -- see config.py's module docstring),
+    # CINEMAGRAPH_LIBRARY_DIR is read by the asset_library package directly
+    # (not part of server.config.Settings -- see config.py's module docstring),
     # so it's still overridden via the environment. data_dir goes through the
     # dependency_overrides below instead, which is why this no longer needs
     # importlib.reload(app_module): DATA_DIR used to be a module-level constant

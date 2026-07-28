@@ -118,16 +118,23 @@ different order depending on video vs. photo input:
   (see any existing module, e.g. `ripple.py`, for the pattern) — nothing else needs to change.
 - **`grade.py`** — shared by both pipelines. `lofi_grade` applies lifted blacks, warm shift,
   desaturation, vignette, and grain to a single frame; `apply_grade_to_frames` maps it over a list.
-- **`library.py`** — persistent reference library (source images/videos, generated outputs),
-  independent of the rendering pipeline. Content-addressed storage (SHA-256 hash = filename under
-  `<root>/objects/`, so re-adding identical bytes is a free no-op) with metadata in a small SQLite
-  index (`<root>/index.sqlite3`, stdlib `sqlite3`, no new dependency). Root defaults to
-  `~/.cinemagraph/library`, overridable via `CINEMAGRAPH_LIBRARY_DIR` — deliberately independent of
-  `CINEMAGRAPH_DATA_DIR` (the API's ephemeral per-job scratch space), since the library needs to work
-  from the CLI alone. Core-tier (not under `server/`) because both CLI and API need the same storage
-  logic — see `docs/DESIGN.md` sec 5.1 for the placement rationale. Not yet wired into
-  `make`/`from-photo` (they still take plain paths, not library references) — cataloging and
-  rendering are currently separate steps.
+
+### Asset library
+
+`src/asset_library/` — its own top-level package, separate from `cinemagraph`, because it's
+explicitly cross-cutting: cataloging source/generated files from *any* service in this project
+(cinemagraph renders, ACE-Step music, Stable Audio sound effects, CLIPSeg masks), not just the
+photo/video pipeline. It started as `cinemagraph/library.py` but moved out once music/sound-effect
+generation made it clear the library's job was never specific to cinemagraphs.
+
+Content-addressed storage (SHA-256 hash = filename under `<root>/objects/`, so re-adding identical
+bytes is a free no-op) with metadata in a small SQLite index (`<root>/index.sqlite3`, stdlib
+`sqlite3`, no new dependency). Root defaults to `~/.cinemagraph/library`, overridable via
+`CINEMAGRAPH_LIBRARY_DIR` — deliberately independent of `CINEMAGRAPH_DATA_DIR` (the API's ephemeral
+per-job scratch space), since the library needs to work from the CLI alone. Zero dependencies beyond
+the stdlib by design — see `docs/DESIGN.md` sec 5.1 for the placement rationale. Not yet wired into
+`make`/`from-photo` or the music/sound-effect generate routes (they still take/produce plain paths,
+not library references) — cataloging and rendering are currently separate steps.
 
 ### Pipeline order
 
@@ -198,10 +205,10 @@ special-casing the packaging config further.
   each optional service's url/display-name/env-var-name into one `OptionalService` (`config.py`'s
   own `music_service`/`semantic_mask_service`/`sound_effect_service` properties), since those three
   facts were previously repeated together at every call site. Deliberately does **not** cover
-  `CINEMAGRAPH_LIBRARY_DIR` — `cinemagraph.library` is core-tier, and importing `pydantic` there
-  would drag a server-tier dependency into a package whose only hard deps are opencv/numpy/click.
-  Two config mechanisms instead of one is the correct outcome given that tier discipline, not a
-  half-finished migration.
+  `CINEMAGRAPH_LIBRARY_DIR` — the `asset_library` package reads it directly, since that package is
+  meant to stay usable standalone (no server extras installed) and importing `pydantic` there would
+  break that. Two config mechanisms instead of one is the correct outcome given that tier discipline,
+  not a half-finished migration.
 - **`_external_service.py`** — shared client helper for calling *optional external services*:
   `service_available(env_var)` (boolean, for `/capabilities`) and `call_optional_service(env_var,
   method, path, ...)` (raises `HTTPException(503)` on missing/unreachable, safe to call from a
@@ -263,8 +270,8 @@ cleanly and simply reports the feature as unavailable (`503` from the `POST` rou
 failed startup.
 
 `POST /library`, `GET /library`, `GET /library/{id}`, `GET /library/{id}/file`,
-`DELETE /library/{id}` are thin routes over `cinemagraph.library` (uploads are staged to a temp file,
-hashed/copied into the library, then the temp file is discarded) — the exact same functions the
+`DELETE /library/{id}` are thin routes over the `asset_library` package (uploads are staged to a temp
+file, hashed/copied into the library, then the temp file is discarded) — the exact same functions the
 `cinemagraph library` CLI subcommands call.
 
 Run locally: `uv run uvicorn server.app:app --reload` (needs `uv sync --extra server` first).

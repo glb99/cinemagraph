@@ -13,7 +13,7 @@ optional-service URLs below) is a config.Settings instance, resolved once
 per process via Depends(get_settings) rather than read from os.environ at
 each call site -- see config.py's module docstring for why, and for the
 one thing it deliberately does NOT cover (CINEMAGRAPH_LIBRARY_DIR, which
-stays core-tier in cinemagraph.library).
+asset_library reads itself).
 
 /render/video and /render/photo have full parity with the CLI's `make` and
 `from-photo` commands (mask upload, per-effect overrides via
@@ -49,10 +49,11 @@ import tempfile
 from pathlib import Path
 from typing import Annotated
 
+import asset_library as library
 from fastapi import BackgroundTasks, Depends, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, Response
 
-from cinemagraph import effects as effects_pkg, library, pipeline, validation
+from cinemagraph import effects as effects_pkg, pipeline, validation
 
 from . import jobs, service, ui
 from ._external_service import call_optional_service, service_available

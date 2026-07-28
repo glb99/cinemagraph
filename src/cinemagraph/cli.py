@@ -7,7 +7,9 @@ Usage:
 """
 import click
 
-from . import effects as effects_pkg, library, pipeline, validation
+import asset_library as library
+
+from . import effects as effects_pkg, pipeline, validation
 
 
 @click.group()

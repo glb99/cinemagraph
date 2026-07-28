@@ -1,11 +1,16 @@
-"""Local reference library: persistent storage for source images/videos and
-generated outputs, so they can be looked up again later instead of being
+"""Local asset library: persistent storage for source images/videos and
+generated outputs (cinemagraphs, AI-generated music, sound effects, masks,
+whatever else), so they can be looked up again later instead of being
 forgotten the moment a render finishes.
 
-This is deliberately a core-tier module (not under server/): both the CLI and
-the API need the same storage/lookup logic, and unlike server/jobs.py's
-in-memory, restart-losable job tracking, a library is meant to survive
-restarts by design -- it's about the tool's own data, not one HTTP
+This is its own top-level package, not part of `cinemagraph` -- it started
+there, but its job is explicitly cross-cutting: every service in this project
+(the cinemagraph pipeline, ACE-Step music, Stable Audio sound effects,
+CLIPSeg masks) should be able to catalog its output the same way, and none of
+them should have to import a package named after one specific feature to do
+it. Both the CLI and the API need the same storage/lookup logic, and unlike
+server/jobs.py's in-memory, restart-losable job tracking, a library is meant
+to survive restarts by design -- it's about the tool's own data, not one HTTP
 request's bookkeeping. See docs/DESIGN.md sec 5.1 for the design rationale.
 
 Storage shape, chosen to match a well-worn pattern (see Hydrus/Immich):
@@ -18,7 +23,9 @@ Storage shape, chosen to match a well-worn pattern (see Hydrus/Immich):
 Library root defaults to ~/.cinemagraph/library, overridable via
 CINEMAGRAPH_LIBRARY_DIR -- independent of CINEMAGRAPH_DATA_DIR (the API's
 ephemeral per-job scratch space), since the library needs to be useful from
-the CLI alone, with no API involved.
+the CLI alone, with no API involved. The env var/default path still say
+"cinemagraph" because that's the product's own data home (~/.cinemagraph/),
+not a reference to the Python package of the same name.
 """
 from __future__ import annotations
 

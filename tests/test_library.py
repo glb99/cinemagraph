@@ -1,11 +1,11 @@
-"""Contract tests for the reference library: content-addressed storage +
+"""Contract tests for the asset library: content-addressed storage +
 SQLite metadata. library_root() reads CINEMAGRAPH_LIBRARY_DIR fresh on every
 call (unlike server/app.py's DATA_DIR, which is cached at import time), so
 monkeypatch.setenv per test is enough -- no importlib.reload dance needed.
 """
 import pytest
 
-from cinemagraph import library
+import asset_library as library
 
 
 @pytest.fixture(autouse=True)

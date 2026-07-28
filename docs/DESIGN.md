@@ -184,8 +184,11 @@ A persistent, queryable store of source material and outputs. Built per the desi
 direction below, informed by [Hydrus](https://hydrusnetwork.github.io/hydrus/faq.html)
 (SQLite + hash-addressed files + tags-not-folders) and Immich (hashing for dedup):
 
-- `src/cinemagraph/library.py` — **core-tier** module (both CLI and API need it; it's
-  about the tool's own data, unlike the API's ephemeral jobs).
+- `src/asset_library/` — its own **top-level package**, not part of `cinemagraph` (both
+  CLI and API need it; it's about the tool's own data, unlike the API's ephemeral jobs;
+  and its job is explicitly cross-cutting across every service in this project, not
+  specific to cinemagraph renders — see the 2026-07-28 decision-log entry below for why
+  it moved out of `cinemagraph/` after initially landing there).
 - Storage: files content-addressed by SHA-256 under `<root>/objects/` (free dedup —
   re-adding identical bytes is a no-op on disk, just a metadata touch), metadata in
   **SQLite via stdlib `sqlite3`** (`<root>/index.sqlite3`, zero new deps).
@@ -195,10 +198,11 @@ direction below, informed by [Hydrus](https://hydrusnetwork.github.io/hydrus/faq
   decided independent of `CINEMAGRAPH_DATA_DIR` (the API's ephemeral per-job scratch
   space) specifically so the library works from the CLI alone, no API involved.
 - Surfaces: `cinemagraph library add|list|show|rm`, `POST/GET/DELETE /library[/...]`
-  routes — both call the exact same `library.py` functions.
-- **Not yet done**: `make`/`from-photo` still take plain paths, not library references;
-  generated outputs don't yet auto-register. Natural follow-up, deliberately deferred
-  rather than bundled into the initial build.
+  routes — both call the exact same `asset_library` functions.
+- **Not yet done**: `make`/`from-photo` and the music/sound-effect generate routes still
+  take/produce plain paths, not library references; generated outputs don't yet
+  auto-register. Natural follow-up, deliberately deferred rather than bundled into the
+  initial build.
 
 ### 5.2 Image generation (backend genuinely undecided)
 
@@ -386,7 +390,7 @@ Decisions already made, with reasoning — so they aren't accidentally relitigat
 | Degradation checked per-request, never at startup | core must start and work with every optional satellite absent |
 | Jobs are in-memory and ephemeral | personal single-process tool; the *library* (§5.1), not jobs, is where persistence belongs |
 | `version = "0"`, no semver | it's an application, not a published library |
-| `library.py` is core-tier, not under `server/` | both CLI and API need the same storage/lookup logic; unlike jobs, it must survive restarts |
+| `asset_library` is its own top-level package, not under `server/` (nor, since 2026-07-28, under `cinemagraph/`) | both CLI and API need the same storage/lookup logic; unlike jobs, it must survive restarts |
 | `CINEMAGRAPH_LIBRARY_DIR` separate from `CINEMAGRAPH_DATA_DIR` | the library must work from the CLI alone; tying it to the API's job-scratch env var would make that impossible |
 | Golden-frame check is a script, not a pytest test | it's a regression check against *previous* output, not a correctness contract against a spec — different kind of thing, see §3.5 |
 | Vendoring ACE-Step's/any actively-developed upstream's source: rejected | copying code you don't maintain means owning its update churn forever; referencing its published image gets the same "one `docker compose up`" outcome for free |
@@ -409,8 +413,9 @@ Decisions already made, with reasoning — so they aren't accidentally relitigat
 | First UI slice: one HTML file (`server/ui.py`'s `INDEX_HTML`), no framework, no build step, no static-file mount | right-sized for a thin client wrapping an already-complete API with no other frontend in the repo; a Python string sidesteps the exact packaging trap `api/`→`src/api/` already caught (non-`.py` assets silently dropped from a real build without explicit `package-data` config) |
 | UI scope limited to photo rendering for this first slice | proving the pattern (feature-gate on `/capabilities`, drive the existing job-polling contract) matters more than covering every route at once; video/music/sound-effect UI are separate, equally-sized follow-ups, not a reason to delay shipping something usable |
 | Adopted `pydantic-settings` + `Depends(get_settings)` for `server/`'s config, replacing three ad-hoc `os.environ` patterns | `DATA_DIR` was a module-level constant frozen at import — concretely forcing `tests/test_api_smoke.py` to `importlib.reload(server.app)` on every test just to change `CINEMAGRAPH_DATA_DIR`, which `dependency_overrides[get_settings]` (FastAPI's own documented pattern) eliminates outright, since it wins over the `@lru_cache`. `_external_service.py`'s per-call `os.environ.get(env_var)` lookups by magic string became one `Settings` instance with typed fields |
-| `config.py` deliberately does not cover `CINEMAGRAPH_LIBRARY_DIR` | `cinemagraph.library` is core-tier (opencv/numpy/click, no `pydantic`); importing `server.config` there would smuggle a server-tier dependency into core, the exact thing the tier discipline in §3.2 exists to prevent. Two config mechanisms (env-direct for core, `Settings` for server) is correct here, not an inconsistency to "finish" |
+| `config.py` deliberately does not cover `CINEMAGRAPH_LIBRARY_DIR` | `asset_library` has zero deps beyond the stdlib by design; importing `server.config` there would smuggle a server-tier (`pydantic`) dependency into a package meant to stay usable standalone, the exact thing the tier discipline in §3.2 exists to prevent. Two config mechanisms (env-direct for the library, `Settings` for server) is correct here, not an inconsistency to "finish" |
 | `OptionalService` bundles url/name/env-var per service | those three facts (e.g. ACE-Step's URL, "Music generation" for error text, `"ACESTEP_URL"` for the "not configured" message) were previously passed together at every one of `run_music_job`'s three `call_optional_service` call sites; one dataclass ends the repetition without adding a class hierarchy nothing else needs |
+| Moved `library.py` out of `cinemagraph/` into its own top-level package `src/asset_library/` (2026-07-28) | the library's job was never specific to cinemagraphs — it's meant to catalog output from every service in this project (music, sound effects, masks, not just photo/video renders). Keeping it nested inside a package named after one specific feature was a naming mismatch that would only get more awkward as more services started depending on it. `CINEMAGRAPH_LIBRARY_DIR` and the `~/.cinemagraph/library` default path were kept as-is — those name the *product*'s data home, not the Python package, matching the sibling `CINEMAGRAPH_DATA_DIR` convention which is equally not tied to any one package name |
 | `docker-compose.override.yml` for local dev (bind-mount `./src`, `uvicorn --reload`) | Compose auto-merges override files with no extra flags, so this is zero-friction — plain `docker compose up` gets hot-reload for free. Works because `uv sync` installs the project editable by default (confirmed via the venv's own `.pth` file); the image's install already resolves imports through `/app/src`, so a live bind mount over that exact path is sufficient. Verified for real: edited `server/ui.py` on the host while the container was running, confirmed the change appeared over `GET /` within seconds with no rebuild, then reverted and confirmed the reverse. Scoped to `core` only — `machine-learning`/`sound-effects` are edited far less often and carry slow-to-rebuild dependencies |
 | `write_video`'s `.mp4` path switched from `cv2.VideoWriter` to `imageio`'s ffmpeg plugin (`libx264`/`yuv420p`) | `cv2.VideoWriter`'s H.264 encoding needs an OpenH264 DLL most `opencv-python` wheels don't ship; it silently fell back to `mp4v` (MPEG-4 Part 2) — a valid file `cv2.VideoCapture` reads back fine (why the existing round-trip tests never caught it), but browsers cannot decode for `<video>` at all, showing as a "0-second" clip in the web UI. Confirmed directly: `cv2.VideoWriter_fourcc(*"avc1"/"H264"/"x264")` all failed to open on this machine; only `"mp4v"` worked. `imageio-ffmpeg`'s bundled binary has `libx264` built in (`--enable-libx264` in its own reported build config) regardless of the host OpenCV's codec support, so this doesn't depend on what's installed on the machine running it. Verified against a real browser `<video>` element's `.duration`/`.videoWidth` properties (the exact properties that read as broken before), not just file existence |
 | New regression test checks the actual codec tag, not just "file is readable" | `tests/test_pipeline_smoke.py::test_save_cinemagraph_video_uses_browser_compatible_codec` reads back the fourcc via `cv2.VideoCapture` and asserts it's one of `{"avc1", "h264", "x264"}` — accepting all three since different OpenCV backends/versions report the same H.264 codec differently (confirmed empirically: this exact build reports `"h264"` on read-back, not the `"avc1"` ffprobe shows at the container level). Sanity-checked both directions: temporarily reverting to `codec="mpeg4"` fails the test; the real fix passes it |
