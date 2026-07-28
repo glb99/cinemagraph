@@ -8,7 +8,12 @@ docs/DESIGN.md's decision log.
 
 Renders run as FastAPI BackgroundTasks (no Celery/Redis -- this is a
 single-process, local, no-auth personal tool) and write into a job-scoped
-directory under CINEMAGRAPH_DATA_DIR.
+directory under CINEMAGRAPH_DATA_DIR. Config (that var, plus the three
+optional-service URLs below) is a config.Settings instance, resolved once
+per process via Depends(get_settings) rather than read from os.environ at
+each call site -- see config.py's module docstring for why, and for the
+one thing it deliberately does NOT cover (CINEMAGRAPH_LIBRARY_DIR, which
+stays core-tier in cinemagraph.library).
 
 /render/video and /render/photo have full parity with the CLI's `make` and
 `from-photo` commands (mask upload, per-effect overrides via
@@ -39,28 +44,28 @@ every request:
   it still runs as a background job since generation genuinely takes tens of
   seconds to minutes and the caller shouldn't hold the connection open.
 """
-import os
 import shutil
 import tempfile
 from pathlib import Path
+from typing import Annotated
 
-
-from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import BackgroundTasks, Depends, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, Response
 
 from cinemagraph import effects as effects_pkg, library, pipeline, validation
 
 from . import jobs, service, ui
 from ._external_service import call_optional_service, service_available
+from .config import Settings, get_settings
 from .schemas import AssetResponse, CapabilitiesResponse, JobResponse, JobStatusResponse
 
-DATA_DIR = Path(os.environ.get("CINEMAGRAPH_DATA_DIR", "./data")).resolve()
+SettingsDep = Annotated[Settings, Depends(get_settings)]
 
 app = FastAPI(title="cinemagraph-tool API")
 
 
-def _job_dir(job_id: str) -> Path:
-    job_dir = DATA_DIR / job_id
+def _job_dir(settings: Settings, job_id: str) -> Path:
+    job_dir = settings.data_dir / job_id
     job_dir.mkdir(parents=True, exist_ok=True)
     return job_dir
 
@@ -85,11 +90,11 @@ async def health():
 
 
 @app.get("/capabilities", response_model=CapabilitiesResponse)
-async def capabilities():
+async def capabilities(settings: SettingsDep):
     return CapabilitiesResponse(
-        semantic_mask=await service_available("ML_SERVICE_URL"),
-        music_generation=await service_available("ACESTEP_URL"),
-        sound_effect_generation=await service_available("SOUND_EFFECTS_URL"),
+        semantic_mask=await service_available(settings.semantic_mask_service),
+        music_generation=await service_available(settings.music_service),
+        sound_effect_generation=await service_available(settings.sound_effect_service),
     )
 
 
@@ -101,6 +106,7 @@ async def list_effects():
 @app.post("/render/video", response_model=JobResponse)
 async def render_video(
     background_tasks: BackgroundTasks,
+    settings: SettingsDep,
     input_file: UploadFile = File(...),
     mask: UploadFile | None = File(None),
     still_frame_index: int = Form(0),
@@ -118,7 +124,7 @@ async def render_video(
         raise HTTPException(422, pipeline._LOOP_DURATION_GIF_ERROR)
 
     job = jobs.create_job()
-    job_dir = _job_dir(job.id)
+    job_dir = _job_dir(settings, job.id)
     input_path = job_dir / (input_file.filename or "input")
     await _save_upload(input_file, input_path)
     output_path = job_dir / "output.mp4"
@@ -142,6 +148,7 @@ async def render_video(
 @app.post("/render/photo", response_model=JobResponse)
 async def render_photo(
     background_tasks: BackgroundTasks,
+    settings: SettingsDep,
     input_file: UploadFile = File(...),
     effect: list[str] = Form(...),
     mask: UploadFile | None = File(None),
@@ -208,7 +215,7 @@ async def render_photo(
         raise HTTPException(422, str(e))
 
     job = jobs.create_job()
-    job_dir = _job_dir(job.id)
+    job_dir = _job_dir(settings, job.id)
     input_path = job_dir / (input_file.filename or "input")
     await _save_upload(input_file, input_path)
     output_path = job_dir / "output.mp4"
@@ -222,8 +229,8 @@ async def render_photo(
     if mask_prompt:
         background_tasks.add_task(
             service.run_photo_semantic_mask_job, job.id, output_path,
-            photo_path=input_path, mask_path=job_dir / "mask.png", mask_prompt=mask_prompt,
-            **render_kwargs,
+            settings=settings, photo_path=input_path, mask_path=job_dir / "mask.png",
+            mask_prompt=mask_prompt, **render_kwargs,
         )
     else:
         mask_path = None
@@ -241,6 +248,7 @@ async def render_photo(
 @app.post("/mask-preview", response_model=JobResponse)
 async def mask_preview(
     background_tasks: BackgroundTasks,
+    settings: SettingsDep,
     input_file: UploadFile = File(...),
     mask_threshold: int = Form(25),
     feather: int = Form(21),
@@ -251,7 +259,7 @@ async def mask_preview(
     before committing to a full /render/video call.
     """
     job = jobs.create_job()
-    job_dir = _job_dir(job.id)
+    job_dir = _job_dir(settings, job.id)
     input_path = job_dir / (input_file.filename or "input")
     await _save_upload(input_file, input_path)
     output_path = job_dir / "mask.png"
@@ -341,14 +349,14 @@ async def library_remove(asset_id: str):
 
 
 @app.post("/mask/semantic")
-async def semantic_mask(image: UploadFile = File(...), prompt: str = Form(...)):
+async def semantic_mask(settings: SettingsDep, image: UploadFile = File(...), prompt: str = Form(...)):
     """Proxies to the machine-learning (CLIPSeg) service. Returns a clean 503,
     not a 500, whenever that service isn't configured or isn't reachable --
     see machine-learning/README.md for the /segment contract this proxies.
     """
     files = {"image": (image.filename, await image.read(), image.content_type)}
     resp = await call_optional_service(
-        "ML_SERVICE_URL", "POST", "/segment", service_name="Semantic masking",
+        settings.semantic_mask_service, "POST", "/segment",
         data={"prompt": prompt}, files=files, timeout=60.0,
     )
     return Response(content=resp.content, media_type="image/png")
@@ -357,6 +365,7 @@ async def semantic_mask(image: UploadFile = File(...), prompt: str = Form(...)):
 @app.post("/generate/music", response_model=JobResponse)
 async def generate_music(
     background_tasks: BackgroundTasks,
+    settings: SettingsDep,
     prompt: str = Form(""),
     lyrics: str = Form(""),
     duration: float = Form(30.0),
@@ -368,12 +377,12 @@ async def generate_music(
     already work for this without any changes.
     """
     job = jobs.create_job()
-    job_dir = _job_dir(job.id)
+    job_dir = _job_dir(settings, job.id)
     output_path = job_dir / "output.mp3"
 
     background_tasks.add_task(
         service.run_music_job, job.id, output_path,
-        prompt=prompt, lyrics=lyrics, duration=duration, thinking=thinking,
+        settings=settings, prompt=prompt, lyrics=lyrics, duration=duration, thinking=thinking,
     )
     return JobResponse(job_id=job.id)
 
@@ -381,6 +390,7 @@ async def generate_music(
 @app.post("/generate/sound-effect", response_model=JobResponse)
 async def generate_sound_effect(
     background_tasks: BackgroundTasks,
+    settings: SettingsDep,
     prompt: str = Form(...),
     duration: float = Form(10.0),
 ):
@@ -390,10 +400,11 @@ async def generate_sound_effect(
     block the HTTP connection.
     """
     job = jobs.create_job()
-    job_dir = _job_dir(job.id)
+    job_dir = _job_dir(settings, job.id)
     output_path = job_dir / "output.wav"
 
     background_tasks.add_task(
-        service.run_sound_effect_job, job.id, output_path, prompt=prompt, duration=duration,
+        service.run_sound_effect_job, job.id, output_path,
+        settings=settings, prompt=prompt, duration=duration,
     )
     return JobResponse(job_id=job.id)

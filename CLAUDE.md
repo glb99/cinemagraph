@@ -174,6 +174,21 @@ special-casing the packaging config further.
   now (upload, effects, optional mask/`mask_prompt`, submit, poll, preview) — feature-gates
   `mask_prompt` on `GET /capabilities`'s `semantic_mask` flag, same signal every other optional
   service consumer uses. Video/music/sound-effect UI not started.
+- **`config.py`** — `Settings(BaseSettings)` (from `pydantic-settings`) plus `get_settings()`
+  (`@lru_cache`, injected into routes via `Annotated[Settings, Depends(get_settings)]`), replacing
+  three inconsistent ways this package used to read `os.environ` (a module-level constant frozen
+  at import — `DATA_DIR`, a helper re-reading on every call, and per-call lookups by magic string
+  in `_external_service.py`). The `DATA_DIR`-at-import problem was concrete, not theoretical:
+  `tests/test_api_smoke.py` had to `importlib.reload(server.app)` on every test just to change
+  `CINEMAGRAPH_DATA_DIR`, which the `dependency_overrides[get_settings]` pattern (FastAPI's own
+  documented approach) makes unnecessary — `dependency_overrides` wins over the cache. Also bundles
+  each optional service's url/display-name/env-var-name into one `OptionalService` (`config.py`'s
+  own `music_service`/`semantic_mask_service`/`sound_effect_service` properties), since those three
+  facts were previously repeated together at every call site. Deliberately does **not** cover
+  `CINEMAGRAPH_LIBRARY_DIR` — `cinemagraph.library` is core-tier, and importing `pydantic` there
+  would drag a server-tier dependency into a package whose only hard deps are opencv/numpy/click.
+  Two config mechanisms instead of one is the correct outcome given that tier discipline, not a
+  half-finished migration.
 - **`_external_service.py`** — shared client helper for calling *optional external services*:
   `service_available(env_var)` (boolean, for `/capabilities`) and `call_optional_service(env_var,
   method, path, ...)` (raises `HTTPException(503)` on missing/unreachable, safe to call from a

@@ -3,21 +3,28 @@ BackgroundTasks synchronously as part of the request/response cycle, so by
 the time a /render/* call returns, the job has already finished -- no
 polling needed here, unlike a real deployment.
 """
-import importlib
-
 import pytest
 from fastapi.testclient import TestClient
+
+from server.app import app
+from server.config import Settings, get_settings
 
 
 @pytest.fixture
 def api_client(tmp_path, monkeypatch):
-    monkeypatch.setenv("CINEMAGRAPH_DATA_DIR", str(tmp_path / "data"))
+    # CINEMAGRAPH_LIBRARY_DIR is read by cinemagraph.library directly (core-tier,
+    # not part of server.config.Settings -- see config.py's module docstring),
+    # so it's still overridden via the environment. data_dir goes through the
+    # dependency_overrides below instead, which is why this no longer needs
+    # importlib.reload(app_module): DATA_DIR used to be a module-level constant
+    # frozen at import time, so changing the env var after import had no effect
+    # without reloading the whole module. Settings is resolved per-request via
+    # Depends(get_settings), and dependency_overrides beats the @lru_cache.
     monkeypatch.setenv("CINEMAGRAPH_LIBRARY_DIR", str(tmp_path / "library"))
-    import server.app as app_module
-
-    importlib.reload(app_module)  # re-read CINEMAGRAPH_DATA_DIR for this test's tmp_path
-    with TestClient(app_module.app) as client:
+    app.dependency_overrides[get_settings] = lambda: Settings(data_dir=tmp_path / "data")
+    with TestClient(app) as client:
         yield client
+    app.dependency_overrides.clear()
 
 
 def test_health(api_client):

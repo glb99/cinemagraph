@@ -21,6 +21,27 @@ threadpool, but an *async* one on the event loop. So any coroutine below
 that also does blocking CPU work (rendering) must push that work off the
 loop with asyncio.to_thread, or it stalls every other request for the
 duration of the render.
+
+The decision rule that follows from that, for any job added here: stay
+plain `def` unless the job has a genuine await-worthy operation (real
+network I/O). Plain `def` gets Starlette's threadpool dispatch
+unconditionally -- there's no way to write it wrong. `async def` with
+nothing left to genuinely await is strictly worse: same runtime outcome if
+done correctly, but now depends on remembering to wrap every blocking call
+in asyncio.to_thread, with no safety net if that's missed -- it would
+compile, run fine in casual testing, and silently freeze the whole server
+the first time the gap is actually hit. run_render_job (no external calls)
+is sync; the other three (each makes a real HTTP call) are async. If a
+future change ever removes a job's last genuine await, it should collapse
+back to plain def rather than keep an async signature that no longer
+describes anything real about it.
+
+Config arrives as an explicit `settings` argument rather than being read
+here. These run as BackgroundTasks, outside the request/response cycle, so
+FastAPI's Depends() cannot inject into them -- the route resolves settings
+(where injection *does* work) and passes them through. That keeps this
+module free of any environment lookups, which is also why its tests can
+construct a Settings() directly instead of monkeypatching os.environ.
 """
 import asyncio
 import json
@@ -32,6 +53,7 @@ from cinemagraph import pipeline
 
 from . import jobs
 from ._external_service import call_optional_service
+from .config import Settings
 
 MUSIC_POLL_INTERVAL_SECONDS = 2.0
 MUSIC_POLL_MAX_ATTEMPTS = 150  # ~5 minutes total
@@ -51,6 +73,7 @@ async def run_photo_semantic_mask_job(
     job_id: str,
     output_path: Path,
     *,
+    settings: Settings,
     photo_path: Path,
     mask_path: Path,
     mask_prompt: str,
@@ -71,7 +94,7 @@ async def run_photo_semantic_mask_job(
     try:
         image_bytes = photo_path.read_bytes()
         resp = await call_optional_service(
-            "ML_SERVICE_URL", "POST", "/segment", service_name="Semantic masking",
+            settings.semantic_mask_service, "POST", "/segment",
             data={"prompt": mask_prompt},
             files={"image": (photo_path.name, image_bytes, "application/octet-stream")},
             timeout=60.0,
@@ -93,7 +116,14 @@ async def run_photo_semantic_mask_job(
 
 
 async def run_music_job(
-    job_id: str, output_path: Path, *, prompt: str, lyrics: str, duration: float, thinking: bool
+    job_id: str,
+    output_path: Path,
+    *,
+    settings: Settings,
+    prompt: str,
+    lyrics: str,
+    duration: float,
+    thinking: bool,
 ) -> None:
     """Drives ACE-Step's own job-queue API to completion: create a task,
     poll until it reports success/failure, download the resulting audio.
@@ -101,9 +131,10 @@ async def run_music_job(
     see docs/DESIGN.md / the acestep-docs skill's API.md for the full contract.
     """
     jobs.mark_running(job_id)
+    service = settings.music_service
     try:
         create_resp = await call_optional_service(
-            "ACESTEP_URL", "POST", "/release_task", service_name="Music generation",
+            service, "POST", "/release_task",
             json={"prompt": prompt, "lyrics": lyrics, "audio_duration": duration, "thinking": thinking},
         )
         task_id = create_resp.json()["data"]["task_id"]
@@ -112,7 +143,7 @@ async def run_music_job(
         for _ in range(MUSIC_POLL_MAX_ATTEMPTS):
             await asyncio.sleep(MUSIC_POLL_INTERVAL_SECONDS)
             query_resp = await call_optional_service(
-                "ACESTEP_URL", "POST", "/query_result", service_name="Music generation",
+                service, "POST", "/query_result",
                 json={"task_id_list": [task_id]},
             )
             entry = query_resp.json()["data"][0]
@@ -124,9 +155,7 @@ async def run_music_job(
         if result is None:
             raise RuntimeError(f"ACE-Step generation timed out after {MUSIC_POLL_MAX_ATTEMPTS} polls.")
 
-        audio_resp = await call_optional_service(
-            "ACESTEP_URL", "GET", result["file"], service_name="Music generation", timeout=60.0,
-        )
+        audio_resp = await call_optional_service(service, "GET", result["file"], timeout=60.0)
         output_path.write_bytes(audio_resp.content)
         jobs.mark_done(job_id, output_path)
     except HTTPException as e:
@@ -135,14 +164,16 @@ async def run_music_job(
         jobs.mark_error(job_id, str(e))
 
 
-async def run_sound_effect_job(job_id: str, output_path: Path, *, prompt: str, duration: float) -> None:
+async def run_sound_effect_job(
+    job_id: str, output_path: Path, *, settings: Settings, prompt: str, duration: float
+) -> None:
     """Unlike ACE-Step's queue, sound-effects/ answers in one synchronous
     call -- still a background job here because generation takes real time.
     """
     jobs.mark_running(job_id)
     try:
         resp = await call_optional_service(
-            "SOUND_EFFECTS_URL", "POST", "/generate", service_name="Sound effect generation",
+            settings.sound_effect_service, "POST", "/generate",
             json={"prompt": prompt, "duration": duration}, timeout=300.0,
         )
         output_path.write_bytes(resp.content)
