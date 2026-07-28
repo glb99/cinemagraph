@@ -139,14 +139,19 @@ uv run python scripts/golden_check.py --bless     # (re)generate the blessed fra
 
 See `docs/DESIGN.md` for why this is a separate script rather than a pytest test.
 
-## API
+## API and web UI
 
-A minimal local HTTP API (FastAPI) wraps the same rendering code, for a future UI or scripted use
-without shelling out:
+A minimal local HTTP API (FastAPI) wraps the same rendering code, for a UI or scripted use without
+shelling out. A first, self-contained web UI now ships too — `GET /` serves a single HTML page
+(inline CSS/JS, no build step) covering photo rendering: upload, pick effects, optional mask
+upload or a semantic mask_prompt (shown only when the machine-learning service is running), submit,
+watch it render, preview the result. Video rendering, music, and sound-effect generation don't
+have a UI yet:
 
 ```bash
 uv sync --extra server
 uv run uvicorn server.app:app --reload
+# then open http://127.0.0.1:8000/ in a browser
 ```
 
 `POST /render/video` / `POST /render/photo` accept a multipart file upload and return a `job_id`

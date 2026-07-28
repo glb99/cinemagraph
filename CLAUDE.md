@@ -167,6 +167,13 @@ special-casing the packaging config further.
   single-process, local, no-auth personal tool; job state doesn't survive a restart, which is an
   accepted tradeoff, not an oversight.
 - **`schemas.py`** — pydantic request/response models.
+- **`ui.py`** — `INDEX_HTML`, a single self-contained page (inline CSS/JS, no build step, no
+  static-file mount) served by `GET /`. Deliberately a plain Python string, not a static asset:
+  non-`.py` files need explicit `package-data` config to survive a real build, exactly the class
+  of bug the `api/`→`src/api/` move above already caught once. Covers photo rendering only for
+  now (upload, effects, optional mask/`mask_prompt`, submit, poll, preview) — feature-gates
+  `mask_prompt` on `GET /capabilities`'s `semantic_mask` flag, same signal every other optional
+  service consumer uses. Video/music/sound-effect UI not started.
 - **`_external_service.py`** — shared client helper for calling *optional external services*:
   `service_available(env_var)` (boolean, for `/capabilities`) and `call_optional_service(env_var,
   method, path, ...)` (raises `HTTPException(503)` on missing/unreachable, safe to call from a

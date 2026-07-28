@@ -26,6 +26,14 @@ def test_health(api_client):
     assert resp.json() == {"status": "ok"}
 
 
+def test_index_serves_the_web_ui(api_client):
+    resp = api_client.get("/")
+    assert resp.status_code == 200
+    assert resp.headers["content-type"].startswith("text/html")
+    assert "cinemagraph-tool" in resp.text
+    assert 'id="form"' in resp.text
+
+
 def test_capabilities_without_optional_services_configured(api_client):
     resp = api_client.get("/capabilities")
     assert resp.status_code == 200

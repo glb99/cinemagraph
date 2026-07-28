@@ -46,11 +46,11 @@ from pathlib import Path
 
 
 from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, UploadFile
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, Response
 
 from cinemagraph import effects as effects_pkg, library, pipeline, validation
 
-from . import jobs, service
+from . import jobs, service, ui
 from ._external_service import call_optional_service, service_available
 from .schemas import AssetResponse, CapabilitiesResponse, JobResponse, JobStatusResponse
 
@@ -68,6 +68,15 @@ def _job_dir(job_id: str) -> Path:
 async def _save_upload(upload: UploadFile, dest: Path) -> None:
     with dest.open("wb") as f:
         shutil.copyfileobj(upload.file, f)
+
+
+@app.get("/", response_class=HTMLResponse)
+async def index():
+    """The thin web UI (photo rendering only for now -- see ui.py). Not a
+    packaging concern like static files would be: this is plain Python
+    source, included in every build the same as any other module.
+    """
+    return ui.INDEX_HTML
 
 
 @app.get("/health")

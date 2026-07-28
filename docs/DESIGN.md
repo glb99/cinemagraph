@@ -148,10 +148,11 @@ that may be deleted next week is waste.
 cinemagraph-tool/
 ├── src/
 │   ├── cinemagraph/           # the stable core: pipeline, effects registry, mask, grade, loop, io, library
-│   └── server/                # FastAPI door: app.py (routes) + service.py (workflows); extra `server`;
-│                               #   sibling package to cinemagraph, same distribution, no own pyproject
+│   └── server/                # FastAPI door: app.py (routes) + service.py (workflows) + ui.py
+│                               #   (GET / thin web UI, photo only); extra `server`; sibling
+│                               #   package to cinemagraph, same distribution, no own pyproject
 ├── machine-learning/          # isolated service: CLIPSeg semantic masking (validated)
-├── tests/                     # 51 tests: contracts, invariants, smoke (core + API + library)
+├── tests/                     # 59 tests: contracts, invariants, smoke (core + API + library)
 ├── scripts/golden_check.py    # pixel-regression check, separate from pytest (see sec 6)
 ├── docs/experiments/          # lab notebook, one file per experiment
 ├── Dockerfile + docker-compose.yml   # core image (never torch); ML service gated off
@@ -234,7 +235,7 @@ depth), true advection for smoke/vapor (translation, not in-place brightness mod
 flow direction derived from mask shape. Pure `effects/` work; the registry means each is
 an isolated change.
 
-### 5.5 API/CLI parity — DONE, then a thin web UI
+### 5.5 API/CLI parity — DONE; thin web UI — STARTED (photo rendering only)
 
 `POST /render/video` and `POST /render/photo` now accept everything `make`/`from-photo` do: mask
 upload (in addition to the API-only `mask_prompt` semantic path), per-effect overrides validated
@@ -248,8 +249,32 @@ Verified against a live server, not just TestClient: uploaded mask + `dust_count
 CLI, unlike the effect-override validation which was already caught — now both routes and both
 CLI commands translate it into their entry point's normal error shape (422 / `UsageError`).
 
-The UI (whenever built) needs nothing the API doesn't already offer. UI stays a thin client per
-§3.4 — candidate stack decided when we get there, not now.
+A first version of the UI now exists: `GET /` serves a single self-contained HTML page
+(`server/ui.py`'s `INDEX_HTML` — inline CSS/JS, no build step, no framework) covering photo
+rendering only — upload, effect checkboxes (populated from `GET /effects`), optional mask upload
+or `mask_prompt` (the latter only shown when `GET /capabilities` reports `semantic_mask: true`,
+the same signal every other optional-service consumer already uses), duration/fps/speed, submit,
+poll `GET /jobs/{id}`, preview via `GET /jobs/{id}/file`. Video rendering, music generation, and
+sound-effect generation have no UI yet — natural next slices, not started.
+
+**Why a plain string in `ui.py`, not static files.** Non-`.py` assets need explicit
+`package-data`/`MANIFEST.in` configuration to survive a real (non-editable) build — exactly the
+class of bug the `api/`→`src/api/` move (§7 decision log) already caught once for this project.
+A Python string constant sidesteps that risk entirely: it's ordinary source, packaged the same as
+every other module, no separate config to get right or forget.
+
+Verified beyond a TestClient smoke test: booted a real `uvicorn` server, loaded the page in an
+actual browser, and drove the page's own JavaScript (not a bypass) — constructed an in-page
+`File` object via `DataTransfer` (the standard technique for testing file inputs without a native
+OS picker), checked an effect, submitted the real form, and confirmed the real polling loop
+updated the DOM to `done` with a working `<video>` preview whose URL served real, downloadable
+MP4 bytes. Also confirmed the client-side mask/mask_prompt mutual-exclusivity check (mirroring
+the API's own 422 rule) fires correctly. See `docs/experiments/`.
+
+Stack decision made here, worth recording: no framework, no build tooling, one HTML file — right
+sized for "thin client wrapping an already-complete API" on a personal tool with no other
+frontend precedent in the repo yet. Revisit only if the UI's own complexity outgrows a single
+page (multiple views, client-side state worth managing) — not preemptively.
 
 Parity is deliberately *not* symmetric in one direction: `POST /render/photo`'s
 `mask_prompt` (segment-then-render in one call) has no CLI equivalent, because the CLI
@@ -371,6 +396,8 @@ Decisions already made, with reasoning — so they aren't accidentally relitigat
 | Closed the API/CLI parity gap: mask upload, per-effect overrides, `loop_duration`, `/mask-preview` all added to the API | these were feature-complete on the CLI and simply never carried over when the API was built; `validation.resolve_effect_kwargs` already had no CLI dependency (raises plain `ValueError`, not `click.UsageError`), so wiring it into `server/app.py` was direct, not a rewrite |
 | Fixed `loop_duration`+`also_gif` to raise a catchable error on the CLI, not just the API | found while adding the same check to the API routes: `make`/`from-photo` never caught `pipeline.py`'s `ValueError` for this specific conflict, so it surfaced as a raw traceback — an old bug, unrelated to the API work, fixed because building the API-side check made the gap obvious |
 | `_LOOP_DURATION_GIF_ERROR`'s message reworded to name the field, not the flag | it's now surfaced through both a `click.UsageError` and an HTTP 422 `detail`; "`--gif`"/"`--loop-duration`" reads correctly in one and confusingly in the other, so the message names `also_gif`/`loop_duration` instead, which reads fine either way |
+| First UI slice: one HTML file (`server/ui.py`'s `INDEX_HTML`), no framework, no build step, no static-file mount | right-sized for a thin client wrapping an already-complete API with no other frontend in the repo; a Python string sidesteps the exact packaging trap `api/`→`src/api/` already caught (non-`.py` assets silently dropped from a real build without explicit `package-data` config) |
+| UI scope limited to photo rendering for this first slice | proving the pattern (feature-gate on `/capabilities`, drive the existing job-polling contract) matters more than covering every route at once; video/music/sound-effect UI are separate, equally-sized follow-ups, not a reason to delay shipping something usable |
 
 ### Placement quick-test for anything new
 
