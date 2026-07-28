@@ -79,9 +79,19 @@ functions' actual consumers today are `scripts/golden_check.py` and `tests/test_
 which need frames rather than files. Each `render_*` stitches together the same set of stages in
 different order depending on video vs. photo input:
 
-- **`io_utils.py`** — reads/writes video (`cv2.VideoCapture`/`VideoWriter`) and GIFs (`imageio`).
-  Whole clips are read into memory as a `list[np.ndarray]` — fine for the few-second clips this tool
-  targets, and keeps every other module operating on plain frame lists rather than streams.
+- **`io_utils.py`** — reads video via `cv2.VideoCapture`; writes `.mp4` via `imageio`'s ffmpeg plugin
+  (`libx264`/`yuv420p`), not `cv2.VideoWriter`, and writes GIFs via `imageio` too. `cv2.VideoWriter`'s
+  H.264 encoding depends on an OpenH264 DLL most `opencv-python` wheels don't ship (patent/licensing
+  reasons), so it silently falls back to `mp4v` (MPEG-4 Part 2) -- a valid, `cv2`-readable video that
+  browsers categorically cannot decode for `<video>` playback, surfacing as a "0-second" unplayable
+  clip in the web UI despite the file being perfectly valid otherwise. `imageio-ffmpeg`'s bundled
+  binary has `libx264` built in regardless of what's available on the host's OpenCV install. Guarded
+  by `tests/test_pipeline_smoke.py::test_save_cinemagraph_video_uses_browser_compatible_codec`, which
+  checks the actual codec tag rather than just "did something readable get written" — the earlier
+  round-trip tests never caught this because `cv2.VideoCapture` can read back what `cv2.VideoWriter`
+  wrote just fine; the bug was encode-only. Whole clips are read into memory as a `list[np.ndarray]` —
+  fine for the few-second clips this tool targets, and keeps every other module operating on plain
+  frame lists rather than streams.
 - **`mask.py`** — produces a soft (feathered, float32 0..1) HxW mask marking which pixels stay
   animated. Either `auto_motion_mask` (frame-differencing + largest-connected-component + Gaussian
   blur) for video input, or `load_mask` for a hand-painted PNG. The photo pipeline uses the same

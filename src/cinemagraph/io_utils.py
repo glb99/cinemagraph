@@ -44,21 +44,53 @@ def write_video(frames: list[np.ndarray], out_path: str, fps: float, loop_durati
     """Write `frames` as a video. If `loop_duration` (seconds) is longer than the
     natural length of `frames`, the loop is repeated to fill it -- frames are
     written directly to the encoder as they're cycled through, so memory use
-    stays proportional to the short loop, not the output duration."""
+    stays proportional to the short loop, not the output duration.
+
+    .mp4 output goes through imageio's ffmpeg plugin (imageio-ffmpeg's bundled
+    binary, already a project dependency) with libx264/yuv420p, not
+    cv2.VideoWriter. cv2.VideoWriter's H.264 encoding depends on an OpenH264
+    DLL that most opencv-python wheels don't ship (patent/licensing reasons),
+    so it silently falls back to "mp4v" (MPEG-4 Part 2) -- a real, valid,
+    playable-in-VLC video that browsers categorically cannot decode for
+    <video> playback, surfacing as a "0-second" unplayable clip in the web UI
+    despite the file itself being fine. imageio-ffmpeg's bundled binary has
+    libx264 built in regardless of the host's OpenCV install, so this doesn't
+    depend on what codecs happen to be available on the machine running this.
+    """
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
-
-    h, w = frames[0].shape[:2]
-    fourcc = cv2.VideoWriter_fourcc(*"mp4v") if out_path.suffix == ".mp4" else cv2.VideoWriter_fourcc(*"VP80")
-    writer = cv2.VideoWriter(str(out_path), fourcc, fps, (w, h))
-    if not writer.isOpened():
-        raise RuntimeError(f"Could not open video writer for: {out_path}")
-
     total_frames = max(int(round(loop_duration * fps)), len(frames)) if loop_duration else len(frames)
-    with click.progressbar(range(total_frames), label="Writing video") as bar:
-        for i in bar:
-            writer.write(frames[i % len(frames)])
-    writer.release()
+
+    if out_path.suffix == ".mp4":
+        import imageio.v2 as imageio
+
+        writer = imageio.get_writer(
+            str(out_path), fps=fps, codec="libx264", pixelformat="yuv420p",
+            # yuv420p halves each dimension via chroma subsampling, so libx264
+            # requires both width and height to be even -- macro_block_size=2 is
+            # the minimum that satisfies that (rounds up by at most 1px on an
+            # odd dimension), vs. the default 16 which would pad much more than
+            # needed. macro_block_size=1 (no padding at all) looks tempting for
+            # exact dimensions, but it can leave an odd dimension in place and
+            # make libx264 fail outright: "height not divisible by 2".
+            macro_block_size=2,
+        )
+        try:
+            with click.progressbar(range(total_frames), label="Writing video") as bar:
+                for i in bar:
+                    writer.append_data(cv2.cvtColor(frames[i % len(frames)], cv2.COLOR_BGR2RGB))
+        finally:
+            writer.close()
+    else:
+        h, w = frames[0].shape[:2]
+        fourcc = cv2.VideoWriter_fourcc(*"VP80")
+        writer = cv2.VideoWriter(str(out_path), fourcc, fps, (w, h))
+        if not writer.isOpened():
+            raise RuntimeError(f"Could not open video writer for: {out_path}")
+        with click.progressbar(range(total_frames), label="Writing video") as bar:
+            for i in bar:
+                writer.write(frames[i % len(frames)])
+        writer.release()
 
 
 def write_gif(frames: list[np.ndarray], out_path: str, fps: float) -> None:
