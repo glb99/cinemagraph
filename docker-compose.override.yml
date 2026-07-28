@@ -1,0 +1,26 @@
+# Auto-merged by `docker compose up` -- no extra flags needed. This is the
+# local dev workflow: bind-mount ./src over the image's baked-in copy and
+# run uvicorn with --reload, so editing server/*.py (including ui.py) or
+# cinemagraph/*.py on the host is picked up without rebuilding the image.
+#
+# This works because `uv sync` installs the project *editable* by default
+# (confirmed via .venv's own .pth file, which just points back at src/) --
+# the image's install already resolves imports through /app/src at import
+# time, so overlaying that exact path with a live bind mount is enough;
+# nothing about the install itself needs to change.
+#
+# Only covers the `core` service. machine-learning/ and sound-effects/ are
+# edited far less often and carry heavy, slow-to-rebuild dependencies
+# (torch et al.) -- add an equivalent block there too if that changes.
+#
+# Only source changes hot-reload. A dependency change (pyproject.toml/
+# uv.lock) still needs `docker compose build core`.
+services:
+  core:
+    volumes:
+      - ./src:/app/src
+    command: [
+      "uvicorn", "server.app:app",
+      "--host", "0.0.0.0", "--port", "8000",
+      "--reload", "--reload-dir", "/app/src"
+    ]

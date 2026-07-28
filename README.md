@@ -142,11 +142,11 @@ See `docs/DESIGN.md` for why this is a separate script rather than a pytest test
 ## API and web UI
 
 A minimal local HTTP API (FastAPI) wraps the same rendering code, for a UI or scripted use without
-shelling out. A first, self-contained web UI now ships too — `GET /` serves a single HTML page
-(inline CSS/JS, no build step) covering photo rendering: upload, pick effects, optional mask
-upload or a semantic mask_prompt (shown only when the machine-learning service is running), submit,
-watch it render, preview the result. Video rendering, music, and sound-effect generation don't
-have a UI yet:
+shelling out. A self-contained web UI ships too — `GET /` serves a single HTML page (inline CSS/JS,
+no build step) with four tabs: **Photo** and **Video** rendering (upload, effects/mask, submit,
+watch it render, preview) are always available; **Music** and **Sound effects** each appear only
+when `GET /capabilities` reports that backend as configured, same signal used throughout the rest
+of the system to degrade gracefully:
 
 ```bash
 uv sync --extra server
@@ -232,6 +232,24 @@ The CLI works the same way inside the container, overriding the default command:
 ```bash
 docker run --rm -v "$(pwd)/data:/data" cinemagraph-tool cinemagraph from-photo /data/photo.jpg /data/out.mp4 --effect smoke
 ```
+
+### Local dev: auto-reload
+
+`docker-compose.override.yml` is picked up automatically by plain `docker compose up` — no extra
+flags. It bind-mounts `./src` over the image's baked-in copy and runs `uvicorn --reload`, so editing
+`server/*.py` or `cinemagraph/*.py` on the host is picked up immediately, without rebuilding the
+image. This works because `uv sync` installs the project *editable* by default (confirmed via the
+venv's own `.pth` file, which just points at `src/` — same thing that makes local dev work without
+Docker at all), so the image's install already resolves imports through `/app/src` at import time;
+overlaying that exact path with a live bind mount is enough. Verified for real: started the
+container, edited `server/ui.py`'s `<h1>` on the host while it was running, and confirmed
+(`WARNING: WatchFiles detected changes... Reloading`) the change appeared over `GET /` within a
+couple seconds, no rebuild — then reverted and confirmed the same in the other direction.
+
+Only source changes hot-reload this way; a dependency change (`pyproject.toml`/`uv.lock`) still
+needs `docker compose build core`. Also only covers `core` — `machine-learning`/`sound-effects`
+carry heavy, slow-to-rebuild dependencies and are edited far less often; add an equivalent
+`volumes`/`command` override there too if that changes.
 
 ## Architecture
 

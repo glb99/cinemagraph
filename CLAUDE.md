@@ -170,10 +170,13 @@ special-casing the packaging config further.
 - **`ui.py`** — `INDEX_HTML`, a single self-contained page (inline CSS/JS, no build step, no
   static-file mount) served by `GET /`. Deliberately a plain Python string, not a static asset:
   non-`.py` files need explicit `package-data` config to survive a real build, exactly the class
-  of bug the `api/`→`src/api/` move above already caught once. Covers photo rendering only for
-  now (upload, effects, optional mask/`mask_prompt`, submit, poll, preview) — feature-gates
-  `mask_prompt` on `GET /capabilities`'s `semantic_mask` flag, same signal every other optional
-  service consumer uses. Video/music/sound-effect UI not started.
+  of bug the `api/`→`src/api/` move above already caught once. Four tabs — Photo, Video (both
+  always shown), Music, Sound effects (each hidden entirely, not shown-disabled, unless
+  `GET /capabilities` reports the matching flag true, same pattern `mask_prompt` already used) —
+  sharing one `pollJob()`/`wireForm()` implementation, since every `/render/*`/`/generate/*` route
+  returns the same `{job_id}` shape. Photo and Video verified against a live server; Music/Sound
+  effects have forms wired to their routes but not exercised against a live backend from the UI
+  itself yet.
 - **`config.py`** — `Settings(BaseSettings)` (from `pydantic-settings`) plus `get_settings()`
   (`@lru_cache`, injected into routes via `Annotated[Settings, Depends(get_settings)]`), replacing
   three inconsistent ways this package used to read `os.environ` (a module-level constant frozen

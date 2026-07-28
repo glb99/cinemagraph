@@ -148,11 +148,11 @@ that may be deleted next week is waste.
 cinemagraph-tool/
 ├── src/
 │   ├── cinemagraph/           # the stable core: pipeline, effects registry, mask, grade, loop, io, library
-│   └── server/                # FastAPI door: app.py (routes) + service.py (workflows) + ui.py
-│                               #   (GET / thin web UI, photo only); extra `server`; sibling
-│                               #   package to cinemagraph, same distribution, no own pyproject
+│   └── server/                # FastAPI door: app.py (routes) + service.py (workflows) +
+│                               #   config.py (Settings/DI) + ui.py (GET / thin web UI: 4 tabs);
+│                               #   sibling package to cinemagraph, same distribution, no own pyproject
 ├── machine-learning/          # isolated service: CLIPSeg semantic masking (validated)
-├── tests/                     # 59 tests: contracts, invariants, smoke (core + API + library)
+├── tests/                     # 64 tests: contracts, invariants, smoke (core + API + library)
 ├── scripts/golden_check.py    # pixel-regression check, separate from pytest (see sec 6)
 ├── docs/experiments/          # lab notebook, one file per experiment
 ├── Dockerfile + docker-compose.yml   # core image (never torch); ML service gated off
@@ -235,7 +235,7 @@ depth), true advection for smoke/vapor (translation, not in-place brightness mod
 flow direction derived from mask shape. Pure `effects/` work; the registry means each is
 an isolated change.
 
-### 5.5 API/CLI parity — DONE; thin web UI — STARTED (photo rendering only)
+### 5.5 API/CLI parity — DONE; thin web UI — photo + video rendering
 
 `POST /render/video` and `POST /render/photo` now accept everything `make`/`from-photo` do: mask
 upload (in addition to the API-only `mask_prompt` semantic path), per-effect overrides validated
@@ -249,13 +249,22 @@ Verified against a live server, not just TestClient: uploaded mask + `dust_count
 CLI, unlike the effect-override validation which was already caught — now both routes and both
 CLI commands translate it into their entry point's normal error shape (422 / `UsageError`).
 
-A first version of the UI now exists: `GET /` serves a single self-contained HTML page
-(`server/ui.py`'s `INDEX_HTML` — inline CSS/JS, no build step, no framework) covering photo
-rendering only — upload, effect checkboxes (populated from `GET /effects`), optional mask upload
-or `mask_prompt` (the latter only shown when `GET /capabilities` reports `semantic_mask: true`,
-the same signal every other optional-service consumer already uses), duration/fps/speed, submit,
-poll `GET /jobs/{id}`, preview via `GET /jobs/{id}/file`. Video rendering, music generation, and
-sound-effect generation have no UI yet — natural next slices, not started.
+`GET /` serves a single self-contained HTML page (`server/ui.py`'s `INDEX_HTML` — inline CSS/JS, no
+build step, no framework), now with four tabs, one per capability the API exposes: **Photo** and
+**Video** (both always shown — core capabilities, no configuration needed) and **Music** /
+**Sound effects** (each hidden entirely, not just disabled, unless `GET /capabilities` reports the
+matching flag true — the same `music_generation`/`sound_effect_generation` signal every other
+optional-service consumer already uses; `mask_prompt` inside the Photo tab uses the identical
+pattern for `semantic_mask`). All four forms share one `pollJob()`/`wireForm()` implementation,
+since every `/render/*`/`/generate/*` route returns the same `{job_id}` shape and is checked via
+the same `GET /jobs/{id}` contract — the only thing that differs per tab is which fields go into
+the request and whether the result lands in a `<video>` or `<audio>` element.
+
+Photo and Video are both built and verified against a live server (see `docs/experiments/`); Music
+and Sound effects have forms wired to their routes but haven't been exercised against a live
+ACE-Step/sound-effects instance from the UI specifically (the routes themselves have — see §5.7).
+As with the first slice, per-effect override flags and video's grade fine-tuning knobs are left out
+of every form — thin-client coverage of the common path, not full parity with every CLI/API field.
 
 **Why a plain string in `ui.py`, not static files.** Non-`.py` assets need explicit
 `package-data`/`MANIFEST.in` configuration to survive a real (non-editable) build — exactly the
@@ -402,6 +411,7 @@ Decisions already made, with reasoning — so they aren't accidentally relitigat
 | Adopted `pydantic-settings` + `Depends(get_settings)` for `server/`'s config, replacing three ad-hoc `os.environ` patterns | `DATA_DIR` was a module-level constant frozen at import — concretely forcing `tests/test_api_smoke.py` to `importlib.reload(server.app)` on every test just to change `CINEMAGRAPH_DATA_DIR`, which `dependency_overrides[get_settings]` (FastAPI's own documented pattern) eliminates outright, since it wins over the `@lru_cache`. `_external_service.py`'s per-call `os.environ.get(env_var)` lookups by magic string became one `Settings` instance with typed fields |
 | `config.py` deliberately does not cover `CINEMAGRAPH_LIBRARY_DIR` | `cinemagraph.library` is core-tier (opencv/numpy/click, no `pydantic`); importing `server.config` there would smuggle a server-tier dependency into core, the exact thing the tier discipline in §3.2 exists to prevent. Two config mechanisms (env-direct for core, `Settings` for server) is correct here, not an inconsistency to "finish" |
 | `OptionalService` bundles url/name/env-var per service | those three facts (e.g. ACE-Step's URL, "Music generation" for error text, `"ACESTEP_URL"` for the "not configured" message) were previously passed together at every one of `run_music_job`'s three `call_optional_service` call sites; one dataclass ends the repetition without adding a class hierarchy nothing else needs |
+| `docker-compose.override.yml` for local dev (bind-mount `./src`, `uvicorn --reload`) | Compose auto-merges override files with no extra flags, so this is zero-friction — plain `docker compose up` gets hot-reload for free. Works because `uv sync` installs the project editable by default (confirmed via the venv's own `.pth` file); the image's install already resolves imports through `/app/src`, so a live bind mount over that exact path is sufficient. Verified for real: edited `server/ui.py` on the host while the container was running, confirmed the change appeared over `GET /` within seconds with no rebuild, then reverted and confirmed the reverse. Scoped to `core` only — `machine-learning`/`sound-effects` are edited far less often and carry slow-to-rebuild dependencies |
 
 ### Placement quick-test for anything new
 

@@ -3,15 +3,17 @@ step, no separate static-file packaging concerns (see the api-to-server move
 in docs/DESIGN.md's decision log for why non-.py assets are a real footgun
 here -- this sidesteps that entirely by being plain Python source).
 
-Scope deliberately small for a first version: photo-to-cinemagraph rendering
-only (upload, effect selection, optional mask upload or mask_prompt, submit,
-poll, preview). Video rendering / music / sound-effect generation are follow-
-ups, not started here -- see docs/DESIGN.md sec 5.5.
-
-Feature-gating: the page fetches GET /capabilities on load and only shows the
-mask_prompt (semantic masking) input when semantic_mask is true, exactly the
-same signal the rest of the system already uses to degrade gracefully when
-an optional service isn't running.
+Four tabs, one per capability this project's API exposes: photo rendering,
+video rendering, music generation, sound-effect generation. Photo and video
+are always available (they're the core CLI/API capability); music and sound
+effects are feature-gated on GET /capabilities, same signal the rest of the
+system already uses to degrade gracefully when an optional service isn't
+running -- their tab buttons are hidden entirely rather than shown-disabled,
+matching how mask_prompt was already hidden in the original photo-only
+version of this page. Per-effect override flags (--rain-count etc. on the
+CLI) and video's grade fine-tuning knobs are intentionally left out of every
+form here, same as the original photo tab -- this is a thin client covering
+the common path, not full parity with every CLI flag.
 """
 
 INDEX_HTML = """<!doctype html>
@@ -32,71 +34,178 @@ INDEX_HTML = """<!doctype html>
   legend { padding: 0 0.5rem; color: #aaa; font-size: 0.85rem; }
   label { display: inline-flex; align-items: center; gap: 0.3rem; margin: 0.2rem 0.8rem 0.2rem 0; }
   input[type="number"] { width: 5rem; }
-  input[type="text"] { width: 100%; box-sizing: border-box; }
+  input[type="text"], textarea { width: 100%; box-sizing: border-box; font-family: inherit; }
+  textarea { min-height: 4rem; }
   button {
     background: #3a6ff0; color: white; border: none; border-radius: 6px;
     padding: 0.6rem 1.2rem; font-size: 1rem; cursor: pointer;
   }
   button:disabled { background: #555; cursor: not-allowed; }
-  #status { margin-top: 1rem; font-size: 0.9rem; color: #aaa; }
-  #error { color: #ff6b6b; white-space: pre-wrap; }
-  video { max-width: 100%; margin-top: 1rem; border-radius: 8px; }
+  nav { display: flex; gap: 0.4rem; margin-bottom: 1.2rem; border-bottom: 1px solid #333; }
+  nav button {
+    background: none; color: #888; border: none; border-radius: 0;
+    padding: 0.5rem 0.9rem; font-size: 0.95rem; border-bottom: 2px solid transparent;
+  }
+  nav button.active { color: #e8e8e8; border-bottom-color: #3a6ff0; }
+  .status { margin-top: 1rem; font-size: 0.9rem; color: #aaa; }
+  .error { color: #ff6b6b; white-space: pre-wrap; }
+  video, audio { max-width: 100%; margin-top: 1rem; border-radius: 8px; }
   .row { margin-bottom: 0.6rem; }
   .hint { color: #888; font-size: 0.8rem; }
+  .tab { display: none; }
+  .tab.active { display: block; }
 </style>
 </head>
 <body>
 <h1>cinemagraph-tool</h1>
-<p class="hint">Animate a photo into a looping cinemagraph. A thin client over the same API a
-script or curl would use -- nothing here that <code>POST /render/photo</code> doesn't do itself.</p>
+<p class="hint">A thin client over the same API a script or curl would use -- nothing here that
+the underlying routes don't already do themselves.</p>
 
-<form id="form">
+<nav id="nav"></nav>
+
+<!-- Photo -->
+<section class="tab active" id="tab-photo">
+<form id="photo-form">
   <div class="row">
-    <label>Photo <input type="file" id="photo" accept="image/*" required></label>
+    <label>Photo <input type="file" id="photo-input" accept="image/*" required></label>
   </div>
-
   <fieldset>
     <legend>Effects</legend>
-    <div id="effects">(loading...)</div>
+    <div id="photo-effects">(loading...)</div>
   </fieldset>
-
   <fieldset>
     <legend>Mask (optional -- omit to animate the whole photo)</legend>
     <div class="row">
-      <label>Hand-painted mask file <input type="file" id="mask" accept="image/png"></label>
+      <label>Hand-painted mask file <input type="file" id="photo-mask" accept="image/png"></label>
     </div>
-    <div class="row" id="mask-prompt-row" style="display:none">
+    <div class="row" id="photo-mask-prompt-row" style="display:none">
       <label style="display:block">Or describe what to animate (semantic masking)
-        <input type="text" id="mask_prompt" placeholder='e.g. "clouds", "sun", "water"'>
+        <input type="text" id="photo-mask-prompt" placeholder='e.g. "clouds", "sun", "water"'>
       </label>
     </div>
   </fieldset>
-
   <fieldset>
     <legend>Timing</legend>
-    <label>Duration (s) <input type="number" id="duration" value="4" min="0.5" step="0.5"></label>
-    <label>FPS <input type="number" id="fps" value="30" min="1"></label>
-    <label>Speed <input type="number" id="speed" value="1.0" min="0.1" step="0.1"></label>
+    <label>Duration (s) <input type="number" id="photo-duration" value="4" min="0.5" step="0.5"></label>
+    <label>FPS <input type="number" id="photo-fps" value="30" min="1"></label>
+    <label>Speed <input type="number" id="photo-speed" value="1.0" min="0.1" step="0.1"></label>
   </fieldset>
-
-  <button type="submit" id="submit">Render</button>
+  <button type="submit">Render</button>
 </form>
+<div class="status" id="photo-status"></div>
+<div class="error" id="photo-error"></div>
+<video id="photo-preview" controls loop style="display:none"></video>
+</section>
 
-<div id="status"></div>
-<div id="error"></div>
-<video id="preview" controls loop style="display:none"></video>
+<!-- Video -->
+<section class="tab" id="tab-video">
+<form id="video-form">
+  <div class="row">
+    <label>Video <input type="file" id="video-input" accept="video/*" required></label>
+  </div>
+  <fieldset>
+    <legend>Mask (optional -- omit to auto-detect motion)</legend>
+    <label>Hand-painted mask file <input type="file" id="video-mask" accept="image/png"></label>
+    <label>Mask threshold <input type="number" id="video-mask-threshold" value="25" min="1"></label>
+  </fieldset>
+  <fieldset>
+    <legend>Loop</legend>
+    <label>Still frame index <input type="number" id="video-still-frame" value="0" min="0"></label>
+    <label>Blend frames <input type="number" id="video-blend-frames" value="10" min="0"></label>
+    <label><input type="checkbox" id="video-auto-trim" checked> Auto-trim to best loop point</label>
+  </fieldset>
+  <fieldset>
+    <legend>Output</legend>
+    <label><input type="checkbox" id="video-gif"> Also export .gif</label>
+  </fieldset>
+  <button type="submit">Render</button>
+</form>
+<div class="status" id="video-status"></div>
+<div class="error" id="video-error"></div>
+<video id="video-preview" controls loop style="display:none"></video>
+</section>
+
+<!-- Music -->
+<section class="tab" id="tab-music">
+<form id="music-form">
+  <div class="row">
+    <label style="display:block">Prompt
+      <input type="text" id="music-prompt" placeholder='e.g. "ambient synth pad, slow, sci-fi"'>
+    </label>
+  </div>
+  <div class="row">
+    <label style="display:block">Lyrics (optional)
+      <textarea id="music-lyrics"></textarea>
+    </label>
+  </div>
+  <label>Duration (s) <input type="number" id="music-duration" value="30" min="5"></label>
+  <label><input type="checkbox" id="music-thinking" checked> Thinking mode</label>
+  <div class="row"></div>
+  <button type="submit">Generate</button>
+</form>
+<div class="status" id="music-status"></div>
+<div class="error" id="music-error"></div>
+<audio id="music-preview" controls style="display:none"></audio>
+</section>
+
+<!-- Sound effects -->
+<section class="tab" id="tab-sfx">
+<form id="sfx-form">
+  <div class="row">
+    <label style="display:block">Prompt
+      <input type="text" id="sfx-prompt" placeholder='e.g. "gentle wind chimes in a light breeze"'>
+    </label>
+  </div>
+  <label>Duration (s) <input type="number" id="sfx-duration" value="10" min="1" max="47"></label>
+  <div class="row"></div>
+  <button type="submit">Generate</button>
+</form>
+<div class="status" id="sfx-status"></div>
+<div class="error" id="sfx-error"></div>
+<audio id="sfx-preview" controls style="display:none"></audio>
+</section>
 
 <script>
+const TABS = [
+  { id: "photo", label: "Photo", always: true },
+  { id: "video", label: "Video", always: true },
+  { id: "music", label: "Music", capability: "music_generation" },
+  { id: "sfx", label: "Sound effects", capability: "sound_effect_generation" },
+];
+
+function showTab(id) {
+  for (const tab of TABS) {
+    document.getElementById(`tab-${tab.id}`).classList.toggle("active", tab.id === id);
+  }
+  for (const btn of document.querySelectorAll("#nav button")) {
+    btn.classList.toggle("active", btn.dataset.tab === id);
+  }
+}
+
 async function loadCapabilities() {
   const caps = await (await fetch("/capabilities")).json();
   if (caps.semantic_mask) {
-    document.getElementById("mask-prompt-row").style.display = "block";
+    document.getElementById("photo-mask-prompt-row").style.display = "block";
   }
+
+  const nav = document.getElementById("nav");
+  let firstVisible = null;
+  for (const tab of TABS) {
+    if (!tab.always && !caps[tab.capability]) continue;
+    if (firstVisible === null) firstVisible = tab.id;
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.textContent = tab.label;
+    btn.dataset.tab = tab.id;
+    btn.addEventListener("click", () => showTab(tab.id));
+    nav.appendChild(btn);
+  }
+  showTab(firstVisible || "photo");
 }
 
 async function loadEffects() {
   const data = await (await fetch("/effects")).json();
-  const container = document.getElementById("effects");
+  const container = document.getElementById("photo-effects");
   container.innerHTML = "";
   for (const name of data.effects) {
     const label = document.createElement("label");
@@ -114,71 +223,139 @@ function selectedEffects() {
   return Array.from(document.querySelectorAll('input[name="effect"]:checked')).map(i => i.value);
 }
 
-async function pollJob(jobId) {
-  const statusEl = document.getElementById("status");
+/** Shared polling loop -- every /generate/* and /render/* route returns the
+ * same {job_id} shape and is checked via the same GET /jobs/{id} contract,
+ * so one implementation covers all four tabs. `onDone` wires the result
+ * into whichever <video>/<audio> element belongs to that tab. */
+async function pollJob(jobId, { statusEl, errorEl, onDone }) {
   for (;;) {
     const res = await fetch(`/jobs/${jobId}`);
     const job = await res.json();
     statusEl.textContent = `Job ${jobId}: ${job.status}`;
     if (job.status === "done") {
-      const video = document.getElementById("preview");
-      video.src = `/jobs/${jobId}/file`;
-      video.style.display = "block";
+      onDone(`/jobs/${jobId}/file`);
       return;
     }
     if (job.status === "error") {
-      document.getElementById("error").textContent = job.error;
+      errorEl.textContent = job.error;
       return;
     }
     await new Promise(r => setTimeout(r, 1500));
   }
 }
 
-document.getElementById("form").addEventListener("submit", async (e) => {
-  e.preventDefault();
-  document.getElementById("error").textContent = "";
-  document.getElementById("preview").style.display = "none";
-  const submitBtn = document.getElementById("submit");
-  submitBtn.disabled = true;
+function wireForm(formId, { buildForm, endpoint, statusId, errorId, previewId }) {
+  const form = document.getElementById(formId);
+  const statusEl = document.getElementById(statusId);
+  const errorEl = document.getElementById(errorId);
+  const previewEl = document.getElementById(previewId);
 
-  const effects = selectedEffects();
-  if (effects.length === 0) {
-    document.getElementById("error").textContent = "Select at least one effect.";
-    submitBtn.disabled = false;
-    return;
-  }
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    errorEl.textContent = "";
+    previewEl.style.display = "none";
+    const submitBtn = form.querySelector("button");
+    submitBtn.disabled = true;
 
-  const maskFile = document.getElementById("mask").files[0];
-  const maskPrompt = document.getElementById("mask_prompt").value.trim();
-  if (maskFile && maskPrompt) {
-    document.getElementById("error").textContent = "Supply either a mask file or a mask prompt, not both.";
-    submitBtn.disabled = false;
-    return;
-  }
+    try {
+      const body = buildForm();
+      if (body === null) return; // buildForm already set errorEl
 
-  const form = new FormData();
-  form.append("input_file", document.getElementById("photo").files[0]);
-  for (const eff of effects) form.append("effect", eff);
-  if (maskFile) form.append("mask", maskFile);
-  if (maskPrompt) form.append("mask_prompt", maskPrompt);
-  form.append("duration", document.getElementById("duration").value);
-  form.append("fps", document.getElementById("fps").value);
-  form.append("speed", document.getElementById("speed").value);
-
-  try {
-    const res = await fetch("/render/photo", { method: "POST", body: form });
-    if (!res.ok) {
-      const detail = await res.json().catch(() => ({}));
-      throw new Error(detail.detail || `HTTP ${res.status}`);
+      const res = await fetch(endpoint, { method: "POST", body });
+      if (!res.ok) {
+        const detail = await res.json().catch(() => ({}));
+        throw new Error(detail.detail || `HTTP ${res.status}`);
+      }
+      const { job_id } = await res.json();
+      statusEl.textContent = `Job ${job_id}: submitted`;
+      await pollJob(job_id, {
+        statusEl, errorEl,
+        onDone: (url) => { previewEl.src = url; previewEl.style.display = "block"; },
+      });
+    } catch (err) {
+      errorEl.textContent = err.message;
+    } finally {
+      submitBtn.disabled = false;
     }
-    const { job_id } = await res.json();
-    document.getElementById("status").textContent = `Job ${job_id}: submitted`;
-    await pollJob(job_id);
-  } catch (err) {
-    document.getElementById("error").textContent = err.message;
-  } finally {
-    submitBtn.disabled = false;
-  }
+  });
+}
+
+wireForm("photo-form", {
+  endpoint: "/render/photo",
+  statusId: "photo-status", errorId: "photo-error", previewId: "photo-preview",
+  buildForm: () => {
+    const effects = selectedEffects();
+    if (effects.length === 0) {
+      document.getElementById("photo-error").textContent = "Select at least one effect.";
+      return null;
+    }
+    const maskFile = document.getElementById("photo-mask").files[0];
+    const maskPrompt = document.getElementById("photo-mask-prompt").value.trim();
+    if (maskFile && maskPrompt) {
+      document.getElementById("photo-error").textContent = "Supply either a mask file or a mask prompt, not both.";
+      return null;
+    }
+    const form = new FormData();
+    form.append("input_file", document.getElementById("photo-input").files[0]);
+    for (const eff of effects) form.append("effect", eff);
+    if (maskFile) form.append("mask", maskFile);
+    if (maskPrompt) form.append("mask_prompt", maskPrompt);
+    form.append("duration", document.getElementById("photo-duration").value);
+    form.append("fps", document.getElementById("photo-fps").value);
+    form.append("speed", document.getElementById("photo-speed").value);
+    return form;
+  },
+});
+
+wireForm("video-form", {
+  endpoint: "/render/video",
+  statusId: "video-status", errorId: "video-error", previewId: "video-preview",
+  buildForm: () => {
+    const form = new FormData();
+    form.append("input_file", document.getElementById("video-input").files[0]);
+    const maskFile = document.getElementById("video-mask").files[0];
+    if (maskFile) form.append("mask", maskFile);
+    form.append("mask_threshold", document.getElementById("video-mask-threshold").value);
+    form.append("still_frame_index", document.getElementById("video-still-frame").value);
+    form.append("blend_frames", document.getElementById("video-blend-frames").value);
+    form.append("auto_trim", document.getElementById("video-auto-trim").checked);
+    form.append("also_gif", document.getElementById("video-gif").checked);
+    return form;
+  },
+});
+
+wireForm("music-form", {
+  endpoint: "/generate/music",
+  statusId: "music-status", errorId: "music-error", previewId: "music-preview",
+  buildForm: () => {
+    const prompt = document.getElementById("music-prompt").value.trim();
+    if (!prompt) {
+      document.getElementById("music-error").textContent = "Prompt is required.";
+      return null;
+    }
+    const form = new FormData();
+    form.append("prompt", prompt);
+    form.append("lyrics", document.getElementById("music-lyrics").value);
+    form.append("duration", document.getElementById("music-duration").value);
+    form.append("thinking", document.getElementById("music-thinking").checked);
+    return form;
+  },
+});
+
+wireForm("sfx-form", {
+  endpoint: "/generate/sound-effect",
+  statusId: "sfx-status", errorId: "sfx-error", previewId: "sfx-preview",
+  buildForm: () => {
+    const prompt = document.getElementById("sfx-prompt").value.trim();
+    if (!prompt) {
+      document.getElementById("sfx-error").textContent = "Prompt is required.";
+      return null;
+    }
+    const form = new FormData();
+    form.append("prompt", prompt);
+    form.append("duration", document.getElementById("sfx-duration").value);
+    return form;
+  },
 });
 
 loadCapabilities();
