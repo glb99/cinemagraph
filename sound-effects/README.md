@@ -36,6 +36,12 @@ First request (or startup, since the model loads eagerly) downloads ~5GB of weig
 Hugging Face Hub — cached afterward (`HF_HOME`/`/cache` volume in the Dockerfile/compose entry).
 CPU-capable but slow; a GPU (CUDA) is picked up automatically if available (`torch.cuda.is_available()`).
 
+**`stabilityai/stable-audio-open-1.0` is a gated model** — the download needs an authenticated,
+license-accepted Hugging Face token, or it fails with a 401 at startup. Accept the license at
+https://huggingface.co/stabilityai/stable-audio-open-1.0, create a token at
+https://huggingface.co/settings/tokens, then set `HF_TOKEN` in the environment (via Docker Compose:
+a `.env` file at the repo root with `HF_TOKEN=...`, gitignored, never committed).
+
 ## API
 
 ```
@@ -53,9 +59,12 @@ POST /generate
 
 ## Validated
 
-Manually, end-to-end, against a real GPU (RTX 4060) with the already-cached model weights: both the
-service standalone (`POST /generate` directly) and the full chain through `cinemagraph-tool`'s own
-`POST /generate/sound-effect` → job polling → file download. See
-`docs/experiments/2026-07-27-audio-model-serving-research.md` and the follow-up session for details.
-Not yet validated: the Docker build itself (Docker wasn't running in the validating session) — the
-Python-level logic is proven, the containerization is not.
+Manually, end-to-end, against a real GPU (RTX 4060): both the service standalone (`POST /generate`
+directly) and the full chain through `cinemagraph-tool`'s own `POST /generate/sound-effect` → job
+polling → file download → the web UI's Sound effects tab, playing back real generated audio in a
+real browser (`readyState: 4`, correct duration). See
+`docs/experiments/2026-07-27-audio-model-serving-research.md` and
+`docs/experiments/2026-07-29-sound-effects-docker-gpu-verification.md` for details, including two
+real bugs found and fixed in the process (a missing GPU `deploy:` block, and a `torchaudio.save`
+failure from a `torchcodec` backend dependency the image didn't have). The Docker build and GPU
+passthrough are now validated too, not just the Python-level logic.

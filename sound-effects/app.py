@@ -12,9 +12,10 @@ cinemagraph-tool's own server/app.py POST /generate/sound-effect).
 """
 import io
 import random
+import wave
 
+import numpy as np
 import torch
-import torchaudio
 from einops import rearrange
 from fastapi import FastAPI
 from pydantic import BaseModel
@@ -93,6 +94,17 @@ async def generate(req: GenerateRequest):
     num_samples = int(req.duration * sample_rate)
     output = output[:, :num_samples]
 
+    # Written directly via the stdlib `wave` module rather than
+    # torchaudio.save: recent torchaudio releases delegate WAV encoding to
+    # an optional `torchcodec` backend, which itself needs real system-level
+    # FFmpeg shared libraries this image doesn't have -- found via a real
+    # request against a real GPU, not from reading changelogs. WAV is a
+    # simple enough format not to need a library for it at all.
+    pcm = (output.numpy() * 32767.0).astype(np.int16)  # (channels, samples)
     buf = io.BytesIO()
-    torchaudio.save(buf, output, sample_rate, format="wav")
+    with wave.open(buf, "wb") as wf:
+        wf.setnchannels(pcm.shape[0])
+        wf.setsampwidth(2)
+        wf.setframerate(sample_rate)
+        wf.writeframes(pcm.T.tobytes())  # interleave channels for multi-channel output
     return Response(content=buf.getvalue(), media_type="audio/wav")

@@ -6,6 +6,11 @@ requires-python = ">=3.10,<3.13"
 dependencies = [
     "torch>=2.0.0",
     "torchaudio>=2.0.0",
+    # numpy is used directly (see app.py) but deliberately not pinned here --
+    # stable-audio-tools's own dependency chain (laion-clap) pins an exact
+    # numpy version, and adding a second, looser constraint on top produced
+    # a real ResolutionImpossible from pip. Whatever version that chain
+    # resolves to is already what app.py runs against.
     "stable-audio-tools>=0.0.16",
     "einops>=0.7.0",
     "fastapi>=0.110.0,<1",

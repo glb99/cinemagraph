@@ -14,3 +14,6 @@ examples/*.gif
 examples/*.png
 examples/*.jpg
 /data/
+
+# secrets -- Docker Compose auto-loads this for ${VAR} substitution, never commit it
+.env

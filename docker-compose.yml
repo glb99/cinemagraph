@@ -20,8 +20,7 @@ services:
       # - ML_SERVICE_URL=http://machine-learning:8004
       # Uncomment once you're running the acestep service (below):
       # - ACESTEP_URL=http://acestep:8001
-      # Uncomment once you're running the sound-effects service (below):
-      # - SOUND_EFFECTS_URL=http://sound-effects:8003
+      - SOUND_EFFECTS_URL=http://sound-effects:8003
 
   # machine-learning/ -- CLIPSeg (via transformers), same shape as
   # sound-effects/ below: built, own pyproject/Dockerfile, `core` still
@@ -70,10 +69,25 @@ services:
   # matching acestep's above if you want to pass one through). Model
   # weights download from the HF Hub on first start and are cached in the
   # mounted volume across restarts. `docker compose --profile audio up`.
+  #
+  # stabilityai/stable-audio-open-1.0 is a *gated* HF repo -- downloading it
+  # needs an authenticated token from an account that has accepted the
+  # model's license on its Hugging Face page. HF_TOKEN below is substituted
+  # from a local .env file (gitignored, never committed), which Compose
+  # loads automatically -- never put the token directly in this file.
   sound-effects:
     build: ./sound-effects
     profiles: ["audio"]
     ports:
       - "8003:8003"
+    environment:
+      - HF_TOKEN=${HF_TOKEN}
     volumes:
       - ./data/sound-effects-cache:/cache/huggingface
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
