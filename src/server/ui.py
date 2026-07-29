@@ -3,17 +3,23 @@ step, no separate static-file packaging concerns (see the api-to-server move
 in docs/DESIGN.md's decision log for why non-.py assets are a real footgun
 here -- this sidesteps that entirely by being plain Python source).
 
-Four tabs, one per capability this project's API exposes: photo rendering,
-video rendering, music generation, sound-effect generation. Photo and video
-are always available (they're the core CLI/API capability); music and sound
-effects are feature-gated on GET /capabilities, same signal the rest of the
-system already uses to degrade gracefully when an optional service isn't
-running -- their tab buttons are hidden entirely rather than shown-disabled,
-matching how mask_prompt was already hidden in the original photo-only
-version of this page. Per-effect override flags (--rain-count etc. on the
-CLI) and video's grade fine-tuning knobs are intentionally left out of every
-form here, same as the original photo tab -- this is a thin client covering
-the common path, not full parity with every CLI flag.
+Five tabs: photo rendering, video rendering, music generation, sound-effect
+generation, and a library browser. Photo/video/library are always available;
+music and sound effects are feature-gated on GET /capabilities, same signal
+the rest of the system already uses to degrade gracefully when an optional
+service isn't running -- their tab buttons are hidden entirely rather than
+shown-disabled, matching how mask_prompt was already hidden in the original
+photo-only version of this page. Per-effect override flags (--rain-count etc.
+on the CLI) and video's grade fine-tuning knobs are intentionally left out of
+every form here, same as the original photo tab -- this is a thin client
+covering the common path, not full parity with every CLI flag.
+
+The library tab lists whatever /render and /generate have auto-registered
+(see service.py's library_kind wiring) via GET /library, with client-side
+kind/tag filtering. asset.original_filename and asset.tags are user-supplied
+(an uploaded file's own name, or free-text tags from a manual `library add`)
+-- rendered via textContent/createElement throughout, never innerHTML, so
+neither can inject markup into the page.
 """
 
 INDEX_HTML = """<!doctype html>
@@ -54,6 +60,12 @@ INDEX_HTML = """<!doctype html>
   .hint { color: #888; font-size: 0.8rem; }
   .tab { display: none; }
   .tab.active { display: block; }
+  .library-toolbar { display: flex; gap: 0.6rem; align-items: center; margin-bottom: 1rem; }
+  .library-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 1rem; }
+  .library-card { border: 1px solid #333; border-radius: 8px; padding: 0.6rem; }
+  .library-card img, .library-card video, .library-card audio { max-width: 100%; border-radius: 6px; margin-top: 0; }
+  .library-meta { margin: 0.5rem 0; font-size: 0.85rem; }
+  .library-card button { padding: 0.3rem 0.7rem; font-size: 0.85rem; background: #555; }
 </style>
 </head>
 <body>
@@ -165,12 +177,31 @@ the underlying routes don't already do themselves.</p>
 <audio id="sfx-preview" controls style="display:none"></audio>
 </section>
 
+<!-- Library -->
+<section class="tab" id="tab-library">
+<div class="library-toolbar">
+  <label>Kind
+    <select id="library-kind-filter">
+      <option value="">all</option>
+      <option value="reference">reference</option>
+      <option value="source">source</option>
+      <option value="generated">generated</option>
+    </select>
+  </label>
+  <label>Tag <input type="text" id="library-tag-filter" placeholder="e.g. photo"></label>
+  <button type="button" id="library-refresh">Refresh</button>
+</div>
+<div class="error" id="library-error"></div>
+<div class="library-grid" id="library-list">(loading...)</div>
+</section>
+
 <script>
 const TABS = [
   { id: "photo", label: "Photo", always: true },
   { id: "video", label: "Video", always: true },
   { id: "music", label: "Music", capability: "music_generation" },
   { id: "sfx", label: "Sound effects", capability: "sound_effect_generation" },
+  { id: "library", label: "Library", always: true },
 ];
 
 function showTab(id) {
@@ -180,6 +211,7 @@ function showTab(id) {
   for (const btn of document.querySelectorAll("#nav button")) {
     btn.classList.toggle("active", btn.dataset.tab === id);
   }
+  if (id === "library") loadLibrary();
 }
 
 async function loadCapabilities() {
@@ -221,6 +253,111 @@ async function loadEffects() {
 
 function selectedEffects() {
   return Array.from(document.querySelectorAll('input[name="effect"]:checked')).map(i => i.value);
+}
+
+/** Picks a preview element by the asset's own file extension -- kind alone
+ * doesn't disambiguate (a "generated" video and a "generated" sound effect
+ * both need different tags <video>/<audio>). Falls back to a plain download
+ * link for anything else (masks are .png, which img already covers). */
+function assetPreviewElement(asset) {
+  const url = `/library/${asset.id}/file`;
+  const ext = (asset.original_filename.split(".").pop() || "").toLowerCase();
+  if (["jpg", "jpeg", "png", "webp", "gif"].includes(ext)) {
+    const img = document.createElement("img");
+    img.src = url;
+    return img;
+  }
+  if (["mp4", "webm", "mov"].includes(ext)) {
+    const video = document.createElement("video");
+    video.src = url;
+    video.controls = true;
+    video.loop = true;
+    return video;
+  }
+  if (["mp3", "wav", "ogg"].includes(ext)) {
+    const audio = document.createElement("audio");
+    audio.src = url;
+    audio.controls = true;
+    return audio;
+  }
+  const link = document.createElement("a");
+  link.href = url;
+  link.textContent = "Download";
+  return link;
+}
+
+/** original_filename/tags are user-supplied (an upload's own name, or
+ * free-text tags from a manual `library add`), so every dynamic value here
+ * goes through textContent/createElement, never innerHTML -- see this
+ * module's docstring. */
+function assetCard(asset) {
+  const card = document.createElement("div");
+  card.className = "library-card";
+  card.appendChild(assetPreviewElement(asset));
+
+  const meta = document.createElement("div");
+  meta.className = "library-meta";
+
+  const kindLine = document.createElement("div");
+  const kindLabel = document.createElement("strong");
+  kindLabel.textContent = asset.kind;
+  kindLine.appendChild(kindLabel);
+  kindLine.appendChild(document.createTextNode(" · " + asset.original_filename));
+  meta.appendChild(kindLine);
+
+  const dateLine = document.createElement("div");
+  dateLine.className = "hint";
+  dateLine.textContent = new Date(asset.added_at).toLocaleString();
+  meta.appendChild(dateLine);
+
+  if (asset.tags.length > 0) {
+    const tagLine = document.createElement("div");
+    tagLine.className = "hint";
+    tagLine.textContent = "tags: " + asset.tags.join(", ");
+    meta.appendChild(tagLine);
+  }
+  card.appendChild(meta);
+
+  const delBtn = document.createElement("button");
+  delBtn.type = "button";
+  delBtn.textContent = "Delete";
+  delBtn.addEventListener("click", async () => {
+    if (!confirm(`Delete "${asset.original_filename}"? This cannot be undone.`)) return;
+    await fetch(`/library/${asset.id}`, { method: "DELETE" });
+    loadLibrary();
+  });
+  card.appendChild(delBtn);
+
+  return card;
+}
+
+async function loadLibrary() {
+  const listEl = document.getElementById("library-list");
+  const errorEl = document.getElementById("library-error");
+  errorEl.textContent = "";
+  listEl.textContent = "Loading...";
+
+  const kind = document.getElementById("library-kind-filter").value;
+  const tag = document.getElementById("library-tag-filter").value.trim();
+  const params = new URLSearchParams();
+  if (kind) params.set("kind", kind);
+  if (tag) params.set("tag", tag);
+
+  try {
+    const res = await fetch(`/library?${params}`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const assets = await res.json();
+
+    listEl.innerHTML = "";
+    if (assets.length === 0) {
+      listEl.textContent = "No assets yet.";
+      return;
+    }
+    for (const asset of assets) listEl.appendChild(assetCard(asset));
+  } catch (err) {
+    listEl.textContent = "";
+    errorEl.textContent = err.message;
+  }
 }
 
 /** Shared polling loop -- every /generate/* and /render/* route returns the
@@ -356,6 +493,12 @@ wireForm("sfx-form", {
     form.append("duration", document.getElementById("sfx-duration").value);
     return form;
   },
+});
+
+document.getElementById("library-refresh").addEventListener("click", loadLibrary);
+document.getElementById("library-kind-filter").addEventListener("change", loadLibrary);
+document.getElementById("library-tag-filter").addEventListener("keydown", (e) => {
+  if (e.key === "Enter") { e.preventDefault(); loadLibrary(); }
 });
 
 loadCapabilities();
