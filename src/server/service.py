@@ -43,6 +43,24 @@ FastAPI's Depends() cannot inject into them -- the route resolves settings
 module free of any environment lookups, which is also why its tests can
 construct a Settings() directly instead of monkeypatching os.environ.
 
+External-service calls and the actual render are dependency-injected the
+same way run_render_job already injects render_fn: each async job takes an
+explicit `call_service` parameter (defaulting to the real
+call_optional_service), and run_photo_semantic_mask_job additionally takes
+`render_fn` (defaulting to pipeline.save_cinemagraph_from_photo), rather
+than calling either name directly via module import. Tests pass a fake in
+as an argument instead of monkeypatching this module's namespace -- the
+seam is the same one either way (both are genuinely the one function that
+crosses an I/O boundary here, network for one and disk/CPU-bound render
+for the other), this just makes it an explicit part of each function's
+signature instead of an implicit one only reachable by patching internals.
+Neither parameter ever varies across real callers today -- app.py never
+passes anything but the default for either -- so the justification isn't
+"production polymorphism," it's that an explicit parameter is a more
+honest, refactor-safe seam than patching a module attribute (monkeypatch
+has to guess the exact name a call site looked up, which silently breaks
+if an import is ever restructured; an injected parameter can't).
+
 Library registration: every job function below takes an optional
 `library_kind` -- when given (the four /render and /generate routes all
 pass "generated"; /mask-preview does not, since a diagnostic mask preview
@@ -108,6 +126,8 @@ async def run_photo_semantic_mask_job(
     mask_prompt: str,
     library_kind: str | None = None,
     library_tags: list[str] | None = None,
+    call_service=call_optional_service,
+    render_fn=pipeline.save_cinemagraph_from_photo,
     **render_kwargs,
 ) -> None:
     """Segment the photo by text prompt, then render using that mask.
@@ -124,7 +144,7 @@ async def run_photo_semantic_mask_job(
     jobs.mark_running(job_id)
     try:
         image_bytes = photo_path.read_bytes()
-        resp = await call_optional_service(
+        resp = await call_service(
             settings.semantic_mask_service, "POST", "/segment",
             data={"prompt": mask_prompt},
             files={"image": (photo_path.name, image_bytes, "application/octet-stream")},
@@ -133,7 +153,7 @@ async def run_photo_semantic_mask_job(
         mask_path.write_bytes(resp.content)
 
         await asyncio.to_thread(
-            pipeline.save_cinemagraph_from_photo,
+            render_fn,
             photo_path=str(photo_path),
             output_path=str(output_path),
             mask_path=str(mask_path),
@@ -160,6 +180,7 @@ async def run_music_job(
     duration: float,
     thinking: bool,
     library_kind: str | None = None,
+    call_service=call_optional_service,
 ) -> None:
     """Drives ACE-Step's own job-queue API to completion: create a task,
     poll until it reports success/failure, download the resulting audio.
@@ -169,7 +190,7 @@ async def run_music_job(
     jobs.mark_running(job_id)
     service = settings.music_service
     try:
-        create_resp = await call_optional_service(
+        create_resp = await call_service(
             service, "POST", "/release_task",
             json={"prompt": prompt, "lyrics": lyrics, "audio_duration": duration, "thinking": thinking},
         )
@@ -178,7 +199,7 @@ async def run_music_job(
         result = None
         for _ in range(MUSIC_POLL_MAX_ATTEMPTS):
             await asyncio.sleep(MUSIC_POLL_INTERVAL_SECONDS)
-            query_resp = await call_optional_service(
+            query_resp = await call_service(
                 service, "POST", "/query_result",
                 json={"task_id_list": [task_id]},
             )
@@ -191,7 +212,7 @@ async def run_music_job(
         if result is None:
             raise RuntimeError(f"ACE-Step generation timed out after {MUSIC_POLL_MAX_ATTEMPTS} polls.")
 
-        audio_resp = await call_optional_service(service, "GET", result["file"], timeout=60.0)
+        audio_resp = await call_service(service, "GET", result["file"], timeout=60.0)
         output_path.write_bytes(audio_resp.content)
         jobs.mark_done(job_id, output_path)
         _register_in_library(
@@ -207,13 +228,14 @@ async def run_music_job(
 async def run_sound_effect_job(
     job_id: str, output_path: Path, *, settings: Settings, prompt: str, duration: float,
     library_kind: str | None = None,
+    call_service=call_optional_service,
 ) -> None:
     """Unlike ACE-Step's queue, sound-effects/ answers in one synchronous
     call -- still a background job here because generation takes real time.
     """
     jobs.mark_running(job_id)
     try:
-        resp = await call_optional_service(
+        resp = await call_service(
             settings.sound_effect_service, "POST", "/generate",
             json={"prompt": prompt, "duration": duration}, timeout=300.0,
         )

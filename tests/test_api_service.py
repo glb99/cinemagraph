@@ -102,12 +102,11 @@ async def test_music_job_reports_remote_failure(monkeypatch, tmp_path, acestep_s
             return _ace_response({"data": {"task_id": "t1"}})
         return _ace_response({"data": [{"status": 2, "result": None}]})
 
-    monkeypatch.setattr(service, "call_optional_service", fake_call)
-
     job = jobs.create_job()
     await service.run_music_job(
         job.id, tmp_path / "out.mp3",
         settings=acestep_settings, prompt="p", lyrics="", duration=10.0, thinking=False,
+        call_service=fake_call,
     )
 
     result = jobs.get_job(job.id)
@@ -126,12 +125,11 @@ async def test_music_job_times_out_when_never_ready(monkeypatch, tmp_path, acest
             return _ace_response({"data": {"task_id": "t1"}})
         return _ace_response({"data": [{"status": 0, "result": None}]})
 
-    monkeypatch.setattr(service, "call_optional_service", fake_call)
-
     job = jobs.create_job()
     await service.run_music_job(
         job.id, tmp_path / "out.mp3",
         settings=acestep_settings, prompt="p", lyrics="", duration=10.0, thinking=False,
+        call_service=fake_call,
     )
 
     result = jobs.get_job(job.id)
@@ -155,13 +153,11 @@ async def test_music_job_downloads_audio_on_success(monkeypatch, tmp_path, acest
             )
         return _ace_response({})  # the audio download
 
-    monkeypatch.setattr(service, "call_optional_service", fake_call)
-
     output = tmp_path / "out.mp3"
     job = jobs.create_job()
     await service.run_music_job(
         job.id, output, settings=acestep_settings, prompt="p", lyrics="", duration=10.0, thinking=False,
-        library_kind="generated",
+        library_kind="generated", call_service=fake_call,
     )
 
     result = jobs.get_job(job.id)
@@ -175,20 +171,18 @@ async def test_music_job_downloads_audio_on_success(monkeypatch, tmp_path, acest
 
 
 @pytest.mark.anyio
-async def test_sound_effect_job_downloads_audio_and_registers_in_library(monkeypatch, tmp_path):
+async def test_sound_effect_job_downloads_audio_and_registers_in_library(tmp_path):
     async def fake_call(svc, method, path, **kwargs):
         class _Resp:
             content = b"sfx-bytes"
 
         return _Resp()
 
-    monkeypatch.setattr(service, "call_optional_service", fake_call)
-
     output = tmp_path / "out.wav"
     job = jobs.create_job()
     await service.run_sound_effect_job(
         job.id, output, settings=Settings(sound_effects_url="http://sfx.invalid"),
-        prompt="gentle wind chimes", duration=8.0, library_kind="generated",
+        prompt="gentle wind chimes", duration=8.0, library_kind="generated", call_service=fake_call,
     )
 
     result = jobs.get_job(job.id)
@@ -202,7 +196,7 @@ async def test_sound_effect_job_downloads_audio_and_registers_in_library(monkeyp
 
 
 @pytest.mark.anyio
-async def test_semantic_mask_job_writes_mask_then_renders(monkeypatch, tmp_path, test_photo):
+async def test_semantic_mask_job_writes_mask_then_renders(tmp_path, test_photo):
     """The chain: segment -> save mask -> render with it. Asserts the mask is
     kept on disk (so a bad result can be diagnosed) and is actually passed
     through to the pipeline rather than silently dropped."""
@@ -217,15 +211,11 @@ async def test_semantic_mask_job_writes_mask_then_renders(monkeypatch, tmp_path,
 
         return _Resp()
 
-    monkeypatch.setattr(service, "call_optional_service", fake_call)
-
     seen = {}
 
     def fake_render(**kwargs):
         seen.update(kwargs)
         Path(kwargs["output_path"]).write_bytes(b"fake-video-bytes")
-
-    monkeypatch.setattr(service.pipeline, "save_cinemagraph_from_photo", fake_render)
 
     mask_path = tmp_path / "mask.png"
     output_path = tmp_path / "out.mp4"
@@ -234,6 +224,7 @@ async def test_semantic_mask_job_writes_mask_then_renders(monkeypatch, tmp_path,
         job.id, output_path, settings=settings,
         photo_path=Path(test_photo), mask_path=mask_path, mask_prompt="sky", effect=["dust"],
         library_kind="generated", library_tags=["photo", "dust"],
+        call_service=fake_call, render_fn=fake_render,
     )
 
     assert jobs.get_job(job.id).status is jobs.JobStatus.DONE
@@ -248,7 +239,7 @@ async def test_semantic_mask_job_writes_mask_then_renders(monkeypatch, tmp_path,
 
 
 @pytest.mark.anyio
-async def test_semantic_mask_job_errors_when_service_absent(monkeypatch, tmp_path, test_photo):
+async def test_semantic_mask_job_errors_when_service_absent(tmp_path, test_photo):
     """No ml_service_url configured: the job must fail cleanly, and must NOT
     fall back to rendering unmasked (that would quietly produce something
     other than what was asked for)."""
@@ -257,13 +248,11 @@ async def test_semantic_mask_job_errors_when_service_absent(monkeypatch, tmp_pat
     def fail_render(**kwargs):
         raise AssertionError("render must not run when segmentation is unavailable")
 
-    monkeypatch.setattr(service.pipeline, "save_cinemagraph_from_photo", fail_render)
-
     job = jobs.create_job()
     await service.run_photo_semantic_mask_job(
         job.id, tmp_path / "out.mp4", settings=settings,
         photo_path=Path(test_photo), mask_path=tmp_path / "mask.png",
-        mask_prompt="sky", effect=["dust"],
+        mask_prompt="sky", effect=["dust"], render_fn=fail_render,
     )
 
     result = jobs.get_job(job.id)
