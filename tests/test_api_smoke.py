@@ -78,6 +78,14 @@ def test_render_photo_then_job_status_and_download(api_client, test_photo):
     assert file_resp.status_code == 200
     assert len(file_resp.content) > 0
 
+    # The render's output is auto-catalogued in the asset library (kind="generated"),
+    # tagged by media type and requested effect(s) -- this is what makes a finished
+    # render findable again later instead of only existing as a job-scoped file.
+    library = api_client.get("/library").json()
+    assert len(library) == 1
+    assert library[0]["kind"] == "generated"
+    assert set(library[0]["tags"]) == {"photo", "dust", "ripple"}
+
 
 def test_render_video_then_job_status(api_client, test_video):
     with open(test_video, "rb") as f:
@@ -90,6 +98,11 @@ def test_render_video_then_job_status(api_client, test_video):
 
     status = api_client.get(f"/jobs/{job_id}").json()
     assert status["status"] == "done", status
+
+    library = api_client.get("/library").json()
+    assert len(library) == 1
+    assert library[0]["kind"] == "generated"
+    assert library[0]["tags"] == ["video"]
 
 
 def _hand_painted_mask_bytes(w=160, h=100):
@@ -199,6 +212,10 @@ def test_mask_preview_then_job_status_and_download(api_client, test_video):
 
     file_resp = api_client.get(f"/jobs/{job_id}/file")
     assert file_resp.status_code == 200
+
+    # A mask preview is a diagnostic aid, not an asset worth cataloging --
+    # unlike /render/photo and /render/video, it must NOT show up in the library.
+    assert api_client.get("/library").json() == []
     assert file_resp.content[:8] == b"\x89PNG\r\n\x1a\n"  # PNG magic bytes
 
 

@@ -199,10 +199,14 @@ direction below, informed by [Hydrus](https://hydrusnetwork.github.io/hydrus/faq
   space) specifically so the library works from the CLI alone, no API involved.
 - Surfaces: `cinemagraph library add|list|show|rm`, `POST/GET/DELETE /library[/...]`
   routes — both call the exact same `asset_library` functions.
-- **Not yet done**: `make`/`from-photo` and the music/sound-effect generate routes still
-  take/produce plain paths, not library references; generated outputs don't yet
-  auto-register. Natural follow-up, deliberately deferred rather than bundled into the
-  initial build.
+- **Auto-registration (2026-07-28)**: all four generate/render routes (`/render/photo`,
+  `/render/video`, `/generate/music`, `/generate/sound-effect`) register their output as
+  `kind="generated"` once the job succeeds, via an optional `library_kind` param on each
+  `server/service.py` job function. `/mask-preview` deliberately doesn't pass one — a
+  diagnostic mask preview isn't an asset worth cataloging. Registration is best-effort:
+  a library-side failure never flips an already-successful job to an error, since the
+  render/generate itself already produced a real, usable file. The CLI's `make`/
+  `from-photo` deliberately stay unwired — see the decision-log entry below for why.
 
 ### 5.2 Image generation (backend genuinely undecided)
 
@@ -419,6 +423,9 @@ Decisions already made, with reasoning — so they aren't accidentally relitigat
 | `docker-compose.override.yml` for local dev (bind-mount `./src`, `uvicorn --reload`) | Compose auto-merges override files with no extra flags, so this is zero-friction — plain `docker compose up` gets hot-reload for free. Works because `uv sync` installs the project editable by default (confirmed via the venv's own `.pth` file); the image's install already resolves imports through `/app/src`, so a live bind mount over that exact path is sufficient. Verified for real: edited `server/ui.py` on the host while the container was running, confirmed the change appeared over `GET /` within seconds with no rebuild, then reverted and confirmed the reverse. Scoped to `core` only — `machine-learning`/`sound-effects` are edited far less often and carry slow-to-rebuild dependencies |
 | `write_video`'s `.mp4` path switched from `cv2.VideoWriter` to `imageio`'s ffmpeg plugin (`libx264`/`yuv420p`) | `cv2.VideoWriter`'s H.264 encoding needs an OpenH264 DLL most `opencv-python` wheels don't ship; it silently fell back to `mp4v` (MPEG-4 Part 2) — a valid file `cv2.VideoCapture` reads back fine (why the existing round-trip tests never caught it), but browsers cannot decode for `<video>` at all, showing as a "0-second" clip in the web UI. Confirmed directly: `cv2.VideoWriter_fourcc(*"avc1"/"H264"/"x264")` all failed to open on this machine; only `"mp4v"` worked. `imageio-ffmpeg`'s bundled binary has `libx264` built in (`--enable-libx264` in its own reported build config) regardless of the host OpenCV's codec support, so this doesn't depend on what's installed on the machine running it. Verified against a real browser `<video>` element's `.duration`/`.videoWidth` properties (the exact properties that read as broken before), not just file existence |
 | New regression test checks the actual codec tag, not just "file is readable" | `tests/test_pipeline_smoke.py::test_save_cinemagraph_video_uses_browser_compatible_codec` reads back the fourcc via `cv2.VideoCapture` and asserts it's one of `{"avc1", "h264", "x264"}` — accepting all three since different OpenCV backends/versions report the same H.264 codec differently (confirmed empirically: this exact build reports `"h264"` on read-back, not the `"avc1"` ffprobe shows at the container level). Sanity-checked both directions: temporarily reverting to `codec="mpeg4"` fails the test; the real fix passes it |
+| `write_video`'s `.mp4` path uses `macro_block_size=2`, not `1` | `1` (chosen to preserve exact frame dimensions) also disables the padding libx264 needs for odd width/height, so a real 1920x1027 photo failed outright (`height not divisible by 2`) instead of the intended dimension-preserving behavior. `2` is the true minimum for `yuv420p` compatibility — pads by at most 1px only when a dimension is odd, instead of the default 16. Guarded by `test_write_video_handles_odd_dimensions` |
+| The API's four generate/render routes auto-register output in the library (`kind="generated"`); the CLI's `make`/`from-photo` deliberately don't (2026-07-28) | the API's job output lives in an easy-to-lose, UUID-named per-job directory — auto-cataloging solves a real "where did that go" problem. The CLI's output path is one the user already chose and controls, so nothing's at risk of being forgotten, and `cinemagraph library add <path>` already covers deliberate cataloging; auto-registering every CLI run would instead fill the library with draft renders from iterating on a mask/effect, not something the user asked for |
+| Library registration is best-effort, never allowed to flip a successful job to an error | the render/generate already succeeded and its file already exists by the time registration runs; a cataloging-side failure (e.g. the library's own storage location being unwritable) is a real but separate problem that shouldn't hide a working result from the caller. `service.py`'s `_register_in_library` swallows exceptions rather than letting them reach the job's own try/except |
 
 ### Placement quick-test for anything new
 

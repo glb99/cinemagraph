@@ -137,6 +137,7 @@ async def render_video(
 
     background_tasks.add_task(
         service.run_render_job, job.id, pipeline.save_cinemagraph_video, output_path,
+        library_kind="generated", library_tags=["video"],
         input_path=str(input_path), mask_path=str(mask_path) if mask_path else None,
         still_frame_index=still_frame_index, blend_frames=blend_frames, auto_trim_loop=auto_trim,
         mask_threshold=mask_threshold, feather=feather,
@@ -231,7 +232,8 @@ async def render_photo(
         background_tasks.add_task(
             service.run_photo_semantic_mask_job, job.id, output_path,
             settings=settings, photo_path=input_path, mask_path=job_dir / "mask.png",
-            mask_prompt=mask_prompt, **render_kwargs,
+            mask_prompt=mask_prompt, library_kind="generated", library_tags=["photo", *effect],
+            **render_kwargs,
         )
     else:
         mask_path = None
@@ -240,6 +242,7 @@ async def render_photo(
             await _save_upload(mask, mask_path)
         background_tasks.add_task(
             service.run_render_job, job.id, pipeline.save_cinemagraph_from_photo, output_path,
+            library_kind="generated", library_tags=["photo", *effect],
             photo_path=str(input_path), mask_path=str(mask_path) if mask_path else None,
             **render_kwargs,
         )
@@ -384,6 +387,7 @@ async def generate_music(
     background_tasks.add_task(
         service.run_music_job, job.id, output_path,
         settings=settings, prompt=prompt, lyrics=lyrics, duration=duration, thinking=thinking,
+        library_kind="generated",
     )
     return JobResponse(job_id=job.id)
 
@@ -406,6 +410,6 @@ async def generate_sound_effect(
 
     background_tasks.add_task(
         service.run_sound_effect_job, job.id, output_path,
-        settings=settings, prompt=prompt, duration=duration,
+        settings=settings, prompt=prompt, duration=duration, library_kind="generated",
     )
     return JobResponse(job_id=job.id)

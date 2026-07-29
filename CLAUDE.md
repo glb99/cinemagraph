@@ -132,9 +132,17 @@ bytes is a free no-op) with metadata in a small SQLite index (`<root>/index.sqli
 `sqlite3`, no new dependency). Root defaults to `~/.cinemagraph/library`, overridable via
 `CINEMAGRAPH_LIBRARY_DIR` — deliberately independent of `CINEMAGRAPH_DATA_DIR` (the API's ephemeral
 per-job scratch space), since the library needs to work from the CLI alone. Zero dependencies beyond
-the stdlib by design — see `docs/DESIGN.md` sec 5.1 for the placement rationale. Not yet wired into
-`make`/`from-photo` or the music/sound-effect generate routes (they still take/produce plain paths,
-not library references) — cataloging and rendering are currently separate steps.
+the stdlib by design — see `docs/DESIGN.md` sec 5.1 for the placement rationale.
+
+All four API generate/render routes (`/render/photo`, `/render/video`, `/generate/music`,
+`/generate/sound-effect`) auto-register their output as a `kind="generated"` asset once the job
+succeeds (`server/service.py`'s job functions each take an optional `library_kind`; `/mask-preview`
+deliberately doesn't pass one, since a diagnostic mask preview isn't worth cataloging). Registration
+is best-effort -- a library-side failure never flips a successful render to an error job. The CLI's
+`make`/`from-photo` are deliberately **not** wired the same way: their output path is one the user
+already chose and controls, unlike the API's easy-to-lose job-scoped directories, and
+`cinemagraph library add <path>` already covers deliberate cataloging without auto-registering every
+draft/iteration while tuning a mask or effect.
 
 ### Pipeline order
 

@@ -42,11 +42,26 @@ FastAPI's Depends() cannot inject into them -- the route resolves settings
 (where injection *does* work) and passes them through. That keeps this
 module free of any environment lookups, which is also why its tests can
 construct a Settings() directly instead of monkeypatching os.environ.
+
+Library registration: every job function below takes an optional
+`library_kind` -- when given (the four /render and /generate routes all
+pass "generated"; /mask-preview does not, since a diagnostic mask preview
+isn't an asset worth cataloging), the finished output is registered via
+asset_library.add() right after jobs.mark_done. That call is best-effort
+and deliberately never allowed to flip a job to "error": the render/generate
+itself already succeeded and its file already exists, so a cataloging
+hiccup (e.g. the library's own storage location being unwritable) is a
+real but separate failure that shouldn't hide a working result from the
+caller. Only source files (the render/generate output) are auto-registered,
+not uploaded inputs -- unlike a deliberate `cinemagraph library add`, every
+upload passing through this API is not necessarily something the user
+wants kept forever.
 """
 import asyncio
 import json
 from pathlib import Path
 
+import asset_library
 from fastapi import HTTPException
 
 from cinemagraph import pipeline
@@ -59,14 +74,28 @@ MUSIC_POLL_INTERVAL_SECONDS = 2.0
 MUSIC_POLL_MAX_ATTEMPTS = 150  # ~5 minutes total
 
 
-def run_render_job(job_id: str, render_fn, output_path: Path, **kwargs) -> None:
+def _register_in_library(output_path: Path, kind: str | None, tags: list[str] | None, provenance: dict | None) -> None:
+    if kind is None:
+        return
+    try:
+        asset_library.add(str(output_path), kind=kind, tags=tags or [], provenance=provenance)
+    except Exception:
+        pass  # cataloging is best-effort; the render/generate already succeeded
+
+
+def run_render_job(
+    job_id: str, render_fn, output_path: Path, *,
+    library_kind: str | None = None, library_tags: list[str] | None = None, **kwargs,
+) -> None:
     """Sync (threadpool) job: a purely local render, no external service."""
     jobs.mark_running(job_id)
     try:
         render_fn(output_path=str(output_path), **kwargs)
-        jobs.mark_done(job_id, output_path)
     except Exception as e:
         jobs.mark_error(job_id, str(e))
+        return
+    jobs.mark_done(job_id, output_path)
+    _register_in_library(output_path, library_kind, library_tags, provenance=None)
 
 
 async def run_photo_semantic_mask_job(
@@ -77,6 +106,8 @@ async def run_photo_semantic_mask_job(
     photo_path: Path,
     mask_path: Path,
     mask_prompt: str,
+    library_kind: str | None = None,
+    library_tags: list[str] | None = None,
     **render_kwargs,
 ) -> None:
     """Segment the photo by text prompt, then render using that mask.
@@ -109,6 +140,10 @@ async def run_photo_semantic_mask_job(
             **render_kwargs,
         )
         jobs.mark_done(job_id, output_path)
+        _register_in_library(
+            output_path, library_kind, library_tags,
+            provenance={"mask_prompt": mask_prompt, **render_kwargs},
+        )
     except HTTPException as e:
         jobs.mark_error(job_id, e.detail)
     except Exception as e:
@@ -124,6 +159,7 @@ async def run_music_job(
     lyrics: str,
     duration: float,
     thinking: bool,
+    library_kind: str | None = None,
 ) -> None:
     """Drives ACE-Step's own job-queue API to completion: create a task,
     poll until it reports success/failure, download the resulting audio.
@@ -158,6 +194,10 @@ async def run_music_job(
         audio_resp = await call_optional_service(service, "GET", result["file"], timeout=60.0)
         output_path.write_bytes(audio_resp.content)
         jobs.mark_done(job_id, output_path)
+        _register_in_library(
+            output_path, library_kind, tags=["music"],
+            provenance={"prompt": prompt, "lyrics": lyrics, "duration": duration, "thinking": thinking},
+        )
     except HTTPException as e:
         jobs.mark_error(job_id, e.detail)
     except Exception as e:
@@ -165,7 +205,8 @@ async def run_music_job(
 
 
 async def run_sound_effect_job(
-    job_id: str, output_path: Path, *, settings: Settings, prompt: str, duration: float
+    job_id: str, output_path: Path, *, settings: Settings, prompt: str, duration: float,
+    library_kind: str | None = None,
 ) -> None:
     """Unlike ACE-Step's queue, sound-effects/ answers in one synchronous
     call -- still a background job here because generation takes real time.
@@ -178,6 +219,10 @@ async def run_sound_effect_job(
         )
         output_path.write_bytes(resp.content)
         jobs.mark_done(job_id, output_path)
+        _register_in_library(
+            output_path, library_kind, tags=["sound-effect"],
+            provenance={"prompt": prompt, "duration": duration},
+        )
     except HTTPException as e:
         jobs.mark_error(job_id, e.detail)
     except Exception as e:

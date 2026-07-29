@@ -205,9 +205,11 @@ Storage location defaults to `~/.cinemagraph/library`, override with `CINEMAGRAP
 same operations are available over the API: `POST /library`, `GET /library`, `GET /library/{id}`,
 `GET /library/{id}/file`, `DELETE /library/{id}`.
 
-Not yet wired into `make`/`from-photo` — you can catalog assets today, but rendering still takes a
-plain file path, not a library reference. That's a natural next step, not a limitation of the storage
-design.
+The API's render/generate routes (`/render/photo`, `/render/video`, `/generate/music`,
+`/generate/sound-effect`) auto-register their output here once a job finishes. The CLI's
+`make`/`from-photo` deliberately don't -- their output path is one you already chose and control, so
+`library add` above is there for when you want to catalog something on purpose, without every draft
+render while tuning a mask or effect getting swept in automatically.
 
 ## Docker
 
