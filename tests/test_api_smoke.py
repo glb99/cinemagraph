@@ -49,6 +49,7 @@ def test_capabilities_without_optional_services_configured(api_client):
         "semantic_mask": False,
         "music_generation": False,
         "sound_effect_generation": False,
+        "image_generation": False,
     }
 
 
@@ -271,6 +272,19 @@ def test_generate_sound_effect_without_service_configured_reports_job_error(api_
     status = api_client.get(f"/jobs/{job_id}").json()
     assert status["status"] == "error", status
     assert "SOUND_EFFECTS_URL" in status["error"]
+
+
+def test_generate_image_without_service_configured_reports_job_error(api_client):
+    """Same shape as the other two "not configured" tests above -- proxies
+    to the local image-generation/ service (SDXL), degrading the same way
+    when IMAGE_GENERATION_URL isn't configured."""
+    resp = api_client.post("/generate/image", data={"prompt": "a lofi bedroom at sunset"})
+    assert resp.status_code == 200, resp.text
+    job_id = resp.json()["job_id"]
+
+    status = api_client.get(f"/jobs/{job_id}").json()
+    assert status["status"] == "error", status
+    assert "IMAGE_GENERATION_URL" in status["error"]
 
 
 def test_library_add_list_get_file_and_remove(api_client, test_photo):

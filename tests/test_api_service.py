@@ -196,6 +196,31 @@ async def test_sound_effect_job_downloads_audio_and_registers_in_library(tmp_pat
 
 
 @pytest.mark.anyio
+async def test_image_job_downloads_image_and_registers_in_library(tmp_path):
+    async def fake_call(svc, method, path, **kwargs):
+        class _Resp:
+            content = b"fake-png-bytes"
+
+        return _Resp()
+
+    output = tmp_path / "out.png"
+    job = jobs.create_job()
+    await service.run_image_job(
+        job.id, output, settings=Settings(image_generation_url="http://img.invalid"),
+        prompt="a lofi bedroom at sunset", library_kind="generated", call_service=fake_call,
+    )
+
+    result = jobs.get_job(job.id)
+    assert result.status is jobs.JobStatus.DONE, result.error
+    assert output.read_bytes() == b"fake-png-bytes"
+
+    [asset] = asset_library.list_assets()
+    assert asset.kind == "generated"
+    assert asset.tags == ["image"]
+    assert asset.provenance == {"prompt": "a lofi bedroom at sunset"}
+
+
+@pytest.mark.anyio
 async def test_semantic_mask_job_writes_mask_then_renders(tmp_path, test_photo):
     """The chain: segment -> save mask -> render with it. Asserts the mask is
     kept on disk (so a bad result can be diagnosed) and is actually passed

@@ -17,6 +17,7 @@ class CapabilitiesResponse(BaseModel):
     semantic_mask: bool
     music_generation: bool
     sound_effect_generation: bool
+    image_generation: bool
 
 
 class AssetResponse(BaseModel):

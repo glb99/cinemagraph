@@ -56,6 +56,7 @@ class Settings(BaseSettings):
     ml_service_url: str | None = None
     acestep_url: str | None = None
     sound_effects_url: str | None = None
+    image_generation_url: str | None = None
 
     @field_validator("data_dir")
     @classmethod
@@ -76,6 +77,10 @@ class Settings(BaseSettings):
     @property
     def sound_effect_service(self) -> OptionalService:
         return OptionalService(self.sound_effects_url, "Sound effect generation", "SOUND_EFFECTS_URL")
+
+    @property
+    def image_generation_service(self) -> OptionalService:
+        return OptionalService(self.image_generation_url, "Image generation", "IMAGE_GENERATION_URL")
 
 
 @lru_cache

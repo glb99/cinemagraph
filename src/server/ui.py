@@ -3,16 +3,17 @@ step, no separate static-file packaging concerns (see the api-to-server move
 in docs/DESIGN.md's decision log for why non-.py assets are a real footgun
 here -- this sidesteps that entirely by being plain Python source).
 
-Five tabs: photo rendering, video rendering, music generation, sound-effect
-generation, and a library browser. Photo/video/library are always available;
-music and sound effects are feature-gated on GET /capabilities, same signal
-the rest of the system already uses to degrade gracefully when an optional
-service isn't running -- their tab buttons are hidden entirely rather than
-shown-disabled, matching how mask_prompt was already hidden in the original
-photo-only version of this page. Per-effect override flags (--rain-count etc.
-on the CLI) and video's grade fine-tuning knobs are intentionally left out of
-every form here, same as the original photo tab -- this is a thin client
-covering the common path, not full parity with every CLI flag.
+Six tabs: photo rendering, video rendering, music generation, sound-effect
+generation, image generation, and a library browser. Photo/video/library are
+always available; music, sound effects, and image generation are feature-gated
+on GET /capabilities, same signal the rest of the system already uses to
+degrade gracefully when an optional service isn't running -- their tab buttons
+are hidden entirely rather than shown-disabled, matching how mask_prompt was
+already hidden in the original photo-only version of this page. Per-effect
+override flags (--rain-count etc. on the CLI) and video's grade fine-tuning
+knobs are intentionally left out of every form here, same as the original
+photo tab -- this is a thin client covering the common path, not full parity
+with every CLI flag.
 
 The library tab lists whatever /render and /generate have auto-registered
 (see service.py's library_kind wiring) via GET /library, with client-side
@@ -55,7 +56,7 @@ INDEX_HTML = """<!doctype html>
   nav button.active { color: #e8e8e8; border-bottom-color: #3a6ff0; }
   .status { margin-top: 1rem; font-size: 0.9rem; color: #aaa; }
   .error { color: #ff6b6b; white-space: pre-wrap; }
-  video, audio { max-width: 100%; margin-top: 1rem; border-radius: 8px; }
+  video, audio, img.preview { max-width: 100%; margin-top: 1rem; border-radius: 8px; }
   .row { margin-bottom: 0.6rem; }
   .hint { color: #888; font-size: 0.8rem; }
   .tab { display: none; }
@@ -177,6 +178,22 @@ the underlying routes don't already do themselves.</p>
 <audio id="sfx-preview" controls style="display:none"></audio>
 </section>
 
+<!-- Image -->
+<section class="tab" id="tab-image">
+<form id="image-form">
+  <div class="row">
+    <label style="display:block">Prompt
+      <input type="text" id="image-prompt" placeholder='e.g. "a lofi bedroom at sunset, warm light"'>
+    </label>
+  </div>
+  <div class="row"></div>
+  <button type="submit">Generate</button>
+</form>
+<div class="status" id="image-status"></div>
+<div class="error" id="image-error"></div>
+<img id="image-preview" class="preview" style="display:none">
+</section>
+
 <!-- Library -->
 <section class="tab" id="tab-library">
 <div class="library-toolbar">
@@ -201,6 +218,7 @@ const TABS = [
   { id: "video", label: "Video", always: true },
   { id: "music", label: "Music", capability: "music_generation" },
   { id: "sfx", label: "Sound effects", capability: "sound_effect_generation" },
+  { id: "image", label: "Image", capability: "image_generation" },
   { id: "library", label: "Library", always: true },
 ];
 
@@ -491,6 +509,21 @@ wireForm("sfx-form", {
     const form = new FormData();
     form.append("prompt", prompt);
     form.append("duration", document.getElementById("sfx-duration").value);
+    return form;
+  },
+});
+
+wireForm("image-form", {
+  endpoint: "/generate/image",
+  statusId: "image-status", errorId: "image-error", previewId: "image-preview",
+  buildForm: () => {
+    const prompt = document.getElementById("image-prompt").value.trim();
+    if (!prompt) {
+      document.getElementById("image-error").textContent = "Prompt is required.";
+      return null;
+    }
+    const form = new FormData();
+    form.append("prompt", prompt);
     return form;
   },
 });

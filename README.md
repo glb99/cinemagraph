@@ -159,7 +159,7 @@ immediately (renders run in the background); `GET /jobs/{job_id}` polls status, 
 downloads the result once done. `GET /effects` lists available effects, `GET /capabilities` reports
 optional features. No auth — this is meant for local/personal use, not as a hosted service.
 
-Three routes proxy to optional external services, all degrading to a clean `503` (never a `500`, never
+Four routes proxy to optional external services, all degrading to a clean `503` (never a `500`, never
 blocking startup) whenever the service isn't configured or isn't reachable:
 
 - **`POST /mask/semantic`** — semantic masking (`image`, `prompt` form fields) via
@@ -187,6 +187,14 @@ blocking startup) whenever the service isn't configured or isn't reachable:
   `pyproject.toml`/`Dockerfile`, isolated from the core's dependencies — see that directory's README).
   Configure with `SOUND_EFFECTS_URL`; `docker compose --profile audio up sound-effects` runs it
   locally. Validated end-to-end against a real GPU — see `docs/experiments/`.
+- **`POST /generate/image`** — image generation (`prompt` form field) via `image-generation/`, a
+  small FastAPI wrapper around Stable Diffusion XL that ships with this repo (own
+  `pyproject.toml`/`Dockerfile`, isolated from the core's dependencies — see that directory's
+  README). Configure with `IMAGE_GENERATION_URL`; `docker compose --profile image up
+  image-generation` runs it locally. Validated end-to-end against a real GPU — see
+  `docs/experiments/`. A hosted API (Gemini's native image models) was tried first and reverted
+  (new Google AI Studio accounts require a non-refundable minimum prepay to use it at all) — same
+  place has the full account.
 
 ## Reference library
 
@@ -222,12 +230,13 @@ asset library (`CINEMAGRAPH_LIBRARY_DIR=/data/library`, pointed at a subdirector
 without this, the library defaults to a path inside the container's own throwaway filesystem, so it'd
 survive a `restart` but be silently wiped by `docker compose down` + `up`, defeating the point of a
 *persistent* library). The image only ever includes the `server` extra (opencv/numpy/click/fastapi) —
-never `torch`/`transformers`, which live only in the optional, separately-built `sound-effects` and
-`machine-learning` services:
+never `torch`/`transformers`, which live only in the optional, separately-built `sound-effects`,
+`machine-learning`, and `image-generation` services:
 
 ```bash
 docker compose --profile audio up      # core + sound-effects (Stable Audio Open)
 docker compose --profile ml up         # core + machine-learning (CLIPSeg)
+docker compose --profile image up      # core + image-generation (Stable Diffusion XL)
 ```
 
 `acestep` (ACE-Step's own published image) is also declared in `docker-compose.yml`, commented out

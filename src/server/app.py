@@ -43,6 +43,12 @@ every request:
   is synchronous (one request, one response with the finished audio), but
   it still runs as a background job since generation genuinely takes tens of
   seconds to minutes and the caller shouldn't hold the connection open.
+- /generate/image proxies to the image-generation/ service (IMAGE_GENERATION_URL,
+  local SDXL) -- same synchronous-call shape as /generate/sound-effect. A
+  hosted API (Gemini's native image models) was tried first and reverted:
+  new Google AI Studio accounts require a non-refundable minimum prepay to
+  use it at all, found only by actually trying to generate an image. See
+  docs/experiments/ for the full account.
 """
 import shutil
 import tempfile
@@ -96,6 +102,7 @@ async def capabilities(settings: SettingsDep):
         semantic_mask=await service_available(settings.semantic_mask_service),
         music_generation=await service_available(settings.music_service),
         sound_effect_generation=await service_available(settings.sound_effect_service),
+        image_generation=await service_available(settings.image_generation_service),
     )
 
 
@@ -411,5 +418,27 @@ async def generate_sound_effect(
     background_tasks.add_task(
         service.run_sound_effect_job, job.id, output_path,
         settings=settings, prompt=prompt, duration=duration, library_kind="generated",
+    )
+    return JobResponse(job_id=job.id)
+
+
+@app.post("/generate/image", response_model=JobResponse)
+async def generate_image(
+    background_tasks: BackgroundTasks,
+    settings: SettingsDep,
+    prompt: str = Form(...),
+):
+    """Proxies to the image-generation/ service (local SDXL). Same shape as
+    /generate/sound-effect -- synchronous remote call, still run as a
+    background job since generation takes real time and shouldn't hold the
+    HTTP connection open.
+    """
+    job = jobs.create_job()
+    job_dir = _job_dir(settings, job.id)
+    output_path = job_dir / "output.png"
+
+    background_tasks.add_task(
+        service.run_image_job, job.id, output_path,
+        settings=settings, prompt=prompt, library_kind="generated",
     )
     return JobResponse(job_id=job.id)

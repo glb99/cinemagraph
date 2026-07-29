@@ -202,19 +202,20 @@ special-casing the packaging config further.
 - **`ui.py`** — `INDEX_HTML`, a single self-contained page (inline CSS/JS, no build step, no
   static-file mount) served by `GET /`. Deliberately a plain Python string, not a static asset:
   non-`.py` files need explicit `package-data` config to survive a real build, exactly the class
-  of bug the `api/`→`src/api/` move above already caught once. Five tabs — Photo, Video, Library
-  (always shown), Music, Sound effects (each of the latter two hidden entirely, not shown-disabled,
-  unless `GET /capabilities` reports the matching flag true, same pattern `mask_prompt` already
-  used) — sharing one `pollJob()`/`wireForm()` implementation, since every `/render/*`/`/generate/*`
-  route returns the same `{job_id}` shape. The Library tab lists whatever those routes have
-  auto-registered (client-side kind/tag filtering over `GET /library`), with a preview element
-  chosen by file extension (img/video/audio/download-link) and delete via `DELETE /library/{id}`.
-  `asset.original_filename`/`asset.tags` are user-supplied (an upload's own name, or free-text tags
-  from a manual `library add`), so that card is built via `createElement`/`textContent` throughout,
-  never `innerHTML`, to rule out markup injection. Photo, Video, and Library verified against a live
-  server (including a real render's output showing up in the Library tab with a playable preview);
-  Music/Sound effects have forms wired to their routes but not exercised against a live backend from
-  the UI itself yet.
+  of bug the `api/`→`src/api/` move above already caught once. Six tabs — Photo, Video, Library
+  (always shown), Music, Sound effects, Image (each of the latter three hidden entirely, not
+  shown-disabled, unless `GET /capabilities` reports the matching flag true, same pattern
+  `mask_prompt` already used) — sharing one `pollJob()`/`wireForm()` implementation, since every
+  `/render/*`/`/generate/*` route returns the same `{job_id}` shape. The Library tab lists whatever
+  those routes have auto-registered (client-side kind/tag filtering over `GET /library`), with a
+  preview element chosen by file extension (img/video/audio/download-link) and delete via
+  `DELETE /library/{id}`. `asset.original_filename`/`asset.tags` are user-supplied (an upload's own
+  name, or free-text tags from a manual `library add`), so that card is built via
+  `createElement`/`textContent` throughout, never `innerHTML`, to rule out markup injection. Photo,
+  Video, Library, Sound effects, and Image are all verified against a live server (including a real
+  render/generation's output showing up in its own tab with a genuinely loaded preview, and in the
+  Library tab); Music has a form wired to its route but hasn't been exercised against a live ACE-Step
+  instance from the UI itself yet.
 - **`config.py`** — `Settings(BaseSettings)` (from `pydantic-settings`) plus `get_settings()`
   (`@lru_cache`, injected into routes via `Annotated[Settings, Depends(get_settings)]`), replacing
   three inconsistent ways this package used to read `os.environ` (a module-level constant frozen
@@ -284,8 +285,17 @@ Three more routes are optional-external-service seams, all using `_external_serv
   minutes) and the HTTP connection shouldn't be held open for it. Validated end-to-end against a real
   GPU (both the service standalone and the full chain through this API) — see
   `docs/experiments/2026-07-27-audio-model-serving-research.md`.
+- **`POST /generate/image`** — proxies to `image-generation/`, a small FastAPI service **this
+  project owns and built** wrapping Stable Diffusion XL (`diffusers`) — same shape as
+  `/generate/sound-effect` in every respect (env var `IMAGE_GENERATION_URL`, single synchronous
+  `POST /generate` call, still run as a background job here for the same reason). A hosted API
+  (Gemini's native image models) was built first and fully reverted: new Google AI Studio accounts
+  require a non-refundable minimum prepay to use it at all, found only by actually trying to
+  generate an image. See `docs/experiments/2026-07-29-image-generation-backend-choice.md` for the
+  full account of both attempts, and why local SDXL specifically (VRAM/quality tradeoffs checked
+  against current data, not assumed).
 
-All three routes read their env var **at request time**, never at startup, so the API always starts
+All four routes read their env var **at request time**, never at startup, so the API always starts
 cleanly and simply reports the feature as unavailable (`503` from the `POST` route, `false` from
 `GET /capabilities`) when that service isn't configured or isn't reachable — never a `500` or a
 failed startup.

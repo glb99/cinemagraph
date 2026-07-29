@@ -147,15 +147,18 @@ that may be deleted next week is waste.
 ```
 cinemagraph-tool/
 ├── src/
-│   ├── cinemagraph/           # the stable core: pipeline, effects registry, mask, grade, loop, io, library
+│   ├── cinemagraph/           # the stable core: pipeline, effects registry, mask, grade, loop, io
+│   ├── asset_library/         # content-addressed local library, its own top-level package
 │   └── server/                # FastAPI door: app.py (routes) + service.py (workflows) +
-│                               #   config.py (Settings/DI) + ui.py (GET / thin web UI: 4 tabs);
+│                               #   config.py (Settings/DI) + ui.py (GET / thin web UI: 6 tabs);
 │                               #   sibling package to cinemagraph, same distribution, no own pyproject
 ├── machine-learning/          # isolated service: CLIPSeg semantic masking (validated)
-├── tests/                     # 64 tests: contracts, invariants, smoke (core + API + library)
+├── sound-effects/             # isolated service: Stable Audio Open (validated)
+├── image-generation/          # isolated service: Stable Diffusion XL (validated)
+├── tests/                     # 72 tests: contracts, invariants, smoke (core + API + library)
 ├── scripts/golden_check.py    # pixel-regression check, separate from pytest (see sec 6)
 ├── docs/experiments/          # lab notebook, one file per experiment
-├── Dockerfile + docker-compose.yml   # core image (never torch); ML service gated off
+├── Dockerfile + docker-compose.yml   # core image (never torch); satellite services gated off
 └── pyproject.toml             # uv-managed; extra: server; dep-group: dev
 ```
 
@@ -163,17 +166,19 @@ This package was originally a top-level `api/` directory, then moved into `src/`
 package discovery never actually included it in a real build otherwise), then renamed from
 `api` to `server` (matching Immich's convention; "api" described only the one protocol it
 happens to speak, not what the package actually does — orchestrate rendering, music, sound
-effects, and masking behind whatever door reaches it). Both moves are in the decision log below.
+effects, image generation, and masking behind whatever door reaches it). Both moves are in
+the decision log below.
 
 Key properties already in place: 9 combinable procedural effects (tone/particle families,
 perfect loops by construction), auto + hand-painted masking, lofi grade, arbitrary-length
 looped output, full CLI/API parity (mask upload, per-effect overrides, `loop_duration`, a
 `/mask-preview` route — see §5.5), graceful degradation when any optional service is absent
-(`/capabilities`, 503s), a
-persistent content-addressed reference library (§5.1 — implemented; not yet wired into
-`make`/`from-photo`), and three optional external services behind that degradation seam:
-`sound-effects/` (Stable Audio Open, validated end-to-end), `machine-learning/` (CLIPSeg,
-validated end-to-end), and a client to ACE-Step's own server (music generation, only the
+(`/capabilities`, 503s), a persistent content-addressed asset library (§5.1 — implemented and
+wired into all four generate/render routes; deliberately not wired into the CLI's
+`make`/`from-photo`, see the decision log), and four optional satellite services behind that
+degradation seam: `sound-effects/` (Stable Audio Open, validated end-to-end),
+`machine-learning/` (CLIPSeg, validated end-to-end), `image-generation/` (Stable Diffusion
+XL, validated end-to-end), and a client to ACE-Step's own server (music generation, only the
 absent-service path proven).
 
 ## 5. Feature roadmap (unordered — this is a lab, not a backlog)
@@ -208,14 +213,34 @@ direction below, informed by [Hydrus](https://hydrusnetwork.github.io/hydrus/faq
   render/generate itself already produced a real, usable file. The CLI's `make`/
   `from-photo` deliberately stay unwired — see the decision-log entry below for why.
 
-### 5.2 Image generation (backend genuinely undecided)
+### 5.2 Image generation (`image-generation/`) — IMPLEMENTED, validated
 
-Per §3.1/3.2: new sibling `generation/` (NOT inside `src/cinemagraph/` — generating an
-input is outside the core's conceptual boundary), one function
-`generate_image(prompt) -> bytes`, first implementation = whichever external API is
-cheapest to stand up. A local-model backend, if ever chosen, becomes an isolated service
-(own pyproject, own container — same tier as `machine-learning/`, possibly a separate
-sibling given diffusion's much larger resource profile than segmentation).
+Two backends were tried, in order, before landing here -- see
+`docs/experiments/2026-07-29-image-generation-backend-choice.md` for the full account:
+
+1. **Gemini's native image models** (a hosted API, the "cheapest to stand up" option this
+   section originally called for) -- built end-to-end (a `generation/` package calling
+   `google-genai`'s Interactions API), then reverted at the last step: new Google AI Studio
+   accounts require a non-refundable minimum prepay (currently $10) to make any paid API
+   call at all, discovered only by actually trying to generate an image against a real key.
+   Imagen (the other Gemini-family image API) was rejected earlier in the same session for
+   an unrelated reason: those models are being shut down 2026-08-17.
+2. **Local Stable Diffusion XL**, per this section's own original fallback plan: an
+   isolated service (own `pyproject.toml`/`Dockerfile`, same tier as `machine-learning/`/
+   `sound-effects/`), `diffusers`, GPU passthrough from the start. Chosen over other local
+   options (Flux, PixArt-Sigma) after checking current (2026) VRAM/quality data: SDXL is the
+   best fit for an 8GB GPU (~7GB used natively, no quantization needed), at the cost of a
+   real quality gap against frontier hosted models -- accepted given the billing friction on
+   the hosted route.
+
+`image-generation/` follows the exact shape `sound-effects/` established: `POST /generate
+{"prompt": ...} -> image/png bytes`, `GET /health`, eager model load at startup. Wired into
+`cinemagraph-tool`'s own API the same way as `/generate/sound-effect`
+(`IMAGE_GENERATION_URL`, `call_optional_service`, a background job). Validated end-to-end
+against a real GPU (RTX 4060): both the service standalone and the full chain through
+`POST /generate/image` → job polling → file download → the web UI's Image tab, with the
+actual `<img>` element confirmed loaded (`complete: true`, correct 1024x1024 dimensions) and
+the result correctly catalogued in the library with its prompt as provenance.
 
 ### 5.3 Semantic masking (`machine-learning/`) — IMPLEMENTED, validated
 
@@ -434,8 +459,9 @@ Decisions already made, with reasoning — so they aren't accidentally relitigat
 | `sound-effects` compose entry gained a GPU `deploy:` block and `HF_TOKEN=${HF_TOKEN}` (2026-07-29) | found by actually running `docker compose --profile audio up`, not by reading the code: the GPU passthrough was missing despite the service's own comment inviting one, and `stabilityai/stable-audio-open-1.0` turned out to be a *gated* HF model, failing with a 401 with no token configured at all -- neither had ever been exercised through Docker before. `HF_TOKEN` is substituted from a local `.env` (gitignored, Compose auto-loads it) rather than hardcoded, so the token is never committed |
 | `sound-effects/app.py` writes WAV via the stdlib `wave` module instead of `torchaudio.save` | a real request against a real GPU reached the save step and failed: recent `torchaudio` delegates WAV encoding to an optional `torchcodec` backend, which itself needs system-level FFmpeg shared libraries the image doesn't have (`libavutil.so.56: cannot open shared object file`). Chasing that further (apt packages, matching FFmpeg versions to what `torchcodec` was built against) was real dependency-whack-a-mole for a feature the generation logic itself doesn't need. WAV is simple enough not to need a library at all -- convert the output tensor to int16 PCM and write it directly. Verified the actual output, not just that the request returned 200: parsed the resulting file with `wave` (stereo, 44.1kHz, exactly the requested duration) and checked the raw samples weren't silence (full dynamic range, 95% non-zero) |
 | `numpy` deliberately left unpinned in `sound-effects/pyproject.toml` despite being imported directly in `app.py` | adding an explicit `numpy>=1.26.0,<3` produced a real `pip` `ResolutionImpossible`: `stable-audio-tools`'s own dependency chain (`laion-clap`) pins an exact `numpy==1.23.5`, and a second, looser constraint on top was unsatisfiable. `numpy` was already guaranteed present transitively via `torch`/`stable-audio-tools`, so the explicit pin added a real conflict for zero benefit |
-
-### Placement quick-test for anything new
+| Image generation built against Gemini's native image models first, then fully reverted in favor of local SDXL (2026-07-29) | Researched current (2026) pricing/quality before choosing: hosted frontier models (Imagen 4, Gemini's "Nano Banana") are rated meaningfully ahead of local SDXL on photorealism, and per-image cost (~$0.03-0.07) looked trivial for personal use. Built a `generation/` package against `google-genai`'s Interactions API (`client.aio.interactions.create`, not `generate_content` -- verified this directly via SDK introspection after two doc-summary fetches gave inconsistent/partially-hallucinated answers about the API shape). The integration was code-complete and passed all mocked tests, but a real request against a real key failed with a 429: new Google AI Studio accounts require a non-refundable minimum $10 prepay before any paid call succeeds at all -- a policy effective 2026-03-23, discoverable only by actually trying to generate an image, not from any pricing page read beforehand. Vertex AI (standard GCP postpaid billing, no forced prepay) was identified as a workaround but needs a GCP project/billing account and a different auth flow (service credentials, not a bare API key) -- more setup than the user wanted to take on. Reverted to this section's own originally-planned fallback: local SDXL, an isolated service. The entire `generation/` package, `GEMINI_API_KEY` config, and `google-genai` dependency were removed, not just disabled -- half of a false start left in place is worse than a clean revert. See `docs/experiments/2026-07-29-image-generation-backend-choice.md` for the full account of both attempts |
+| `image-generation/`'s `POST /generate` returns `image/png`, chosen over the `image/jpeg`-only quirk hit with the Gemini attempt | that constraint was specific to Gemini's Interactions API (`response_format.mime_type` rejected `'image/png'` outright, confirmed via a real 400 response) -- it doesn't apply to a local `diffusers` pipeline, which has no such restriction and outputs a `PIL.Image` that can be saved as PNG directly, avoiding jpeg's lossy compression for no reason once the constraint that required it was gone |
+| `image-generation/` loads `madebyollin/sdxl-vae-fp16-fix` instead of SDXL's own bundled VAE, plus `enable_vae_slicing()` | found via a real crash from real use, not assumed: the diffusion loop completed (30/30 steps) but decoding the final latents into pixels failed with `CUDA error: out of memory`. Root cause: SDXL's own VAE is NaN-unstable in fp16, so `diffusers` silently upcasts it to float32 to compensate -- doubling the VAE's memory footprint at exactly the moment it decodes a full 1024x1024 image, on an 8GB card already using most of its VRAM for the UNet+text encoders. The fp16-fix VAE is numerically stable in fp16 and never needs that upcast. Slicing is a free, independent second safety margin on top. Re-verified against the exact prompt/settings that had OOM'd before -- succeeded cleanly afterward |
 
 1. *Would this make sense if the API didn't exist?* No → `src/server/`. Yes → continue.
 2. *Does the core need it to animate an image/video?* No → sibling directory (under `src/` if it's

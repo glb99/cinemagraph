@@ -61,6 +61,13 @@ honest, refactor-safe seam than patching a module attribute (monkeypatch
 has to guess the exact name a call site looked up, which silently breaks
 if an import is ever restructured; an injected parameter can't).
 
+run_image_job follows the exact same shape as run_sound_effect_job --
+proxies to a local, self-hosted service (image-generation/, SDXL) over
+call_optional_service, degrading the same way the others do when
+IMAGE_GENERATION_URL isn't configured or the service isn't reachable. A
+hosted API (Gemini's native image models) was tried first; see this
+function's own docstring for why that was reverted.
+
 Library registration: every job function below takes an optional
 `library_kind` -- when given (the four /render and /generate routes all
 pass "generated"; /mask-preview does not, since a diagnostic mask preview
@@ -244,6 +251,38 @@ async def run_sound_effect_job(
         _register_in_library(
             output_path, library_kind, tags=["sound-effect"],
             provenance={"prompt": prompt, "duration": duration},
+        )
+    except HTTPException as e:
+        jobs.mark_error(job_id, e.detail)
+    except Exception as e:
+        jobs.mark_error(job_id, str(e))
+
+
+async def run_image_job(
+    job_id: str, output_path: Path, *, settings: Settings, prompt: str,
+    library_kind: str | None = None,
+    call_service=call_optional_service,
+) -> None:
+    """Proxies to the image-generation/ service (local SDXL). Same shape as
+    run_sound_effect_job -- a hosted API (Gemini's native image models) was
+    tried first and reverted: new Google AI Studio accounts require a
+    non-refundable minimum prepay to use it at all, discovered only by
+    actually trying to generate an image, not from reading pricing docs.
+    Local SDXL avoids that entirely, at the cost of a quality gap against
+    frontier hosted models -- an accepted tradeoff given the billing friction.
+    See docs/experiments/ for the full account of both attempts.
+    """
+    jobs.mark_running(job_id)
+    try:
+        resp = await call_service(
+            settings.image_generation_service, "POST", "/generate",
+            json={"prompt": prompt}, timeout=120.0,
+        )
+        output_path.write_bytes(resp.content)
+        jobs.mark_done(job_id, output_path)
+        _register_in_library(
+            output_path, library_kind, tags=["image"],
+            provenance={"prompt": prompt},
         )
     except HTTPException as e:
         jobs.mark_error(job_id, e.detail)
