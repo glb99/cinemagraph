@@ -1,26 +1,40 @@
-# Auto-merged by `docker compose up` -- no extra flags needed. This is the
-# local dev workflow: bind-mount ./src over the image's baked-in copy and
-# run uvicorn with --reload, so editing server/*.py (including ui.py) or
-# cinemagraph/*.py on the host is picked up without rebuilding the image.
+# Auto-merged by `docker compose up`/`watch` -- no extra flags needed beyond
+# the `--watch` flag itself (or the standalone `docker compose watch` command).
+# This is Docker Compose's own officially documented live-development
+# mechanism (docs.docker.com/compose/how-tos/file-watch/), replacing an
+# earlier bind-mount + `uvicorn --reload` setup that had a real, observed
+# failure mode: `uvicorn --reload`'s file-watcher (`watchfiles`, a Rust
+# extension) runs *inside* the same container process as the app, and it
+# crashed with `Cannot allocate memory` under the memory pressure of a real
+# render, taking the whole server down with it, not just the reload
+# mechanism. Compose Watch's own file-watching runs on the host, via the
+# Compose CLI itself -- never inside the container -- so there's no
+# in-container watcher process left to crash under render-induced memory
+# pressure. See docs/experiments/2026-07-28-docker-dev-reload.md's
+# follow-up sections for both incidents and how each was found/fixed.
 #
-# This works because `uv sync` installs the project *editable* by default
-# (confirmed via .venv's own .pth file, which just points back at src/) --
-# the image's install already resolves imports through /app/src at import
-# time, so overlaying that exact path with a live bind mount is enough;
-# nothing about the install itself needs to change.
+# sync+restart re-copies changed files into /app/src and restarts the `core`
+# container so uvicorn picks them up -- this replaces both the old bind
+# mount (sync already gets files in) and the manual `docker compose restart
+# core` step (the restart is now automatic). rebuild re-builds the image
+# when a dependency file changes, same as the manual `docker compose build
+# core` this project has always needed for that case, just no longer
+# something to remember by hand.
+#
+# .dockerignore's patterns (__pycache__/, *.pyc, etc.) apply automatically
+# to `ignore` here too -- Compose loads them as implicit ignore content.
 #
 # Only covers the `core` service. machine-learning/ and sound-effects/ are
 # edited far less often and carry heavy, slow-to-rebuild dependencies
 # (torch et al.) -- add an equivalent block there too if that changes.
-#
-# Only source changes hot-reload. A dependency change (pyproject.toml/
-# uv.lock) still needs `docker compose build core`.
 services:
   core:
-    volumes:
-      - ./src:/app/src
-    command: [
-      "uvicorn", "server.app:app",
-      "--host", "0.0.0.0", "--port", "8000",
-      "--reload", "--reload-dir", "/app/src"
-    ]
+    develop:
+      watch:
+        - action: sync+restart
+          path: ./src
+          target: /app/src
+        - action: rebuild
+          path: ./pyproject.toml
+        - action: rebuild
+          path: ./uv.lock

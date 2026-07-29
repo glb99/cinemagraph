@@ -134,6 +134,13 @@ bytes is a free no-op) with metadata in a small SQLite index (`<root>/index.sqli
 per-job scratch space), since the library needs to work from the CLI alone. Zero dependencies beyond
 the stdlib by design — see `docs/DESIGN.md` sec 5.1 for the placement rationale.
 
+In `docker-compose.yml`, `CINEMAGRAPH_LIBRARY_DIR` is explicitly set to `/data/library` (a
+subdirectory of the already host-mounted `/data`) -- without it, the default path resolves inside
+the container's own throwaway filesystem (the container runs as root, so `~` is `/root`), which
+survives a plain `restart` but is silently wiped by `docker compose down` + `up`, directly
+contradicting this module's own "survives restarts" design intent. Found by testing the actual
+sequence (add an asset, `down`, `up`, check `GET /library`), not assumed.
+
 All four API generate/render routes (`/render/photo`, `/render/video`, `/generate/music`,
 `/generate/sound-effect`) auto-register their output as a `kind="generated"` asset once the job
 succeeds (`server/service.py`'s job functions each take an optional `library_kind`; `/mask-preview`

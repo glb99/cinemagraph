@@ -217,9 +217,13 @@ render while tuning a mask or effect getting swept in automatically.
 docker compose up
 ```
 
-Builds and runs the API on `localhost:8000`, with `./data` mounted for job input/output. The image
-only ever includes the `server` extra (opencv/numpy/click/fastapi) — never `torch`/`transformers`, which
-live only in the optional, separately-built `sound-effects` and `machine-learning` services:
+Builds and runs the API on `localhost:8000`, with `./data` mounted for job input/output *and* for the
+asset library (`CINEMAGRAPH_LIBRARY_DIR=/data/library`, pointed at a subdirectory of the same mount --
+without this, the library defaults to a path inside the container's own throwaway filesystem, so it'd
+survive a `restart` but be silently wiped by `docker compose down` + `up`, defeating the point of a
+*persistent* library). The image only ever includes the `server` extra (opencv/numpy/click/fastapi) —
+never `torch`/`transformers`, which live only in the optional, separately-built `sound-effects` and
+`machine-learning` services:
 
 ```bash
 docker compose --profile audio up      # core + sound-effects (Stable Audio Open)
@@ -235,23 +239,49 @@ The CLI works the same way inside the container, overriding the default command:
 docker run --rm -v "$(pwd)/data:/data" cinemagraph-tool cinemagraph from-photo /data/photo.jpg /data/out.mp4 --effect smoke
 ```
 
-### Local dev: auto-reload
+### Live development: Compose Watch
 
-`docker-compose.override.yml` is picked up automatically by plain `docker compose up` — no extra
-flags. It bind-mounts `./src` over the image's baked-in copy and runs `uvicorn --reload`, so editing
-`server/*.py` or `cinemagraph/*.py` on the host is picked up immediately, without rebuilding the
-image. This works because `uv sync` installs the project *editable* by default (confirmed via the
-venv's own `.pth` file, which just points at `src/` — same thing that makes local dev work without
-Docker at all), so the image's install already resolves imports through `/app/src` at import time;
-overlaying that exact path with a live bind mount is enough. Verified for real: started the
-container, edited `server/ui.py`'s `<h1>` on the host while it was running, and confirmed
-(`WARNING: WatchFiles detected changes... Reloading`) the change appeared over `GET /` within a
-couple seconds, no rebuild — then reverted and confirmed the same in the other direction.
+```bash
+docker compose up --watch core
+```
 
-Only source changes hot-reload this way; a dependency change (`pyproject.toml`/`uv.lock`) still
-needs `docker compose build core`. Also only covers `core` — `machine-learning`/`sound-effects`
-carry heavy, slow-to-rebuild dependencies and are edited far less often; add an equivalent
-`volumes`/`command` override there too if that changes.
+Use `up --watch`, not the standalone `docker compose watch core` — that command only prints
+sync/rebuild status messages, not the container's own application logs (a known, documented Compose
+limitation, confirmed against a real `docker/compose` GitHub issue and reproduced directly: the
+container was clearly handling requests, but `docker compose watch` alone showed nothing from it).
+`up --watch` gets the identical auto-sync/auto-restart behavior while also attaching and streaming
+the container's logs, exactly like plain `docker compose up`.
+
+Docker Compose's own officially documented live-development mechanism
+(docs.docker.com/compose/how-tos/file-watch/), configured in `docker-compose.override.yml`. Editing
+anything under `src/` automatically syncs the change into the running container and restarts it —
+no manual rebuild, no manual restart. Editing `pyproject.toml`/`uv.lock` automatically rebuilds the
+image instead, since a dependency change can't take effect without one.
+
+Two earlier approaches were tried and reverted before landing here — both are recorded in
+`docs/experiments/2026-07-28-docker-dev-reload.md`:
+
+1. A bind mount + `uvicorn --reload`. Reverted after a real crash: `--reload`'s file-watcher
+   (`watchfiles`, a Rust extension) runs *inside* the container's own process, and it crashed with
+   `Cannot allocate memory` under the memory pressure of a real render, taking the whole server down
+   with it — discovered through actual use, not testing.
+2. A bind mount with `--reload` removed (source edits needed a manual `docker compose restart core`).
+   Safe, but manual.
+
+Compose Watch supersedes both: its file-watching runs on the **host**, via the Compose CLI itself,
+never inside the container — so there's no in-container watcher process left to crash under
+render-induced memory pressure, while still getting fully automatic reload. Verified directly:
+reproduced the exact scenario that crashed the old `--reload` setup (rendering a large real photo
+while watching container memory climb to 3.7GB+) with `docker compose watch` running, and the
+container stayed healthy throughout with no restart, no crash, no `WatchfilesRustInternalError`.
+Also verified a plain source edit (`server/ui.py`'s `<title>`) auto-synced and auto-restarted with
+no command needed beyond the edit itself. (That crash-reproduction and the auto-sync check were run
+against the standalone `docker compose watch` command; `up --watch` uses the identical underlying
+watch mechanism, just with logs attached, so the same crash-avoidance applies -- confirmed separately
+that `up --watch` does attach and stream logs correctly.)
+
+Only covers `core` — `machine-learning`/`sound-effects` carry heavy, slow-to-rebuild dependencies and
+are edited far less often; add an equivalent `develop.watch` block there too if that changes.
 
 ## Architecture
 

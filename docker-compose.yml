@@ -7,6 +7,15 @@ services:
       - ./data:/data
     environment:
       - CINEMAGRAPH_DATA_DIR=/data
+      # Without this, the asset library defaults to ~/.cinemagraph/library inside
+      # the container's own filesystem -- nowhere host-mounted -- so it survives a
+      # `restart` but is silently wiped by `docker compose down` + `up` (container
+      # removed and recreated), defeating the whole point of a *persistent* library.
+      # Pointing it at a subdirectory of the already-mounted /data fixes that with
+      # no new volume needed. Independent of CINEMAGRAPH_DATA_DIR at the code level
+      # (see server/config.py) -- this just happens to put both under the same
+      # host-mounted folder in this one deployment.
+      - CINEMAGRAPH_LIBRARY_DIR=/data/library
       # Uncomment once you're running the machine-learning service (below):
       # - ML_SERVICE_URL=http://machine-learning:8004
       # Uncomment once you're running the acestep service (below):
