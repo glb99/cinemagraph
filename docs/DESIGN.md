@@ -251,6 +251,32 @@ internal, in-process event step (job-lifecycle events like `started`/`progress`/
 `completed` with multiple in-process subscribers) is the right-sized version of "eventing"
 if that need ever arises before a real broker is justified -- still no new infrastructure.
 
+**If that internal event step is ever built: a router (dispatch-by-type to every
+registered subscriber), not a Chain of Responsibility.** COR is built for exclusivity --
+an event moves through an ordered chain and processing stops once one handler claims it.
+That's the wrong shape for job-lifecycle events specifically, because the whole reason
+this idea exists is the opposite: several independent consumers (library registration,
+live UI progress, a future notification system) all reacting to the *same* event, none
+aware of each other. A chain would mean whichever handler runs first can silently
+prevent the others from ever firing -- exactly the failure mode this is meant to avoid.
+A router -- look up every subscriber registered for an event's type, call all of them,
+no early exit, no ordering dependency between them -- is fan-out by construction:
+
+```python
+# server/events.py (not started -- only if/when the deferred need above actually arises)
+_SUBSCRIBERS: dict[str, list[Callable[[Event], None]]] = {}
+
+def subscribe(event_type: str, handler: Callable[[Event], None]) -> None: ...
+def emit(event: Event) -> None:
+    for handler in _SUBSCRIBERS.get(event.type, []):
+        handler(event)
+```
+
+Same registry shape as `effects/base.py` (§3.3) and the generation-adapter registry
+(above) once more -- job-lifecycle subscribers are genuine peers under §3.3's own bar
+(same call shape, `handle(event) -> None`, always available), which is exactly the
+condition that justifies a registry over ad hoc branching or a sequential chain.
+
 ## 4. Current state (implemented)
 
 ```
