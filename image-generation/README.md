@@ -87,6 +87,21 @@ bulletproof -- occasional `CUDA out of memory` on an img2img request, or on a re
 after one, is a known, accepted limitation of running this specific feature on an 8GB card,
 not a bug to keep chasing. See `docs/experiments/2026-07-30-image-to-image-generation.md`.
 
+## `/generate` runs in a worker thread, not the event loop
+
+Found via a real, separate bug while investigating why `core`'s `GET /capabilities` unreliably
+reported this service as unavailable even when it was healthy: this endpoint used to call the
+SDXL pipeline directly inside `async def generate(...)`, a synchronous CPU/GPU-bound call with no
+`await` -- blocking this entire process's event loop, including its own `/health`, for the whole
+duration of a generation. The same bug class already found in ACE-Step's own code (see
+`docs/experiments/2026-07-29-music-generation-live-verification.md`). Fixed with
+`asyncio.to_thread` (offloads the actual pipeline call to a worker thread) plus an
+`asyncio.Lock()` around the whole generate step (still serializes actual GPU access -- this
+card can't run two generations at once anyway, per the VRAM note above -- `to_thread` alone would
+let concurrent requests launch truly parallel threads both hitting the GPU). Verified directly:
+`/health` now responds in single-digit milliseconds even while a real generation is in flight.
+See `docs/experiments/2026-07-30-image-to-image-generation.md`'s follow-up section.
+
 ## Validated
 
 Manually, end-to-end, against a real GPU (RTX 4060): both the service standalone (`POST /generate`

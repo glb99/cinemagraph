@@ -133,9 +133,45 @@ This bug predates this session's img2img changes -- `/capabilities`, `service_av
 `capabilities()` route were not touched by any of this work. It matters practically because
 `/capabilities` gating is what makes the web UI's Image tab appear at all, so even though the
 underlying `POST /generate/image` chain works when reachable, the UI's own visibility signal for
-it may currently be unreliable. Explicitly not chased further this session, per the project
-owner's own call -- flagged here for a future session with a clearer head, rather than guessing
-further right now.
+it may currently be unreliable. Explicitly not chased further in that pass, per the project
+owner's own call -- flagged for a future session with a clearer head, rather than guessing
+further right then.
+
+## Follow-up (same day): `/capabilities` root-caused and fixed
+
+Returned to this with the "clearer head" the open issue asked for, and found the real cause on
+the first new lead: `image-generation/app.py`'s `POST /generate` was `async def`, but the actual
+SDXL call inside it (`_get_pipe()(...)`/`_get_img2img_pipe()(...)`) was a plain synchronous,
+CPU/GPU-bound call -- no `await`, no `asyncio.to_thread`. That blocks the *entire* single-worker
+uvicorn process for the whole duration of a generation (seconds to minutes), including its own
+`/health` endpoint. **The exact same class of bug already found and documented in ACE-Step's own
+`ensure_models_initialized`** (`docs/experiments/2026-07-29-music-generation-live-verification.md`,
+also summarized in `CLAUDE.md`) -- this file had it too, just never noticed until
+`/capabilities`'s own flakiness led back to it.
+
+Confirmed directly before touching any code: started a generation, and *while it was still
+running*, called `image-generation`'s own `GET /health` from a separate connection -- it returned
+nothing for 3+ seconds (a normal call takes single-digit milliseconds). This is also why the
+earlier investigation's direct-script reproductions always returned `True`: those scripts ran
+when nothing else was generating, so there was nothing to block on -- the bug only manifests when
+`/capabilities` is checked while a generation (mine, or a real user's, via the UI) happens to be
+in flight on the same service.
+
+**Fix:** wrapped the actual pipeline call in `await asyncio.to_thread(...)`, offloading it to a
+worker thread so the event loop stays free to answer `/health` (and everything else) during
+generation. Added an explicit `asyncio.Lock()` around the whole generate-and-clear-cache block
+too -- `to_thread` alone would let concurrent requests launch truly parallel threads both hitting
+this GPU's already-tight VRAM budget at once, which the existing VRAM investigation above already
+showed this card can't handle; the lock preserves the same "one generation at a time" behavior
+the accidental blocking used to provide, just without blocking `/health` as a side effect.
+
+Verified directly: `/health` responded in 5-9ms, twice, while a real 57-second generation ran
+concurrently in the background thread. `GET /capabilities` then reported `image_generation: true`
+reliably across 5 consecutive checks (previously inconsistent/wrong). Confirmed no regression on
+either generation mode afterward: a plain text-to-image request and an img2img request (fresh
+container restart, matching the "best-effort, sometimes OOMs on a busy card" behavior already
+documented and accepted above -- unchanged by this fix, since the lock still serializes GPU access
+the same way) both produced valid output.
 
 ## Verdict
 
@@ -146,6 +182,8 @@ further right now.
   call instability) -- accepted as best-effort under heavy use per the project owner's explicit
   decision, not left silently broken.
 - [x] Found and fixed a real process mistake (forgot to rebuild `core` after editing its source).
-- [ ] Open, unresolved: `core`'s `/capabilities` unreliably reports `image_generation: false` for
-  a demonstrably healthy service, root cause not found despite substantial investigation. Left as
-  a flagged, documented open issue rather than guessed at further.
+- [x] Root-caused and fixed the `/capabilities` flakiness (same day, follow-up pass):
+  `image-generation/app.py`'s `/generate` blocked its own event loop during generation -- the
+  same bug class already documented for ACE-Step, just not yet found here. Fixed with
+  `asyncio.to_thread` + a lock; verified `/health` stays responsive during generation and
+  `/capabilities` now reports correctly, with no regression to either generation mode.

@@ -446,12 +446,18 @@ the reference, unlike text-to-image) is tight enough to OOM even with shared wei
 with three changes (lazy pipeline construction instead of eager, `torch.cuda.empty_cache()` after
 every request, `enable_attention_slicing()`) -- verified working end to end, but still best-effort
 under heavy/rapid use on this card, an accepted tradeoff rather than something still being chased.
-Also found and left as an **open, unresolved issue**: `GET /capabilities` intermittently reports
-`image_generation: false` even when the service is confirmed healthy and reachable -- root cause
-not found despite substantial investigation (ruled out stale builds, DNS staleness, proxy env
-vars, general resource exhaustion); the same underlying function reliably returns the correct
-result when called directly, only the live HTTP route gets it wrong. Predates this session's
-img2img work. See the experiment log for the full investigation.
+Also found, then root-caused and fixed the same day: `GET /capabilities` intermittently reported
+`image_generation: false` even when the service was confirmed healthy and reachable. Cause:
+`image-generation/app.py`'s `POST /generate` was `async def` but called the SDXL pipeline
+synchronously with no `await`/`asyncio.to_thread` -- blocking its entire single-worker process,
+including its own `/health`, for the whole duration of a generation. The same bug class already
+documented for ACE-Step (`docs/experiments/2026-07-29-music-generation-live-verification.md`,
+also summarized in `CLAUDE.md`) -- this file had it too. Fixed with `asyncio.to_thread` + an
+`asyncio.Lock()` (the lock preserves "one generation at a time," which this card's tight VRAM
+budget already required; `to_thread` alone would have let concurrent requests race on the GPU).
+Verified `/health` stays responsive during generation and `/capabilities` reports correctly
+across repeated checks, with no regression to either generation mode. See the experiment log for
+the full investigation and fix.
 
 ### 5.3 Semantic masking (`machine-learning/`) — IMPLEMENTED, validated
 
@@ -475,9 +481,21 @@ and `docs/experiments/2026-07-27-audio-model-serving-research.md`.
 ### 5.4 Effect realism improvements
 
 Known gaps, no ML required: perspective-aware ripple (amplitude/wavelength scaling with
-depth), true advection for smoke/vapor (translation, not in-place brightness modulation),
-flow direction derived from mask shape. Pure `effects/` work; the registry means each is
-an isolated change.
+depth), true advection for smoke/vapor (translation, not in-place brightness modulation) --
+**done, 2026-07-30** -- flow direction derived from mask shape. Pure `effects/` work; the
+registry means each is an isolated change.
+
+**Smoke/vapor advection (2026-07-30):** `clouds.py`'s `smoke`/`vapor` effects only ever
+modulated brightness in place (`base + cloud_layer * opacity`) -- no pixel actually moved, unlike
+`ripple.py`'s `cv2.remap`-based water displacement. Added a second, independent low-frequency
+displacement field that warps the base image via the same `cv2.remap` technique before the
+existing brightness layer is composited on top -- own random phase/frequency/rate (via the
+existing `cycles_for`/`rng` helpers, preserving the loop-closure invariant the same way every
+other effect does) so drift direction doesn't track the brightness texture 1:1. Verified beyond
+"tests still pass": rendered a real clip and visually confirmed a sharp edge in the source photo
+visibly shifts position frame to frame (stacked zoomed crops of the same edge across 7 frames),
+not just changes brightness. `tests/`/`golden_check.py` both unaffected (smoke/vapor aren't in
+the golden set).
 
 ### 5.5 API/CLI parity — DONE; thin web UI — photo + video rendering
 

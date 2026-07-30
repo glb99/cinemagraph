@@ -56,6 +56,7 @@ second, independent safety margin (decodes one image at a time from the
 batch rather than all at once -- a no-op for this service's batch size of
 1, but free and correct to leave on in case that ever changes).
 """
+import asyncio
 import io
 
 import torch
@@ -72,6 +73,12 @@ app = FastAPI(title="image-generation service")
 
 _pipe = None
 _img2img_pipe = None
+# Serializes actual GPU generation calls -- this card can't run two at once
+# anyway (see the VRAM notes above), and asyncio.to_thread alone would let
+# concurrent requests launch truly parallel threads both hitting the GPU,
+# which is worse than the accidental serialization the blocking-call bug
+# below used to provide as an (unintended) side effect.
+_generation_lock = asyncio.Lock()
 
 
 def _get_pipe():
@@ -127,6 +134,30 @@ async def health():
     return {"status": "ok", "device": DEVICE}
 
 
+def _run_txt2img(prompt, negative_prompt, steps, guidance_scale, width, height, generator):
+    return _get_pipe()(
+        prompt=prompt,
+        negative_prompt=negative_prompt or None,
+        num_inference_steps=steps,
+        guidance_scale=guidance_scale,
+        width=width,
+        height=height,
+        generator=generator,
+    ).images[0]
+
+
+def _run_img2img(prompt, negative_prompt, image, strength, steps, guidance_scale, generator):
+    return _get_img2img_pipe()(
+        prompt=prompt,
+        negative_prompt=negative_prompt or None,
+        image=image,
+        strength=strength,
+        num_inference_steps=steps,
+        guidance_scale=guidance_scale,
+        generator=generator,
+    ).images[0]
+
+
 @app.post("/generate")
 async def generate(
     prompt: str = Form(...),
@@ -139,44 +170,58 @@ async def generate(
     image: UploadFile | None = File(None),
     strength: float = Form(0.6),  # img2img only: 0=stay close to reference, 1=ignore it
 ):
+    """Found via a real bug, not assumed correct: this used to call the SDXL
+    pipeline directly, synchronously, inside this async def -- a purely
+    CPU/GPU-bound call with no await, blocking this entire process's event
+    loop for the whole duration of a generation (seconds to tens of seconds).
+    That meant /health couldn't be answered either, during that whole
+    window -- confirmed directly (curl /health while a generate call was in
+    flight returned nothing for 3+ seconds) -- which explains why core's own
+    /capabilities check would intermittently time out and report
+    image_generation: false for a demonstrably-otherwise-healthy service.
+    The exact same class of bug already found and documented in ACE-Step's
+    own ensure_models_initialized (docs/DESIGN.md sec 3.7) -- this file had
+    it too, just never noticed until /capabilities' own flakiness led back
+    to it. asyncio.to_thread offloads the actual pipeline call to a worker
+    thread, freeing this process's event loop to keep answering /health (and
+    any other request) while generation runs. _generation_lock still
+    serializes the *actual* GPU work -- to_thread alone would let concurrent
+    requests launch truly parallel threads both hitting this GPU's already
+    tight VRAM budget at once, which is strictly worse than one at a time.
+    """
     generator = torch.Generator(device=DEVICE).manual_seed(seed) if seed != -1 else None
 
-    if image is not None:
-        # img2img: output dimensions follow the reference image, not width/height
-        # (which don't apply to this pipeline -- the diffusion process starts
-        # from a noised version of the reference instead of pure noise).
-        reference = Image.open(io.BytesIO(await image.read())).convert("RGB")
-        result = _get_img2img_pipe()(
-            prompt=prompt,
-            negative_prompt=negative_prompt or None,
-            image=reference,
-            strength=strength,
-            num_inference_steps=steps,
-            guidance_scale=guidance_scale,
-            generator=generator,
-        ).images[0]
-    else:
-        result = _get_pipe()(
-            prompt=prompt,
-            negative_prompt=negative_prompt or None,
-            num_inference_steps=steps,
-            guidance_scale=guidance_scale,
-            width=width,
-            height=height,
-            generator=generator,
-        ).images[0]
+    async with _generation_lock:
+        if image is not None:
+            # img2img: output dimensions follow the reference image, not
+            # width/height (which don't apply to this pipeline -- the
+            # diffusion process starts from a noised version of the
+            # reference instead of pure noise).
+            reference = Image.open(io.BytesIO(await image.read())).convert("RGB")
+            result = await asyncio.to_thread(
+                _run_img2img, prompt, negative_prompt, reference, strength,
+                steps, guidance_scale, generator,
+            )
+        else:
+            result = await asyncio.to_thread(
+                _run_txt2img, prompt, negative_prompt, steps, guidance_scale,
+                width, height, generator,
+            )
 
-    if DEVICE == "cuda":
-        # Found necessary via a real OOM: a second img2img call failed even
-        # though the first one succeeded, on a GPU this tight -- PyTorch's
-        # CUDA caching allocator holds freed-but-not-released memory between
-        # calls, and can fragment enough after a shape/pipeline switch (first
-        # txt2img, then a differently-shaped img2img call) that a later
-        # allocation fails even with "enough" total free memory reported.
-        # Emptying the cache after every request keeps that from compounding
-        # across calls -- a small, fixed cost every time, not a proportional
-        # one to the problem it prevents.
-        torch.cuda.empty_cache()
+        if DEVICE == "cuda":
+            # Found necessary via a real OOM: a second img2img call failed
+            # even though the first one succeeded, on a GPU this tight --
+            # PyTorch's CUDA caching allocator holds freed-but-not-released
+            # memory between calls, and can fragment enough after a
+            # shape/pipeline switch (first txt2img, then a differently-shaped
+            # img2img call) that a later allocation fails even with "enough"
+            # total free memory reported. Emptying the cache after every
+            # request keeps that from compounding across calls -- a small,
+            # fixed cost every time, not a proportional one to the problem it
+            # prevents. Kept inside the lock: releasing the lock before this
+            # runs would let the next request's own generation start
+            # allocating while this cache-clear is still in flight.
+            torch.cuda.empty_cache()
 
     buf = io.BytesIO()
     result.save(buf, format="PNG")
