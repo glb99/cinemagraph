@@ -57,8 +57,10 @@ technology sits behind a small, stable seam:
 
 - `POST /segment` (HTTP) is the seam for semantic masking — the core neither knows nor
   cares whether CLIPSeg or something else answers it.
-- `generate_image(prompt) -> bytes` will be the seam for image generation — Gemini today,
-  a local model tomorrow, callers unchanged.
+- `POST /generate` (HTTP, to `image-generation/`) is the seam for image generation — SDXL
+  today (Gemini was tried and reverted, see §5.2/§7); §3.6 plans to make this a registered,
+  swappable adapter behind a stable `ImageGenerator` port, rather than the one hardcoded
+  shape `run_image_job` currently depends on.
 - `Effect(precompute, apply)` is the seam for motion effects — a new effect (or an
   ML-backed one) is one `register()` call.
 
