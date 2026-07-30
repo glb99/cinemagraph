@@ -189,6 +189,42 @@ dependency-injection shape `call_service=call_optional_service`/`render_fn=` par
 already use elsewhere in this file (see the decision log) -- one level of abstraction
 higher (a whole capability, not one bare function), not a new pattern.
 
+**A registry, not a single reference -- user-selectable per request, not just
+swappable at deploy time.** The goal isn't only "point `run_image_job` at a different
+adapter by changing one line of code" -- it's letting *several* adapters for the same
+capability coexist, local and external-provider alike, with the caller picking which one
+to use per request. That's exactly `effects/base.py`'s registry pattern (§3.3) applied to
+generation backends instead of motion effects, and it satisfies §3.3's "genuine peers"
+bar once behind the `ImageGenerator` port: every registered adapter answers the same
+call shape (`generate(prompt, **kwargs) -> bytes`), regardless of whether it's a
+self-hosted container needing a GPU or a hosted API needing a key:
+
+```python
+# server/generation_registry.py (new) -- same shape as effects/base.py's _REGISTRY
+_IMAGE_GENERATORS: dict[str, ImageGenerator] = {}
+
+def register_image_generator(name: str, adapter: ImageGenerator) -> None: ...
+def get_image_generator(name: str) -> ImageGenerator: ...
+def available_image_generators() -> tuple[str, ...]: ...
+```
+
+`POST /generate/image` gains an optional `model` field (which registered adapter to use,
+defaulting to whichever is configured as primary); `GET /capabilities` (or a small
+sibling route) exposes `available_image_generators()` so the web UI can build a
+model-selector dropdown *dynamically* -- present only when more than one adapter is
+actually registered, exactly mirroring how a capability's whole tab is hidden today
+when it isn't configured at all (same "don't show a choice that isn't real" instinct,
+one level more granular). No UI/API change needed the day only one adapter exists; the
+dropdown appears the day a second one is registered, without touching `run_image_job`
+again.
+
+**Not started now, on purpose:** per the decision above, only `SDXLAdapter` gets
+registered for image generation for the time being -- this section documents the
+*mechanism* (registry + per-request model selection), not a commitment to stand up a
+second concrete adapter (e.g. Gemini) yet. That stays deferred until a real second
+backend is actually worth having, matching §3.3's own bar and the earlier billing-wall
+lesson from `docs/experiments/`.
+
 **Scope note:** this lives in `server/`, not `cinemagraph/` -- it's the orchestrator's own
 job-routing logic, not part of "animate an existing image/video" (§3.2's scope test).
 No new dependency-tier is needed either: it's thin interface/adapter Python, the same
@@ -470,12 +506,21 @@ See §3.6 for the full design and rationale. In short: `run_image_job`/`run_musi
 `run_sound_effect_job` each hardcode their one backend's exact request/response shape
 today, rather than depending on a stable per-capability interface a concrete adapter
 implements — a real gap against this project's own §3.1 seam principle. Start with image
-generation (`ImageGenerator` port, `SDXLAdapter` as its first implementation, wrapping the
-existing `call_optional_service` call unchanged) — the one capability that's already
-lived through a real backend swap (Gemini → SDXL) and paid the "rewrite the job function"
-cost §3.6 aims to remove. Music and sound-effect generation follow the same shape once
-image generation proves the pattern out. No new infrastructure — a message/event broker
-between services is a related but separate, deliberately deferred idea (§3.6, §6).
+generation (`ImageGenerator` port + a registry, `SDXLAdapter` as its first and — for
+now — only registered implementation, wrapping the existing `call_optional_service` call
+unchanged) — the one capability that's already lived through a real backend swap
+(Gemini → SDXL) and paid the "rewrite the job function" cost §3.6 aims to remove.
+
+The registry is deliberately built for *more than deploy-time swapping*: the end goal is
+a UI organized by capability where, if more than one adapter is ever registered for it
+(local and external-provider models both welcome), the user picks which one to generate
+with per request — not a mechanism this project is standing up a second concrete adapter
+for yet (only `SDXLAdapter` gets registered for now; see §3.6's "not started now, on
+purpose" note), just the shape that makes adding one later a registration, not a rewrite.
+
+Music and sound-effect generation follow the same shape once image generation proves the
+pattern out. No new infrastructure — a message/event broker between services is a
+related but separate, deliberately deferred idea (§3.6, §6).
 
 ## 6. Laboratory tooling — what earns its place and what doesn't
 
