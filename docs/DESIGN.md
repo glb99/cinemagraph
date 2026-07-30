@@ -279,7 +279,7 @@ Same registry shape as `effects/base.py` (§3.3) and the generation-adapter regi
 (same call shape, `handle(event) -> None`, always available), which is exactly the
 condition that justifies a registry over ad hoc branching or a sequential chain.
 
-### 3.7 Post-deployment integration tests (not yet done)
+### 3.7 Post-deployment integration tests (implemented for music generation, see §5.9)
 
 Every real bug this project has ever found in a satellite service or ACE-Step integration
 (the WSL2 checkpoint-mount hang, the `/query_result` timeout, the `ACESTEP_INIT_SERVICE`/
@@ -345,7 +345,9 @@ cinemagraph-tool/
 ├── machine-learning/          # isolated service: CLIPSeg semantic masking (validated)
 ├── sound-effects/             # isolated service: Stable Audio Open (validated)
 ├── image-generation/          # isolated service: Stable Diffusion XL (validated)
-├── tests/                     # 72 tests: contracts, invariants, smoke (core + API + library)
+├── tests/                     # 73 tests: contracts, invariants, smoke (core + API + library);
+│                               #   tests/integration/ adds 2 more, excluded from the default
+│                               #   run (needs a live deployed stack -- see sec 3.7/5.9)
 ├── scripts/golden_check.py    # pixel-regression check, separate from pytest (see sec 6)
 ├── docs/experiments/          # lab notebook, one file per experiment
 ├── Dockerfile + docker-compose.yml   # core image (never torch); satellite services gated off
@@ -603,18 +605,34 @@ Music and sound-effect generation follow the same shape once image generation pr
 pattern out. No new infrastructure — a message/event broker between services is a
 related but separate, deliberately deferred idea (§3.6, §6).
 
-### 5.9 Post-deployment integration tests (not started)
+### 5.9 Post-deployment integration tests (`tests/integration/`) — IMPLEMENTED, music first
 
 See §3.7 for the full design and rationale. In short: every real bug this project has
 found in a satellite/ACE-Step integration so far was caught by manually driving a live
 deployed stack, one `docs/experiments/` entry at a time — this formalizes that as a real,
 repeatable `pytest -m integration` suite, run from outside the compose stack against its
 already-published host ports (no dedicated test container, matching how
-[Immich](https://github.com/immich-app/immich)'s own `e2e/` suite works). Start with music
-generation (the integration that's actually had real bugs slip through repeatedly this
-session), not all six capabilities at once — same sequencing discipline as §5.8. Not part
-of CI: needs a live GPU, takes real minutes, and outputs are generative/non-deterministic,
-so it stays a deliberately-run local suite for now.
+[Immich](https://github.com/immich-app/immich)'s own `e2e/` suite works).
+
+Built exactly as designed: `tests/integration/test_music_live.py`, `@pytest.mark.integration`
+(registered in `pyproject.toml`, `addopts = "-m 'not integration'"` keeps it out of the
+default `uv run pytest` run — confirmed both ways, `73 passed, 2 deselected` by default,
+`2 skipped` when run explicitly with no live stack up), an autouse fixture skipping via
+`GET /capabilities` when `music_generation` isn't configured rather than failing. Two
+tests: the plain happy path, and `instrumental=true` with lyrics text deliberately
+included to prove it gets overridden (the same real-world check done by hand in
+`docs/experiments/2026-07-29-music-generation-live-verification.md`, now automated).
+Output is validated for shape/validity (ID3 tag present, byte size tracking the
+requested duration at ACE-Step's known 128kbps CBR output), not asserted bit-exact —
+this is generative output, not `golden_check.py`'s deterministic pipeline. Both tests
+run and passed against a real deployed stack (`docker compose --profile audio up -d
+acestep core`, fully eager-loaded) in ~87s total.
+
+Sound-effect and image generation follow the same shape once there's a concrete reason
+to (a regression in one of them, or the port/registry work in §5.8 landing) — not built
+speculatively ahead of that, same sequencing discipline as §5.8 itself. Not part of CI:
+needs a live GPU, takes real minutes, and outputs are generative/non-deterministic, so it
+stays a deliberately-run local suite for now.
 
 ## 6. Laboratory tooling — what earns its place and what doesn't
 

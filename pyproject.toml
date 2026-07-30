@@ -35,3 +35,7 @@ where = ["src"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = [
+    "integration: requires a live deployed stack (docker compose up) and, for most cases, a real GPU-backed service. Excluded from the default run -- see docs/DESIGN.md sec 3.7.",
+]
+addopts = "-m 'not integration'"

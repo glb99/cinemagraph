@@ -139,6 +139,18 @@ uv run python scripts/golden_check.py --bless     # (re)generate the blessed fra
 
 See `docs/DESIGN.md` for why this is a separate script rather than a pytest test.
 
+`tests/integration/` is a third category: real requests against an already-deployed,
+live stack (a real GPU, real generation, real minutes), not synthetic fixtures. Excluded
+from the plain `uv run pytest` above; run it explicitly once the stack is up:
+
+```bash
+docker compose --profile audio up -d acestep core
+uv run pytest -m integration
+```
+
+Currently covers music generation only. See `docs/DESIGN.md` sec 3.7/5.9 for why these
+exist, why there's no dedicated test container, and why they aren't part of CI.
+
 ## API and web UI
 
 A minimal local HTTP API (FastAPI) wraps the same rendering code, for a UI or scripted use without
