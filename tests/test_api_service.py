@@ -259,6 +259,43 @@ async def test_image_job_downloads_image_and_registers_in_library(tmp_path):
 
 
 @pytest.mark.anyio
+async def test_image_job_with_reference_image_sends_multipart_with_strength(tmp_path):
+    """reference_image_path switches the request to img2img mode: the file's
+    bytes go as a multipart `files=` upload alongside `strength`, matching
+    image-generation/app.py's own contract (an optional `image` upload +
+    `strength`, everything else as plain form fields -- not JSON, since JSON
+    can't carry a file upload cleanly)."""
+    reference = tmp_path / "reference.png"
+    reference.write_bytes(b"fake-reference-image-bytes")
+    captured = {}
+
+    async def fake_call(svc, method, path, **kwargs):
+        captured["data"] = kwargs["data"]
+        captured["files"] = kwargs["files"]
+
+        class _Resp:
+            content = b"fake-png-bytes"
+
+        return _Resp()
+
+    output = tmp_path / "out.png"
+    job = jobs.create_job()
+    await service.run_image_job(
+        job.id, output, settings=Settings(image_generation_url="http://img.invalid"),
+        prompt="a lofi bedroom at sunset", reference_image_path=reference, strength=0.4,
+        library_kind="generated", call_service=fake_call,
+    )
+
+    result = jobs.get_job(job.id)
+    assert result.status is jobs.JobStatus.DONE, result.error
+    assert captured["data"] == {"prompt": "a lofi bedroom at sunset", "strength": 0.4}
+    assert captured["files"]["image"] == ("reference.png", b"fake-reference-image-bytes")
+
+    [asset] = asset_library.list_assets()
+    assert asset.provenance == {"prompt": "a lofi bedroom at sunset", "strength": 0.4}
+
+
+@pytest.mark.anyio
 async def test_semantic_mask_job_writes_mask_then_renders(tmp_path, test_photo):
     """The chain: segment -> save mask -> render with it. Asserts the mask is
     kept on disk (so a bad result can be diagnosed) and is actually passed

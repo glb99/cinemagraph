@@ -48,7 +48,10 @@ every request:
   hosted API (Gemini's native image models) was tried first and reverted:
   new Google AI Studio accounts require a non-refundable minimum prepay to
   use it at all, found only by actually trying to generate an image. See
-  docs/experiments/ for the full account.
+  docs/experiments/ for the full account. Accepts an optional
+  `reference_image` upload (img2img: generate conditioned on a reference
+  photo instead of pure text) plus `strength` (how far the result may
+  deviate from it) -- see run_image_job's own docstring.
 """
 import shutil
 import tempfile
@@ -432,18 +435,32 @@ async def generate_image(
     background_tasks: BackgroundTasks,
     settings: SettingsDep,
     prompt: str = Form(...),
+    reference_image: UploadFile | None = File(None),
+    strength: float = Form(0.6),
 ):
     """Proxies to the image-generation/ service (local SDXL). Same shape as
     /generate/sound-effect -- synchronous remote call, still run as a
     background job since generation takes real time and shouldn't hold the
     HTTP connection open.
+
+    `reference_image` is optional (img2img mode -- see run_image_job's own
+    docstring); `strength` only matters when it's supplied. Saved to the job
+    directory before scheduling the background task, same as /render/photo's
+    mask upload -- the UploadFile itself doesn't survive past this request.
     """
     job = jobs.create_job()
     job_dir = _job_dir(settings, job.id)
     output_path = job_dir / "output.png"
 
+    reference_image_path = None
+    if reference_image is not None:
+        reference_image_path = job_dir / (reference_image.filename or "reference.png")
+        await _save_upload(reference_image, reference_image_path)
+
     background_tasks.add_task(
         service.run_image_job, job.id, output_path,
-        settings=settings, prompt=prompt, library_kind="generated",
+        settings=settings, prompt=prompt,
+        reference_image_path=reference_image_path, strength=strength,
+        library_kind="generated",
     )
     return JobResponse(job_id=job.id)

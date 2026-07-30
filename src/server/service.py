@@ -287,6 +287,8 @@ async def run_sound_effect_job(
 
 async def run_image_job(
     job_id: str, output_path: Path, *, settings: Settings, prompt: str,
+    reference_image_path: Path | None = None,
+    strength: float = 0.6,
     library_kind: str | None = None,
     call_service=call_optional_service,
 ) -> None:
@@ -298,18 +300,35 @@ async def run_image_job(
     Local SDXL avoids that entirely, at the cost of a quality gap against
     frontier hosted models -- an accepted tradeoff given the billing friction.
     See docs/experiments/ for the full account of both attempts.
+
+    `reference_image_path`, when given, switches the service into img2img
+    mode (StableDiffusionXLImg2ImgPipeline.from_pipe, sharing the same loaded
+    weights -- see image-generation/app.py). `strength` (0=stay close to the
+    reference, 1=ignore it) is only meaningful in that mode; the request
+    always goes as multipart/form-data now (not JSON), matching the
+    service's own contract, since a plain JSON body can't carry an uploaded
+    file cleanly.
     """
     jobs.mark_running(job_id)
     try:
+        data = {"prompt": prompt}
+        files = None
+        if reference_image_path is not None:
+            data["strength"] = strength
+            files = {"image": (reference_image_path.name, reference_image_path.read_bytes())}
+
         resp = await call_service(
             settings.image_generation_service, "POST", "/generate",
-            json={"prompt": prompt}, timeout=120.0,
+            data=data, files=files, timeout=120.0,
         )
         output_path.write_bytes(resp.content)
         jobs.mark_done(job_id, output_path)
+        provenance = {"prompt": prompt}
+        if reference_image_path is not None:
+            provenance["strength"] = strength
         _register_in_library(
             output_path, library_kind, tags=["image"],
-            provenance={"prompt": prompt},
+            provenance=provenance,
         )
     except HTTPException as e:
         jobs.mark_error(job_id, e.detail)

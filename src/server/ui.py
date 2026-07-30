@@ -187,6 +187,12 @@ the underlying routes don't already do themselves.</p>
       <input type="text" id="image-prompt" placeholder='e.g. "a lofi bedroom at sunset, warm light"'>
     </label>
   </div>
+  <div class="row">
+    <label style="display:block">Reference image (optional -- guides the result instead of starting from noise)
+      <input type="file" id="image-reference" accept="image/*">
+    </label>
+  </div>
+  <label>Strength <input type="number" id="image-strength" value="0.6" min="0" max="1" step="0.05"></label>
   <div class="row"></div>
   <button type="submit">Generate</button>
 </form>
@@ -526,6 +532,11 @@ wireForm("image-form", {
     }
     const form = new FormData();
     form.append("prompt", prompt);
+    const referenceFile = document.getElementById("image-reference").files[0];
+    if (referenceFile) {
+      form.append("reference_image", referenceFile);
+      form.append("strength", document.getElementById("image-strength").value);
+    }
     return form;
   },
 });

@@ -208,14 +208,17 @@ blocking startup) whenever the service isn't configured or isn't reachable:
   `pyproject.toml`/`Dockerfile`, isolated from the core's dependencies — see that directory's README).
   Configure with `SOUND_EFFECTS_URL`; `docker compose --profile audio up sound-effects` runs it
   locally. Validated end-to-end against a real GPU — see `docs/experiments/`.
-- **`POST /generate/image`** — image generation (`prompt` form field) via `image-generation/`, a
-  small FastAPI wrapper around Stable Diffusion XL that ships with this repo (own
+- **`POST /generate/image`** — image generation (`prompt` form field, plus optional
+  `reference_image` upload + `strength` for img2img) via `image-generation/`, a small FastAPI
+  wrapper around Stable Diffusion XL that ships with this repo (own
   `pyproject.toml`/`Dockerfile`, isolated from the core's dependencies — see that directory's
   README). Configure with `IMAGE_GENERATION_URL`; `docker compose --profile image up
   image-generation` runs it locally. Validated end-to-end against a real GPU — see
   `docs/experiments/`. A hosted API (Gemini's native image models) was tried first and reverted
   (new Google AI Studio accounts require a non-refundable minimum prepay to use it at all) — same
-  place has the full account.
+  place has the full account. img2img is best-effort on this project's 8GB GPU (a real, accepted
+  VRAM tradeoff — see `image-generation/README.md`), and `GET /capabilities` has a known,
+  unresolved issue occasionally under-reporting `image_generation` for this service.
 
 ## Reference library
 

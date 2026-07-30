@@ -429,14 +429,29 @@ Two backends were tried, in order, before landing here -- see
    real quality gap against frontier hosted models -- accepted given the billing friction on
    the hosted route.
 
-`image-generation/` follows the exact shape `sound-effects/` established: `POST /generate
-{"prompt": ...} -> image/png bytes`, `GET /health`, eager model load at startup. Wired into
+`image-generation/` follows the exact shape `sound-effects/` established: `POST /generate`
+(multipart/form-data), `GET /health`, eager text-to-image model load at startup. Wired into
 `cinemagraph-tool`'s own API the same way as `/generate/sound-effect`
 (`IMAGE_GENERATION_URL`, `call_optional_service`, a background job). Validated end-to-end
 against a real GPU (RTX 4060): both the service standalone and the full chain through
 `POST /generate/image` → job polling → file download → the web UI's Image tab, with the
 actual `<img>` element confirmed loaded (`complete: true`, correct 1024x1024 dimensions) and
 the result correctly catalogued in the library with its prompt as provenance.
+
+**img2img (2026-07-30):** `POST /generate/image` accepts an optional `reference_image` upload
+plus `strength` -- `StableDiffusionXLImg2ImgPipeline.from_pipe(pipe)`, sharing the already-loaded
+weights rather than a second model copy. Real VRAM investigation on this 8GB card (see
+`docs/experiments/2026-07-30-image-to-image-generation.md`): img2img's extra work (VAE-*encoding*
+the reference, unlike text-to-image) is tight enough to OOM even with shared weights. Mitigated
+with three changes (lazy pipeline construction instead of eager, `torch.cuda.empty_cache()` after
+every request, `enable_attention_slicing()`) -- verified working end to end, but still best-effort
+under heavy/rapid use on this card, an accepted tradeoff rather than something still being chased.
+Also found and left as an **open, unresolved issue**: `GET /capabilities` intermittently reports
+`image_generation: false` even when the service is confirmed healthy and reachable -- root cause
+not found despite substantial investigation (ruled out stale builds, DNS staleness, proxy env
+vars, general resource exhaustion); the same underlying function reliably returns the correct
+result when called directly, only the live HTTP route gets it wrong. Predates this session's
+img2img work. See the experiment log for the full investigation.
 
 ### 5.3 Semantic masking (`machine-learning/`) — IMPLEMENTED, validated
 

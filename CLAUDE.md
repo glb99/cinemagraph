@@ -308,7 +308,12 @@ Three more routes are optional-external-service seams, all using `_external_serv
   require a non-refundable minimum prepay to use it at all, found only by actually trying to
   generate an image. See `docs/experiments/2026-07-29-image-generation-backend-choice.md` for the
   full account of both attempts, and why local SDXL specifically (VRAM/quality tradeoffs checked
-  against current data, not assumed).
+  against current data, not assumed). Accepts an optional `reference_image` upload + `strength`
+  for img2img (generate conditioned on a photo instead of pure text) — best-effort under
+  heavy/rapid use on this project's 8GB GPU (real, accepted VRAM tradeoff, not a bug still being
+  chased); see `docs/experiments/2026-07-30-image-to-image-generation.md`, which also documents
+  an **open, unresolved issue**: `GET /capabilities` can report `image_generation: false` for a
+  demonstrably healthy service — root cause not found, predates the img2img work.
 
 All four routes read their env var **at request time**, never at startup, so the API always starts
 cleanly and simply reports the feature as unavailable (`503` from the `POST` route, `false` from
