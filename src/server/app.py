@@ -381,11 +381,16 @@ async def generate_music(
     lyrics: str = Form(""),
     duration: float = Form(30.0),
     thinking: bool = Form(True),
+    instrumental: bool = Form(False),
 ):
     """Proxies to an ACE-Step API server. Same degrade-cleanly contract as
     /mask/semantic: reuses this file's own job system rather than adding new
     status-tracking routes -- GET /jobs/{job_id} and /jobs/{job_id}/file
     already work for this without any changes.
+
+    `instrumental` overrides whatever `lyrics` was submitted -- see
+    run_music_job's docstring for why that's the only reliable way to get
+    ACE-Step to actually omit vocals (an empty lyrics field doesn't).
     """
     job = jobs.create_job()
     job_dir = _job_dir(settings, job.id)
@@ -394,7 +399,7 @@ async def generate_music(
     background_tasks.add_task(
         service.run_music_job, job.id, output_path,
         settings=settings, prompt=prompt, lyrics=lyrics, duration=duration, thinking=thinking,
-        library_kind="generated",
+        instrumental=instrumental, library_kind="generated",
     )
     return JobResponse(job_id=job.id)
 

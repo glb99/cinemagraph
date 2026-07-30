@@ -153,6 +153,7 @@ the underlying routes don't already do themselves.</p>
   </div>
   <label>Duration (s) <input type="number" id="music-duration" value="30" min="5"></label>
   <label><input type="checkbox" id="music-thinking" checked> Thinking mode</label>
+  <label><input type="checkbox" id="music-instrumental"> Instrumental (no vocals)</label>
   <div class="row"></div>
   <button type="submit">Generate</button>
 </form>
@@ -493,6 +494,7 @@ wireForm("music-form", {
     form.append("lyrics", document.getElementById("music-lyrics").value);
     form.append("duration", document.getElementById("music-duration").value);
     form.append("thinking", document.getElementById("music-thinking").checked);
+    form.append("instrumental", document.getElementById("music-instrumental").checked);
     return form;
   },
 });

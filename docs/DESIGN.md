@@ -283,19 +283,22 @@ CLI, unlike the effect-override validation which was already caught — now both
 CLI commands translate it into their entry point's normal error shape (422 / `UsageError`).
 
 `GET /` serves a single self-contained HTML page (`server/ui.py`'s `INDEX_HTML` — inline CSS/JS, no
-build step, no framework), now with four tabs, one per capability the API exposes: **Photo** and
-**Video** (both always shown — core capabilities, no configuration needed) and **Music** /
-**Sound effects** (each hidden entirely, not just disabled, unless `GET /capabilities` reports the
-matching flag true — the same `music_generation`/`sound_effect_generation` signal every other
+build step, no framework), now with six tabs, one per capability the API exposes: **Photo**,
+**Video**, and **Library** (always shown — core capabilities, no configuration needed) and
+**Music** / **Sound effects** / **Image** (each hidden entirely, not just disabled, unless
+`GET /capabilities` reports the matching flag true — the same
+`music_generation`/`sound_effect_generation`/`image_generation` signal every other
 optional-service consumer already uses; `mask_prompt` inside the Photo tab uses the identical
-pattern for `semantic_mask`). All four forms share one `pollJob()`/`wireForm()` implementation,
-since every `/render/*`/`/generate/*` route returns the same `{job_id}` shape and is checked via
-the same `GET /jobs/{id}` contract — the only thing that differs per tab is which fields go into
-the request and whether the result lands in a `<video>` or `<audio>` element.
+pattern for `semantic_mask`). All five generate/render forms share one `pollJob()`/`wireForm()`
+implementation, since every `/render/*`/`/generate/*` route returns the same `{job_id}` shape and
+is checked via the same `GET /jobs/{id}` contract — the only thing that differs per tab is which
+fields go into the request and whether the result lands in a `<video>`, `<audio>`, or `<img>`
+element. Library is the one tab that isn't a generate/render form (it browses/deletes existing
+assets instead), so it doesn't go through `wireForm()`.
 
-Photo and Video are both built and verified against a live server (see `docs/experiments/`); Music
-and Sound effects have forms wired to their routes but haven't been exercised against a live
-ACE-Step/sound-effects instance from the UI specifically (the routes themselves have — see §5.7).
+Photo, Video, Music, Sound effects, and Image are all built and verified against a live server
+(see `docs/experiments/`) — Music was the last to be exercised against a live ACE-Step instance
+from the UI specifically (the route itself was covered earlier — see §5.7).
 As with the first slice, per-effect override flags and video's grade fine-tuning knobs are left out
 of every form — thin-client coverage of the common path, not full parity with every CLI/API field.
 
@@ -342,9 +345,25 @@ same remaining work:
   `/v1/audio`); `_run_music_job` drives that queue inside our own `BackgroundTasks` job,
   reusing the existing `GET /jobs/{id}`/`GET /jobs/{id}/file` routes rather than adding
   new ones — the generic `Job` abstraction turned out to cover "poll a remote job queue"
-  as well as "run a local render," with no changes needed to `jobs.py`. **Not yet
-  validated against a live server** — no GPU/running instance was available to test
-  against; only the "service absent" degradation path is proven.
+  as well as "run a local render," with no changes needed to `jobs.py`. **Validated
+  against a live server (2026-07-29), twice.** First against ACE-Step running natively on
+  the host (a local ACE-Step-1.5 checkout, `ACESTEP_URL=http://host.docker.internal:8001`),
+  then containerized to match `sound-effects/`/`image-generation/`'s shape: `acestep:` in
+  `docker-compose.yml` runs the published `ghcr.io/ace-step/ace-step-1.5:latest` image
+  under `--profile audio`, `ACESTEP_URL=http://acestep:8001`. The containerizing pass found
+  a real bug: bind-mounting the host checkout's already-downloaded `checkpoints/` directory
+  straight into the container (to avoid a second ~11GB download) hung the model loader
+  permanently — root-caused to `p9_client_rpc` (Docker Desktop's WSL2 cross-OS file-sharing
+  protocol) via `/proc/<pid>/wchan`, not a compute stall. Fixed by letting the container
+  download its own copy into a project-relative bind mount instead
+  (`./data/acestep-checkpoints`), the same pattern the other two services already use
+  successfully. Verified the full chain both times: `POST /generate/music` →
+  `_run_music_job`'s poll loop → real downloaded MP3 (confirmed via `file`, matching
+  duration and bitrate) → asset library registration (`tags=["music"]`, `provenance`
+  matching the request) → the real web UI's Music tab, driving the actual form and reading
+  the resulting `<audio>` element's own `readyState`/`duration`/`error` after the job
+  finished, same rigor as photo/video/image. The host-native route is kept as a documented
+  alternative in `docker-compose.yml`. See `docs/experiments/`.
 - **Sound effects — Stable Audio Open, wrapped in `sound-effects/` — done, and
   validated for real.** The premature-to-build call from the first pass of this section
   was revisited and reversed: once sound-effect generation is meant to be a

@@ -212,10 +212,15 @@ special-casing the packaging config further.
   `DELETE /library/{id}`. `asset.original_filename`/`asset.tags` are user-supplied (an upload's own
   name, or free-text tags from a manual `library add`), so that card is built via
   `createElement`/`textContent` throughout, never `innerHTML`, to rule out markup injection. Photo,
-  Video, Library, Sound effects, and Image are all verified against a live server (including a real
-  render/generation's output showing up in its own tab with a genuinely loaded preview, and in the
-  Library tab); Music has a form wired to its route but hasn't been exercised against a live ACE-Step
-  instance from the UI itself yet.
+  Video, Library, Sound effects, Image, and Music are all verified against a live server (including
+  a real render/generation's output showing up in its own tab with a genuinely loaded preview, and in
+  the Library tab). Music was verified twice: once against ACE-Step running natively on the host,
+  then against it containerized (`acestep:` in `docker-compose.yml`, `--profile audio`, same shape
+  as `sound-effects`/`image-generation` now) — the containerized pass found and fixed a real hang
+  (bind-mounting a pre-populated checkpoints directory from a separate host checkout deadlocked in
+  Docker Desktop's WSL2 file-sharing layer; fixed by letting the container download its own copy
+  into `./data/acestep-checkpoints` instead, see `docs/experiments/`). The host-native route is
+  kept as a documented alternative.
 - **`config.py`** — `Settings(BaseSettings)` (from `pydantic-settings`) plus `get_settings()`
   (`@lru_cache`, injected into routes via `Annotated[Settings, Depends(get_settings)]`), replacing
   three inconsistent ways this package used to read `os.environ` (a module-level constant frozen
@@ -269,14 +274,20 @@ Three more routes are optional-external-service seams, all using `_external_serv
   is proxied through as raw `image/png` bytes, same as the request came back from the service.
 - **`POST /generate/music`** — proxies to an [ACE-Step](https://github.com/ace-step/ACE-Step) API
   server. Env var `ACESTEP_URL`. ACE-Step already ships its own FastAPI server and a published image
-  (`ghcr.io/ace-step/ace-step-1.5:latest`, see `docker-compose.yml`'s commented `acestep` service) —
+  (`ghcr.io/ace-step/ace-step-1.5:latest`, see `docker-compose.yml`'s `acestep` service, gated behind
+  `--profile audio` like `sound-effects`/`image-generation`) —
   there is no wrapper for this project to write, only a client. That client is more involved than
   `/mask/semantic`'s single proxied call because ACE-Step's own API is itself an async job queue
   (`POST /release_task` → poll `POST /query_result` → `GET /v1/audio`): `app.py`'s `_run_music_job`
   drives that queue to completion inside *our* `BackgroundTasks` job, which is why `POST
   /generate/music` needs no new status/download routes of its own — `GET /jobs/{job_id}` and
   `GET /jobs/{job_id}/file` already work for it unchanged. (Full request/response contract: ACE-Step's
-  own `docs/api/API.md`, reachable via its `acestep-docs` skill.)
+  own `docs/api/API.md`, reachable via its `acestep-docs` skill.) `instrumental` (form field) overrides
+  whatever `lyrics` was submitted with ACE-Step's own instrumental marker (`"[Instrumental]"`) before
+  it's sent — found by reading ACE-Step's own source (`acestep/api/server_utils.py`'s
+  `is_instrumental`), not its REST docs, which don't mention a boolean `instrumental` field at all
+  (that only exists on ACE-Step's separate OpenRouter-compatible wrapper). An empty `lyrics` field
+  does *not* make the real server skip vocals on its own.
 - **`POST /generate/sound-effect`** — proxies to `sound-effects/`, a small FastAPI service **this
   project owns and built** (unlike ACE-Step) wrapping Stable Audio Open — see that directory's own
   README for its contract and how to run it. Env var `SOUND_EFFECTS_URL`. Unlike ACE-Step's job queue,

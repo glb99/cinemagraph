@@ -139,9 +139,9 @@ async def test_music_job_times_out_when_never_ready(monkeypatch, tmp_path, acest
 
 @pytest.mark.anyio
 async def test_music_job_downloads_audio_on_success(monkeypatch, tmp_path, acestep_settings):
-    """The happy path, which has never been exercised against a live
-    ACE-Step server -- this at least pins the response-envelope parsing
-    (data[0].result is a JSON *string* holding a list)."""
+    """The happy path -- pins the response-envelope parsing (data[0].result
+    is a JSON *string* holding a list), also verified against a live
+    ACE-Step server (see docs/experiments/)."""
     monkeypatch.setattr(service, "MUSIC_POLL_INTERVAL_SECONDS", 0)
 
     async def fake_call(svc, method, path, **kwargs):
@@ -167,7 +167,45 @@ async def test_music_job_downloads_audio_on_success(monkeypatch, tmp_path, acest
     [asset] = asset_library.list_assets()
     assert asset.kind == "generated"
     assert asset.tags == ["music"]
-    assert asset.provenance == {"prompt": "p", "lyrics": "", "duration": 10.0, "thinking": False}
+    assert asset.provenance == {
+        "prompt": "p", "lyrics": "", "duration": 10.0, "thinking": False, "instrumental": False,
+    }
+
+
+@pytest.mark.anyio
+async def test_music_job_instrumental_overrides_lyrics(monkeypatch, tmp_path, acestep_settings):
+    """instrumental=True must send ACE-Step's own instrumental marker as the
+    lyrics field, regardless of what lyrics text was supplied -- an empty (or
+    any other) lyrics string does not make ACE-Step's real server omit vocals
+    on its own; only this exact marker does (see run_music_job's docstring)."""
+    monkeypatch.setattr(service, "MUSIC_POLL_INTERVAL_SECONDS", 0)
+    sent_lyrics = []
+
+    async def fake_call(svc, method, path, **kwargs):
+        if path == "/release_task":
+            sent_lyrics.append(kwargs["json"]["lyrics"])
+            return _ace_response({"data": {"task_id": "t1"}})
+        if path == "/query_result":
+            return _ace_response(
+                {"data": [{"status": 1, "result": json.dumps([{"file": "/v1/audio/t1.mp3"}])}]}
+            )
+        return _ace_response({})  # the audio download
+
+    output = tmp_path / "out.mp3"
+    job = jobs.create_job()
+    await service.run_music_job(
+        job.id, output, settings=acestep_settings, prompt="p", lyrics="some lyrics I typed",
+        duration=10.0, thinking=False, instrumental=True,
+        library_kind="generated", call_service=fake_call,
+    )
+
+    result = jobs.get_job(job.id)
+    assert result.status is jobs.JobStatus.DONE, result.error
+    assert sent_lyrics == ["[Instrumental]"]
+
+    [asset] = asset_library.list_assets()
+    assert asset.provenance["lyrics"] == "[Instrumental]"
+    assert asset.provenance["instrumental"] is True
 
 
 @pytest.mark.anyio

@@ -18,8 +18,13 @@ services:
       - CINEMAGRAPH_LIBRARY_DIR=/data/library
       # Uncomment once you're running the machine-learning service (below):
       # - ML_SERVICE_URL=http://machine-learning:8004
-      # Uncomment once you're running the acestep service (below):
-      # - ACESTEP_URL=http://acestep:8001
+      - ACESTEP_URL=http://acestep:8001
+      # Alternative: ACE-Step running natively on the host instead of the
+      # `acestep` container below (e.g. if you'd rather not duplicate GPU
+      # residency across two processes). `host.docker.internal` is Docker
+      # Desktop's standard route from a container back to the host. Start it
+      # with `uv run acestep-api` from an ACE-Step-1.5 checkout first.
+      # - ACESTEP_URL=http://host.docker.internal:8001
       - SOUND_EFFECTS_URL=http://sound-effects:8003
       - IMAGE_GENERATION_URL=http://image-generation:8005
 
@@ -36,31 +41,61 @@ services:
     volumes:
       - ./data/machine-learning-cache:/cache/huggingface
 
-  # ACE-Step's own published image, referenced directly -- not vendored,
-  # not built by us. Unlike machine-learning/, there's no wrapper for us to
-  # write here at all: ACE-Step already ships its own FastAPI server (see
-  # server/app.py's /generate/music, which is a client of exactly this). Needs
-  # a GPU and a model download on first start (checkpoints/ volume caches
-  # it across restarts). Uncomment plus the ACESTEP_URL line above, then
-  # `docker compose --profile audio up`.
-  # acestep:
-  #   image: ghcr.io/ace-step/ace-step-1.5:latest
-  #   profiles: ["audio"]
-  #   environment:
-  #     - ACESTEP_MODE=api
-  #   ports:
-  #     - "8002:8001"
-  #   volumes:
-  #     - ./data/acestep-checkpoints:/app/checkpoints
-  #     - ./data/acestep-hf-cache:/root/.cache/huggingface
-  #   shm_size: "2gb"
-  #   deploy:
-  #     resources:
-  #       reservations:
-  #         devices:
-  #           - driver: nvidia
-  #             count: all
-  #             capabilities: [gpu]
+  # ACE-Step's own published image, referenced directly -- not vendored, not
+  # built by us. Unlike machine-learning/, there's no wrapper for us to write
+  # here at all: ACE-Step already ships its own FastAPI server (see
+  # server/app.py's /generate/music, which is a client of exactly this).
+  # Validated 2026-07-29/30 (see docs/experiments/), across two real findings.
+  #
+  # First: bind-mounting a *different, already-populated* ACE-Step-1.5
+  # checkout's checkpoints/ directly in (an absolute Windows path) hung
+  # permanently on the first request -- confirmed via `cat /proc/<pid>/wchan`
+  # -> `p9_client_rpc`, Docker Desktop's WSL2 cross-OS file-sharing protocol,
+  # with the GPU sitting idle. First fix attempt: switch to a *project-relative*
+  # bind mount instead (./data/acestep-checkpoints), reasoning that
+  # sound-effects/image-generation use that same style successfully.
+  #
+  # Second finding: that "fix" was incomplete. It worked once, immediately
+  # after the container's own fresh download into that directory -- but a
+  # later cold container restart, reading those same now-pre-existing files
+  # back from the same bind mount, hung with the *exact same*
+  # `p9_client_rpc` wchan. The real trigger isn't "pre-populated by a
+  # different project" vs. "downloaded by this container" -- it's reading a
+  # large file cold (not already in the container's page cache) through
+  # Docker Desktop's WSL2 bridge at all, regardless of which path or who
+  # wrote it. sound-effects/image-generation may simply not have been
+  # restart-tested cold in this same way; this isn't confirmed to be
+  # ACE-Step-specific.
+  #
+  # Actual fix: named Docker volumes (`acestep-checkpoints`/`acestep-hf-cache`
+  # below) instead of any Windows-path bind mount. A named volume's storage
+  # lives natively inside the Docker Desktop WSL2 VM's own Linux filesystem --
+  # never crosses the Windows/WSL2 9P bridge at all, so this class of hang
+  # structurally can't happen. Trade-off: the checkpoints aren't browsable
+  # from Windows Explorer the way ./data/* is; `docker volume inspect
+  # cinemagraph-tool_acestep-checkpoints` finds the real path if needed.
+  # First run downloads ~11GB into the volume, cached across restarts.
+  # ACESTEP_INIT_SERVICE=false keeps startup lazy (models load on first
+  # request, not at container boot). `docker compose --profile audio up`.
+  acestep:
+    image: ghcr.io/ace-step/ace-step-1.5:latest
+    profiles: ["audio"]
+    environment:
+      - ACESTEP_MODE=api
+      - ACESTEP_INIT_SERVICE=false
+    ports:
+      - "8001:8001"
+    volumes:
+      - acestep-checkpoints:/app/checkpoints
+      - acestep-hf-cache:/root/.cache/huggingface
+    shm_size: "2gb"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
 
   # sound-effects/ -- built and validated (see docs/experiments/), unlike
   # machine-learning/ above this is real, working code we own, so this
@@ -113,3 +148,11 @@ services:
             - driver: nvidia
               count: all
               capabilities: [gpu]
+
+volumes:
+  # Named (not bind-mounted) specifically to avoid a real, reproducible hang
+  # reading large pre-existing checkpoint files through Docker Desktop's
+  # WSL2 Windows-path file-sharing bridge -- see the acestep service's own
+  # comment above and docs/experiments/.
+  acestep-checkpoints:
+  acestep-hf-cache:

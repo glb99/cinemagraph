@@ -186,6 +186,7 @@ async def run_music_job(
     lyrics: str,
     duration: float,
     thinking: bool,
+    instrumental: bool = False,
     library_kind: str | None = None,
     call_service=call_optional_service,
 ) -> None:
@@ -193,22 +194,45 @@ async def run_music_job(
     poll until it reports success/failure, download the resulting audio.
     ACE-Step's response envelope wraps everything in {"data": ..., "code": ...};
     see docs/DESIGN.md / the acestep-docs skill's API.md for the full contract.
+
+    ACE-Step's /release_task has no separate "instrumental" field (that only
+    exists on its higher-level OpenRouter-compatible wrapper, a different API
+    surface than the one this client talks to) -- its own server derives
+    instrumental mode purely from the *lyrics string itself*
+    (`acestep/api/server_utils.py`'s `is_instrumental`: true iff the
+    stripped/lowercased lyrics equal "[inst]" or "[instrumental]"). An empty
+    lyrics field does NOT trigger it -- ACE-Step will still attempt vocals.
+    `instrumental=True` here overrides whatever lyrics text was provided with
+    that exact marker, mirroring what ACE-Step's own Gradio UI's
+    "Instrumental" checkbox does.
     """
     jobs.mark_running(job_id)
     service = settings.music_service
+    effective_lyrics = "[Instrumental]" if instrumental else lyrics
     try:
         create_resp = await call_service(
             service, "POST", "/release_task",
-            json={"prompt": prompt, "lyrics": lyrics, "audio_duration": duration, "thinking": thinking},
+            json={
+                "prompt": prompt, "lyrics": effective_lyrics,
+                "audio_duration": duration, "thinking": thinking,
+            },
         )
         task_id = create_resp.json()["data"]["task_id"]
 
         result = None
         for _ in range(MUSIC_POLL_MAX_ATTEMPTS):
             await asyncio.sleep(MUSIC_POLL_INTERVAL_SECONDS)
+            # timeout=90 (call_optional_service's default is 30): found via a
+            # real failure -- on a cold/just-restarted ACE-Step instance, its
+            # own model-loading work blocks a single /query_result call
+            # synchronously for the full duration of loading + first
+            # generation, not just returning a quick "still running" status
+            # the way it does once warm. 30s wasn't enough margin for that;
+            # steady-state polling (the overwhelmingly common case) is
+            # unaffected since those calls return almost immediately either way.
             query_resp = await call_service(
                 service, "POST", "/query_result",
-                json={"task_id_list": [task_id]},
+                json={"task_id_list": [task_id]}, timeout=90.0,
             )
             entry = query_resp.json()["data"][0]
             if entry["status"] == 1:
@@ -224,7 +248,10 @@ async def run_music_job(
         jobs.mark_done(job_id, output_path)
         _register_in_library(
             output_path, library_kind, tags=["music"],
-            provenance={"prompt": prompt, "lyrics": lyrics, "duration": duration, "thinking": thinking},
+            provenance={
+                "prompt": prompt, "lyrics": effective_lyrics,
+                "duration": duration, "thinking": thinking, "instrumental": instrumental,
+            },
         )
     except HTTPException as e:
         jobs.mark_error(job_id, e.detail)

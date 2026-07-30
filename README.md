@@ -178,10 +178,13 @@ blocking startup) whenever the service isn't configured or isn't reachable:
   job directory so a disappointing result can be inspected. If the service is unavailable the
   job fails rather than silently rendering unmasked. No CLI equivalent — see `docs/DESIGN.md`.
 - **`POST /generate/music`** — music generation via an [ACE-Step](https://github.com/ace-step/ACE-Step)
-  API server (`prompt`, `lyrics`, `duration`, `thinking` form fields). ACE-Step already ships its own
-  server — nothing to build, just point at a running instance. Its API is itself a job queue, so this
-  route drives it to completion in the background and reuses the *same* `GET /jobs/{job_id}` /
-  `GET /jobs/{job_id}/file` you'd use for a render. Configure with `ACESTEP_URL`.
+  API server (`prompt`, `lyrics`, `duration`, `thinking`, `instrumental` form fields). ACE-Step already
+  ships its own server — nothing to build, just point at a running instance. Its API is itself a job
+  queue, so this route drives it to completion in the background and reuses the *same*
+  `GET /jobs/{job_id}` / `GET /jobs/{job_id}/file` you'd use for a render. Configure with
+  `ACESTEP_URL`. `instrumental=true` overrides `lyrics` with ACE-Step's own instrumental marker
+  (`"[Instrumental]"`) rather than relying on an empty `lyrics` field, which ACE-Step's real server
+  does *not* treat as instrumental on its own.
 - **`POST /generate/sound-effect`** — ambient/SFX generation (`prompt`, `duration` form fields) via
   `sound-effects/`, a small FastAPI wrapper around Stable Audio Open that ships with this repo (own
   `pyproject.toml`/`Dockerfile`, isolated from the core's dependencies — see that directory's README).
@@ -231,16 +234,21 @@ without this, the library defaults to a path inside the container's own throwawa
 survive a `restart` but be silently wiped by `docker compose down` + `up`, defeating the point of a
 *persistent* library). The image only ever includes the `server` extra (opencv/numpy/click/fastapi) —
 never `torch`/`transformers`, which live only in the optional, separately-built `sound-effects`,
-`machine-learning`, and `image-generation` services:
+`machine-learning`, and `image-generation` services, plus `acestep` (ACE-Step's own published
+image, not built by this repo):
 
 ```bash
-docker compose --profile audio up      # core + sound-effects (Stable Audio Open)
+docker compose --profile audio up      # core + sound-effects (Stable Audio Open) + acestep (ACE-Step music)
 docker compose --profile ml up         # core + machine-learning (CLIPSeg)
 docker compose --profile image up      # core + image-generation (Stable Diffusion XL)
 ```
 
-`acestep` (ACE-Step's own published image) is also declared in `docker-compose.yml`, commented out
-until you have an instance running — see the file for the env var to uncomment alongside it.
+`acestep` downloads its own ~11GB of checkpoints into `./data/acestep-checkpoints` on first run,
+cached across restarts same as the other services. If you'd rather run ACE-Step natively on the
+host instead (e.g. you already have a checkout with its own downloaded checkpoints), see the
+commented `ACESTEP_URL=http://host.docker.internal:8001` alternative in `docker-compose.yml` —
+bind-mounting an existing checkout's checkpoints directly into the container is not recommended,
+it's known to hang under Docker Desktop's WSL2 file sharing (see `docs/experiments/`).
 
 The CLI works the same way inside the container, overriding the default command:
 
