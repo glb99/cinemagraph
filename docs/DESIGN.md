@@ -279,6 +279,59 @@ Same registry shape as `effects/base.py` (§3.3) and the generation-adapter regi
 (same call shape, `handle(event) -> None`, always available), which is exactly the
 condition that justifies a registry over ad hoc branching or a sequential chain.
 
+### 3.7 Post-deployment integration tests (not yet done)
+
+Every real bug this project has ever found in a satellite service or ACE-Step integration
+(the WSL2 checkpoint-mount hang, the `/query_result` timeout, the `ACESTEP_INIT_SERVICE`/
+`ACESTEP_NO_INIT` mixup, the VAE OOM, the missing GPU `deploy:` block, the gated-HF-repo
+401) was caught by *manually* driving a real deployed stack -- curl a route, poll a job,
+inspect the output file, one `docs/experiments/` entry at a time. That's a real,
+well-established category of testing with a name -- **post-deployment verification /
+smoke tests**: assert the actual deployed system works, against the real thing, after
+`docker compose up`, distinct from `tests/`'s existing unit/contract tests (TestClient,
+in-process, no live services, no GPU).
+
+**Not a separate container.** [Immich](https://github.com/immich-app/immich) (already a
+reference project, §8) runs its own `e2e/` suite the same way this should: from outside
+the compose stack, against its already-published host ports -- not from a container
+joined to the internal Docker network. A dedicated test-runner container only earns its
+place when tests genuinely can't reach the stack any other way (e.g. a CI network with no
+ports published to the host) -- not the case here, since every service already publishes
+to `localhost`, the same ports this project's own manual `docs/experiments/` sessions
+have curled against all along. Building one now would be solving a networking problem
+that doesn't exist yet, the same over-provisioning §6 already rejects for Kubernetes/heavy
+CI/CD.
+
+**Lives in `tests/integration/`, marked, excluded from the default run.** Unlike
+`golden_check.py` (bit-exact pixel diffing, no assertions/skip semantics needed, correctly
+kept as a wholly separate script per §3.5/§6), this is fundamentally "make a real HTTP
+request and assert on the result" -- a good fit for pytest's own assertion/skip machinery,
+just needs to stay out of the default `uv run pytest` run (no GPU, no live deploy, in CI
+or a quick local run). `@pytest.mark.integration` (registered in
+`[tool.pytest.ini_options]`'s `markers`), default `addopts` excludes it
+(`-m "not integration"`), explicit `uv run pytest -m integration` to actually run it.
+Each test skips (not fails) when its target capability isn't reachable/configured --
+friendly default behavior for a personal tool nobody's obligated to have fully deployed.
+
+**Scope: music generation first**, not all six capabilities at once. Chosen deliberately
+over broader coverage sooner: music/ACE-Step is the integration that's actually had real
+bugs slip through manual verification repeatedly this session -- formalizing exactly what
+each of those `docs/experiments/` sessions already did by hand, so the next regression is
+caught by `pytest -m integration`, not by re-discovering it manually again. Concretely:
+`POST /generate/music` (including `instrumental=true`, given how recently that shipped)
+-> poll `GET /jobs/{id}` to completion -> download and validate the real audio (`file`,
+duration, non-silence -- the same checks already done by hand) -> confirm library
+registration (`tags=["music"]`, correct `provenance`). Other capabilities follow this
+shape once it proves out, same sequencing discipline as §5.8.
+
+**Not part of CI, for now.** Music/sound-effect/image generation need a live GPU and take
+real minutes, and outputs are generative (non-deterministic) -- can't run on a typical CI
+runner and can't be asserted bit-exact the way `golden_check.py` checks renders. This
+stays a deliberately-run local suite (`uv run pytest -m integration`, GPU machine only)
+until/unless a self-hosted GPU CI runner ever becomes a real trigger -- matching §6's own
+"adopt a minimal CI workflow only when the repo gets a remote, nothing more until releases
+exist" discipline, not an exception to it.
+
 ## 4. Current state (implemented)
 
 ```
@@ -549,6 +602,19 @@ purpose" note), just the shape that makes adding one later a registration, not a
 Music and sound-effect generation follow the same shape once image generation proves the
 pattern out. No new infrastructure — a message/event broker between services is a
 related but separate, deliberately deferred idea (§3.6, §6).
+
+### 5.9 Post-deployment integration tests (not started)
+
+See §3.7 for the full design and rationale. In short: every real bug this project has
+found in a satellite/ACE-Step integration so far was caught by manually driving a live
+deployed stack, one `docs/experiments/` entry at a time — this formalizes that as a real,
+repeatable `pytest -m integration` suite, run from outside the compose stack against its
+already-published host ports (no dedicated test container, matching how
+[Immich](https://github.com/immich-app/immich)'s own `e2e/` suite works). Start with music
+generation (the integration that's actually had real bugs slip through repeatedly this
+session), not all six capabilities at once — same sequencing discipline as §5.8. Not part
+of CI: needs a live GPU, takes real minutes, and outputs are generative/non-deterministic,
+so it stays a deliberately-run local suite for now.
 
 ## 6. Laboratory tooling — what earns its place and what doesn't
 
