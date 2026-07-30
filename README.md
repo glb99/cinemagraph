@@ -148,6 +148,12 @@ docker compose --profile audio up -d acestep core
 uv run pytest -m integration
 ```
 
+Or bundle the whole up/wait/test/teardown cycle into one command:
+
+```bash
+uv run python scripts/verify_music_deploy.py
+```
+
 Currently covers music generation only. See `docs/DESIGN.md` sec 3.7/5.9 for why these
 exist, why there's no dedicated test container, and why they aren't part of CI.
 

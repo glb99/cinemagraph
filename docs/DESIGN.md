@@ -313,6 +313,10 @@ or a quick local run). `@pytest.mark.integration` (registered in
 Each test skips (not fails) when its target capability isn't reachable/configured --
 friendly default behavior for a personal tool nobody's obligated to have fully deployed.
 
+`scripts/verify_music_deploy.py` bundles the whole up/wait/test/teardown cycle into one
+command -- same category of tool as `golden_check.py` (deliberate, manually-invoked, not
+wired into an automatic trigger), not a step toward real CI/CD.
+
 **Scope: music generation first**, not all six capabilities at once. Chosen deliberately
 over broader coverage sooner: music/ACE-Step is the integration that's actually had real
 bugs slip through manual verification repeatedly this session -- formalizing exactly what
