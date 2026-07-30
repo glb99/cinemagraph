@@ -215,9 +215,11 @@ internal check.
 This closes out `docs/DESIGN.md` §5.7's last open item -- Photo, Video, Library, Music, Sound
 effects, and Image are now all verified against live servers, and Music now matches the other two
 optional services' shape (a `docker compose` service, not a special case). The named-volume finding
-is also a flag worth checking against `sound-effects/`/`image-generation/` at some point -- this
-project has no confirmed evidence either way for those two under a cold restart with pre-existing
-cached weights (see the spawned follow-up task for this).
+was also checked against `sound-effects/`/`image-generation/` the same day -- see
+`docs/experiments/2026-07-30-cold-restart-check-sound-effects-image-generation.md`: `image-generation/`
+came back clean (no hang), `sound-effects/` couldn't be tested (unrelated expired `HF_TOKEN`). The
+hang looks more likely to be specific to ACE-Step's own loading code than a general risk for every
+bind-mounted model cache on this machine.
 
 ## Follow-up: a `thinking=true` cold-load fix, and a real ACE-Step env-var bug (2026-07-30)
 
