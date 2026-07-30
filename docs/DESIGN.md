@@ -142,6 +142,79 @@ Tests protect what must *never* silently break, not what is still in flux:
 Experimental code gets tests **when it stabilizes**, not before. Chasing coverage on code
 that may be deleted next week is waste.
 
+### 3.6 Capability ports for generation backends (extending §3.1, not yet done)
+
+§3.1's seam principle is applied loosely today for the three generation capabilities
+(image, music, sound-effect): `call_optional_service`/`OptionalService` give every
+satellite a uniform *transport* seam (URL, name, env-var, health check), but each
+`run_*_job` in `server/service.py` still hardcodes its one specific backend's exact
+request/response shape inline (`run_image_job` knows `POST /generate` with a bare
+`{"prompt": ...}` body and raw bytes back; `run_music_job` knows ACE-Step's own
+`release_task`/`query_result`/`v1/audio` job-queue contract). That's a real gap against
+§3.1's own bar -- the core still knows the shape of each backend, not just its address.
+
+**The concrete case this already justifies it, per §3.3's stated trigger ("a second real
+backend worth swapping between"):** image generation already lived through two real
+backends -- Gemini's hosted API, then local SDXL (see `docs/experiments/`) -- swapped
+sequentially, at the cost of rewriting `run_image_job` and its config wiring both times.
+Had a stable port existed, that swap would have been "point at a different adapter," not
+"rewrite the job function."
+
+**Planned shape** (Dependency Inversion: `server/` defines the contract, adapters
+implement it -- no new infrastructure, a pure refactor of what already exists):
+
+```python
+# server/generation_ports.py (new)
+from typing import Protocol
+
+class ImageGenerator(Protocol):
+    async def generate(self, prompt: str, **kwargs) -> bytes: ...
+
+# server/generation_adapters.py (new) -- wraps today's call_optional_service call,
+# behavior unchanged, just extracted behind the port above
+class SDXLAdapter:
+    def __init__(self, settings: Settings, call_service=call_optional_service):
+        self._settings, self._call_service = settings, call_service
+
+    async def generate(self, prompt: str, **kwargs) -> bytes:
+        resp = await self._call_service(
+            self._settings.image_generation_service, "POST", "/generate",
+            json={"prompt": prompt}, timeout=120.0,
+        )
+        return resp.content
+```
+
+`run_image_job` would then depend on an injected `ImageGenerator`, the same
+dependency-injection shape `call_service=call_optional_service`/`render_fn=` params
+already use elsewhere in this file (see the decision log) -- one level of abstraction
+higher (a whole capability, not one bare function), not a new pattern.
+
+**Scope note:** this lives in `server/`, not `cinemagraph/` -- it's the orchestrator's own
+job-routing logic, not part of "animate an existing image/video" (§3.2's scope test).
+No new dependency-tier is needed either: it's thin interface/adapter Python, the same
+weight class as `service.py`/`_external_service.py` already in that package.
+
+**Sequencing:** image generation first (the capability with an actual historical second
+backend); music and sound-effect generation follow the same shape once image generation
+proves it out, rather than doing all three at once speculatively.
+
+**Deliberately deferred: an actual event/message broker between services** (e.g. Redis
+Streams, RabbitMQ -- satellites become message consumers instead of HTTP servers). This
+is a different concern from the port/adapter work above: it buys resilience and fan-out
+(a consumer being briefly down doesn't lose the request; multiple things can react to one
+completion independently), not backend swappability -- you get swappable backends from
+the ports alone, with no new infrastructure to run or deploy. Per §6's own rejected-tools
+table, this project's ceiling for a single-machine personal tool is `docker-compose`, and
+the stated revisit trigger there ("a hosted deployment") hasn't fired. Revisit this
+specifically if: the project moves to a multi-machine/hosted deployment, or a job's
+lifecycle genuinely needs multiple independent consumers reacting to one completion event
+(e.g. live UI progress over WebSocket *and* library registration *and* a future
+notification system, none aware of each other) -- something the current in-process
+`jobs.py` + `BackgroundTasks` polling model can no longer express cleanly. Until then, an
+internal, in-process event step (job-lifecycle events like `started`/`progress`/
+`completed` with multiple in-process subscribers) is the right-sized version of "eventing"
+if that need ever arises before a real broker is justified -- still no new infrastructure.
+
 ## 4. Current state (implemented)
 
 ```
@@ -391,6 +464,19 @@ ACE-Step's maintainer-published image, these are unaudited third-party wrappers 
 accountability equivalent to a real package registry entry; not a trust level worth
 extending to something that needs GPU access.
 
+### 5.8 Capability ports for generation backends (not started)
+
+See §3.6 for the full design and rationale. In short: `run_image_job`/`run_music_job`/
+`run_sound_effect_job` each hardcode their one backend's exact request/response shape
+today, rather than depending on a stable per-capability interface a concrete adapter
+implements — a real gap against this project's own §3.1 seam principle. Start with image
+generation (`ImageGenerator` port, `SDXLAdapter` as its first implementation, wrapping the
+existing `call_optional_service` call unchanged) — the one capability that's already
+lived through a real backend swap (Gemini → SDXL) and paid the "rewrite the job function"
+cost §3.6 aims to remove. Music and sound-effect generation follow the same shape once
+image generation proves the pattern out. No new infrastructure — a message/event broker
+between services is a related but separate, deliberately deferred idea (§3.6, §6).
+
 ## 6. Laboratory tooling — what earns its place and what doesn't
 
 Researched against solo-experimental reality, not team-production cargo culting.
@@ -415,9 +501,11 @@ Researched against solo-experimental reality, not team-production cargo culting.
 | **Heavy CI/CD** | no deployment target exists. Adopt a *minimal* GitHub Actions workflow (`uv sync && uv run pytest`) only when the repo gets a remote — nothing more until releases exist |
 | **DVC / data versioning** | no training data, no datasets. The reference library covers asset management |
 | **Kubernetes / orchestration** | docker-compose is the ceiling for a single-machine personal tool |
+| **Message/event broker between services** (Redis Streams, RabbitMQ, etc.) | buys resilience/fan-out across independent processes, not backend swappability — that comes from §3.6's ports/adapters, no broker needed. No multi-machine deployment and no case yet where one job's completion needs multiple independent consumers reacting to it |
 
 Revisit triggers: a second contributor (→ CI becomes mandatory), a hosted deployment
-(→ real flags/monitoring), any model training (→ experiment tracking).
+(→ real flags/monitoring, and re-examine the message-broker row above), any model
+training (→ experiment tracking).
 
 ## 7. Decision log
 
