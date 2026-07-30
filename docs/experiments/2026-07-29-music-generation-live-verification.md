@@ -218,3 +218,51 @@ optional services' shape (a `docker compose` service, not a special case). The n
 is also a flag worth checking against `sound-effects/`/`image-generation/` at some point -- this
 project has no confirmed evidence either way for those two under a cold restart with pre-existing
 cached weights (see the spawned follow-up task for this).
+
+## Follow-up: a `thinking=true` cold-load fix, and a real ACE-Step env-var bug (2026-07-30)
+
+A later `thinking=true` request (through `core`, on a container that had never used the LM before)
+reproduced the timeout described earlier in this doc -- the job errored client-side even though
+ACE-Step itself was healthy, this time because of the LM's own cold-start cost (vLLM's
+`torch.compile` warm-up: tokenizer load alone timed at 34-46s across two runs, plus more after
+that). Read ACE-Step's own source to find the actual mechanism rather than guess: in
+`acestep/api/job_runtime_state.py`, `ensure_models_initialized` calls its model-loading function
+as a plain synchronous call inside `async def`, with no `await`, `run_in_executor`, or
+`asyncio.to_thread` -- unlike the actual generation step two files away
+(`job_execution_runtime.py`), which correctly uses `loop.run_in_executor(executor, ...)`. Since
+asyncio's event loop is single-threaded, that one inline call blocks the *entire server* --
+including the otherwise-cheap `/query_result` status check -- for as long as loading takes. Not
+something to fix in our own code (it's upstream, in ACE-Step itself); the practical mitigation
+available to us is to make sure that slow path never runs during a timed request at all, by
+forcing it to run once at container startup instead.
+
+**First attempt at that mitigation set the wrong environment variable.** `ACESTEP_INIT_SERVICE=true`
+was set, matching what ACE-Step's own `GPU_COMPATIBILITY.md` docs list as the API-server eager-load
+option -- and it silently did nothing (`GET /health` kept reporting `models_initialized: false`
+after startup). Read `acestep/api/startup_model_init.py` directly to find out why:
+`ACESTEP_INIT_SERVICE` is only ever wired into the Gradio UI's CLI flags by the image's own
+`docker-entrypoint.sh` (in the `else` branch, for `ACESTEP_MODE=gradio`) -- the API server branch
+(`ACESTEP_MODE=api`, what this project actually runs) never reads it at all. The API server instead
+reads `ACESTEP_NO_INIT` directly (inverted: `false` means eager) via `env_bool("ACESTEP_NO_INIT", True)`.
+ACE-Step's own docs don't make this API-vs-Gradio distinction clear, so this was a real, unrelated
+finding, not a typo on this project's side.
+
+**Fix:** `acestep`'s environment is now `ACESTEP_NO_INIT=false` (not `ACESTEP_INIT_SERVICE`), plus
+`ACESTEP_LM_MODEL_PATH=acestep-5Hz-lm-0.6B` (that one *is* read directly by the API server's own
+startup code regardless of mode, so it was already correct) -- pinned explicitly since the image's
+Dockerfile default is the 4B LM, which this GPU's tier (tier3, 8GB) doesn't support. Verified via a
+full restart: `GET /health` reported `models_initialized: true, llm_initialized: true,
+loaded_lm_model: "acestep-5Hz-lm-0.6B"` before ever serving a request, with the container's own
+logs showing the full LM/vLLM warm-up (tokenizer 34.7s, constrained-decoding setup 7.14s, vLLM init
+75.93s -- "All models initialized successfully!") happening during `docker compose up`, not during
+a client request. A subsequent `thinking=true` request through `core` then completed in 45s with no
+error -- real, valid MP3 output confirmed by `file`.
+
+### Verdict (follow-up)
+
+- [x] Diagnosed -- ACE-Step's own `ensure_models_initialized` blocks its entire single-threaded
+  event loop during model loading (a real upstream bug, not something to patch downstream).
+- [x] Fixed the actual trigger -- eager loading via `ACESTEP_NO_INIT=false` (not
+  `ACESTEP_INIT_SERVICE`, which is Gradio-only despite appearing in ACE-Step's own API-server docs),
+  moving the cold-start cost to container startup. Confirmed via `/health` reporting both models
+  initialized before any request, and a real `thinking=true` request completing in 45s afterward.

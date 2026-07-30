@@ -214,13 +214,17 @@ special-casing the packaging config further.
   `createElement`/`textContent` throughout, never `innerHTML`, to rule out markup injection. Photo,
   Video, Library, Sound effects, Image, and Music are all verified against a live server (including
   a real render/generation's output showing up in its own tab with a genuinely loaded preview, and in
-  the Library tab). Music was verified twice: once against ACE-Step running natively on the host,
-  then against it containerized (`acestep:` in `docker-compose.yml`, `--profile audio`, same shape
-  as `sound-effects`/`image-generation` now) — the containerized pass found and fixed a real hang
-  (bind-mounting a pre-populated checkpoints directory from a separate host checkout deadlocked in
-  Docker Desktop's WSL2 file-sharing layer; fixed by letting the container download its own copy
-  into `./data/acestep-checkpoints` instead, see `docs/experiments/`). The host-native route is
-  kept as a documented alternative.
+  the Library tab). Music was verified repeatedly, both natively on the host and containerized
+  (`acestep:` in `docker-compose.yml`, `--profile audio`, same shape as `sound-effects`/
+  `image-generation`) — the containerized passes found and fixed three real bugs: a WSL2
+  file-sharing hang reading model checkpoints from any Windows-path bind mount cold (fixed with
+  named Docker volumes, not bind mounts, since a project-relative one wasn't immune either), a
+  cold model load blocking a single `/query_result` poll past `call_optional_service`'s timeout,
+  and ACE-Step's own `ensure_models_initialized` blocking its entire single-threaded server during
+  model loading (an upstream bug — mitigated here by eager-loading at container startup via
+  `ACESTEP_NO_INIT=false`, not the API-server-inert `ACESTEP_INIT_SERVICE` its own docs also
+  mention). See `docs/experiments/` for the full account. The host-native route is kept as a
+  documented alternative.
 - **`config.py`** — `Settings(BaseSettings)` (from `pydantic-settings`) plus `get_settings()`
   (`@lru_cache`, injected into routes via `Annotated[Settings, Depends(get_settings)]`), replacing
   three inconsistent ways this package used to read `os.environ` (a module-level constant frozen

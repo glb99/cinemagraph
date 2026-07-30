@@ -75,14 +75,43 @@ services:
   # from Windows Explorer the way ./data/* is; `docker volume inspect
   # cinemagraph-tool_acestep-checkpoints` finds the real path if needed.
   # First run downloads ~11GB into the volume, cached across restarts.
-  # ACESTEP_INIT_SERVICE=false keeps startup lazy (models load on first
-  # request, not at container boot). `docker compose --profile audio up`.
+  #
+  # ACESTEP_NO_INIT=false forces eager loading at startup: found a third
+  # real cold-start issue after the two above. ACE-Step's own
+  # `ensure_models_initialized` runs its (slow) model-loading code inline on
+  # the asyncio event loop with no await-worthy operation -- not offloaded
+  # to a thread the way its own generation step is two lines away in the
+  # same codebase -- so the *entire server*, including the cheap
+  # /query_result status check, goes unresponsive for as long as loading
+  # takes. Thinking mode makes this worse: the first-ever request needing
+  # the LM pays vLLM's torch.compile warm-up too (tokenizer load alone timed
+  # at 46s in one run), comfortably past call_optional_service's timeout.
+  # Eager loading moves that whole cost to `docker compose up` (a slower
+  # startup, once) instead of a random user-facing request.
+  #
+  # Note ACESTEP_NO_INIT, not ACESTEP_INIT_SERVICE -- an earlier attempt set
+  # the latter and silently did nothing. Confirmed by reading ACE-Step's own
+  # source (acestep/api/startup_model_init.py): ACESTEP_INIT_SERVICE only
+  # gets wired into the Gradio UI's CLI flags by the image's entrypoint
+  # script; the API server (ACESTEP_MODE=api, what we actually run) reads
+  # ACESTEP_NO_INIT directly and never sees ACESTEP_INIT_SERVICE at all --
+  # both env vars exist in ACE-Step's own docs without making this
+  # API-vs-Gradio distinction clear.
+  #
+  # Also pins ACESTEP_LM_MODEL_PATH explicitly: the image's own Dockerfile
+  # default is the 4B LM, which this GPU's tier (tier3, 8GB) doesn't
+  # support -- 0.6B is the only LM tier3 actually loads, so ask for it
+  # directly rather than rely on request-time auto-selection now that
+  # loading happens eagerly. (This one *is* read directly by the API
+  # server's own startup code, unlike ACESTEP_INIT_SERVICE.)
+  # `docker compose --profile audio up`.
   acestep:
     image: ghcr.io/ace-step/ace-step-1.5:latest
     profiles: ["audio"]
     environment:
       - ACESTEP_MODE=api
-      - ACESTEP_INIT_SERVICE=false
+      - ACESTEP_NO_INIT=false
+      - ACESTEP_LM_MODEL_PATH=acestep-5Hz-lm-0.6B
     ports:
       - "8001:8001"
     volumes:
