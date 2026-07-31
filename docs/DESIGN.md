@@ -734,8 +734,7 @@ window lands mostly on two already-faded edges and blends two silences instead o
 audible as a dip, not a smooth transition, even though `acrossfade` itself was confirmed
 working correctly the whole time (verified separately against constant-amplitude synthetic
 tones, which blend cleanly with no unexpected dip). Fixed with `silenceremove`, trimming each
-*interior* join's own edges before crossfading (the very first/last track's own outer edges
-stay untouched -- that's `edge_fade_duration`'s job, not a crossfade join). Two real ffmpeg
+*interior* join's own edges before crossfading. Two real ffmpeg
 option bugs found and fixed while building this, both via testing against the real binary
 rather than trusting the docs: `silenceremove`'s threshold is a **linear amplitude** (0..1),
 not decibels, despite reading like it should accept a `-30dB`-style string (passing one didn't
@@ -750,6 +749,30 @@ naturally in loudness even outside their true silent edges (measured ~1000-8000 
 throughout one real track), so some residual dip at a crossfade point is an inherent content
 characteristic, not something further threshold-tuning alone can fully eliminate. See
 `docs/experiments/2026-07-31-crossfade-silence-bug.md`.
+
+**A second, more serious bug found by the project owner right after that fix (same day):**
+"the music stops abruptly always 2 seconds before finishing." The trim work above
+deliberately left the very first track's leading edge and the very last track's trailing
+edge untouched, reasoning that `edge_fade_duration` would handle those -- but real generated
+songs can have *several seconds* of natural fade-out already baked into their own tail (one
+real test song measured genuinely silent from 6 seconds before its own labeled end onward),
+and since the last track's own trailing edge was never trimmed, that pre-existing silence
+just passed straight through into the final output, extending well past wherever
+`edge_fade_duration`'s own controlled fade actually started -- audible as the music going
+dead well before the requested edge fade, not a smooth 2-second taper. Fixed two ways
+together: (1) **every** track now gets both edges trimmed uniformly, including the outer
+edges, not just interior joins -- `edge_fade_duration` now always controls the actual edges
+of the finished piece, never whatever leftover silence one specific source recording happens
+to already have; (2) the edge-fade-out itself no longer computes an absolute timestamp from
+an estimated total duration (which was already known to be approximate once trimming entered
+the picture, since trims of several seconds are common, not the ~1s originally assumed) --
+replaced with `[a]afade=t=in:st=0:d=X,areverse,afade=t=in:st=0:d=X,areverse[out]`, a
+duration-independent technique (reverse the stream, fade *in* from what's now the front --
+the real end -- then reverse back) that's exact regardless of how much trimming actually
+happened, no estimate needed at all. Verified by decoding the real fixed output to raw PCM
+and confirming a smooth, gradual ramp at both the true start and the true end, landing
+exactly at the stream's actual boundaries. See
+`docs/experiments/2026-07-31-crossfade-silence-bug.md`'s own follow-up section.
 
 ### 5.7 Audio (music + sound effects) — both IMPLEMENTED
 

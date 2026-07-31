@@ -58,7 +58,7 @@ def assemble(
             crossfade_duration=music_crossfade_duration,
             edge_fade_duration=music_edge_fade_duration,
             gap_duration=music_gap_duration,
-            run_ffmpeg=run_ffmpeg, probe_duration=probe_duration,
+            run_ffmpeg=run_ffmpeg,
         )
         audio_track.layer_sound_effects(
             str(music_path), sound_effect_paths or [], str(audio_path),

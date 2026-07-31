@@ -19,7 +19,7 @@ _SILENCE_MIN_DURATION = 0.1
 def build_music_track(
     track_paths: list[str], output_path: str, *,
     crossfade_duration: float = 2.0, edge_fade_duration: float = 2.0, gap_duration: float = 0.0,
-    run_ffmpeg=ffmpeg_runner.run_ffmpeg, probe_duration=ffmpeg_runner.probe_duration,
+    run_ffmpeg=ffmpeg_runner.run_ffmpeg,
 ) -> None:
     """Concatenates `track_paths` in order. Two mutually exclusive join
     styles between consecutive songs -- `gap_duration > 0` wins if both are
@@ -32,11 +32,7 @@ def build_music_track(
       extra loudness dip through the transition on top of the one below;
       chained for 3+ tracks -- unlike `xfade`, `acrossfade` doesn't need an
       explicit offset, it aligns to the tail of the running merged stream
-      automatically). Each interior join's own edges are trimmed of
-      near-silence first (`silenceremove`) -- real generated music commonly
-      fades to near-total silence at its own tail, so crossfading two such
-      edges together blends two silences instead of two songs, an audible
-      dip found by decoding real output to raw PCM, not by ear.
+      automatically).
     - `gap_duration > 0`: insert that many seconds of real silence between
       each pair of songs instead -- built via ffmpeg's `concat` filter with
       a synthetic `anullsrc` silent segment spliced between each track
@@ -46,118 +42,104 @@ def build_music_track(
       effects keep playing continuously straight through this gap -- the
       gap only ever affects the music.
 
-    Either way, the fully-joined track then fades in from silence over
+    Before either join style, **every** track's own leading/trailing
+    near-silence is trimmed first (`silenceremove`) -- found via real
+    generated music, not assumed: AI-generated songs commonly fade to
+    near-total silence at their own edges (confirmed by decoding real
+    ACE-Step output to raw PCM and measuring RMS directly -- one real
+    track's last ~1s measured ~40 out of a ~1000-8000 range elsewhere;
+    another's last ~6s faded out entirely). Left untrimmed, that baked-in
+    silence does two different kinds of damage depending on where it sits:
+    at an *interior* join it blends two already-near-silent edges instead
+    of two songs (an audible dip); at the very first/last track's *outer*
+    edge it silently extends however far past where `edge_fade_duration`'s
+    own controlled fade actually starts, reading as the music stopping (or
+    starting) well before the edge fade you asked for -- not a bug in
+    `acrossfade`/`afade` themselves (both verified separately against
+    constant-amplitude synthetic tones, which behave exactly as expected).
+    Trimming every track's own edges uniformly means `edge_fade_duration`
+    always controls the actual edges of the finished piece, never whatever
+    leftover silence one specific source recording happens to already have.
+
+    The fully-joined track then fades in from silence over
     `edge_fade_duration` seconds at the very start and fades out to silence
-    over the same duration at the very end (`afade`) -- so the first song
-    doesn't start abruptly at full volume and the last doesn't cut off
-    abruptly either. `edge_fade_duration=0` disables the edge fades (same
+    over the same duration at the very end. The fade-out uses `areverse,
+    afade=t=in,areverse` rather than computing an absolute start timestamp
+    (`afade=t=out:st=<time>`) -- deliberately: the exact final duration
+    depends on how much the trims above actually removed, which isn't known
+    without a second probe pass on the intermediate audio; reversing the
+    stream, fading *in* from what's now the front (the real end), then
+    reversing back again is exact regardless of the real duration, no
+    estimate needed. `edge_fade_duration=0` disables both edge fades (same
     "0 to disable" convention `cinemagraph`'s own `--grain` option already
     uses).
 
-    A single track still gets edge fades even with no join needed.
+    A single track still gets its own edges trimmed and gets edge fades
+    even with no join needed.
     """
     if not track_paths:
         raise ValueError("build_music_track needs at least one track.")
 
+    inputs = []
+    for path in track_paths:
+        inputs += ["-i", path]
+
     stages = []
+    track_labels = []
+    for i, path in enumerate(track_paths):
+        label = f"trimmed{i}"
+        stages.append(
+            f"[{i}:a]"
+            f"silenceremove=start_periods=1:start_threshold={_SILENCE_THRESHOLD}:"
+            f"start_silence={_SILENCE_MIN_DURATION}:detection=rms,"
+            f"silenceremove=stop_periods=-1:stop_threshold={_SILENCE_THRESHOLD}:"
+            f"stop_silence={_SILENCE_MIN_DURATION}:detection=rms"
+            f"[{label}]"
+        )
+        track_labels.append(label)
+
     if gap_duration > 0 and len(track_paths) > 1:
-        inputs, concat_labels = [], []
-        input_index = 0
-        for i, path in enumerate(track_paths):
-            inputs += ["-i", path]
-            concat_labels.append(f"{input_index}:a")
-            input_index += 1
+        concat_labels = []
+        silence_input_index = len(track_paths)
+        for i in range(len(track_paths)):
+            concat_labels.append(track_labels[i])
             if i < len(track_paths) - 1:
                 inputs += [
                     "-f", "lavfi", "-t", str(gap_duration),
                     "-i", "anullsrc=channel_layout=stereo:sample_rate=44100",
                 ]
-                concat_labels.append(f"{input_index}:a")
-                input_index += 1
+                concat_labels.append(f"{silence_input_index}:a")
+                silence_input_index += 1
         concat_refs = "".join(f"[{label}]" for label in concat_labels)
         stages.append(f"{concat_refs}concat=n={len(concat_labels)}:v=0:a=1[joined]")
         prev_label = "joined"
+    elif len(track_paths) == 1:
+        prev_label = track_labels[0]
     else:
-        inputs = []
-        for path in track_paths:
-            inputs += ["-i", path]
-        if len(track_paths) == 1:
-            prev_label = "0:a"
-        else:
-            # Trim each INTERIOR join's own near-silent edges before
-            # crossfading -- found via real generated music, not assumed:
-            # AI-generated songs commonly fade to near-total silence at
-            # their own tail (confirmed by decoding real ACE-Step output to
-            # raw PCM and measuring RMS directly -- the last ~1s measured
-            # ~40 out of a ~1000-8000 range everywhere else), so a
-            # crossfade window landing on two already-faded edges blends
-            # two near-silences instead of two songs, producing an audible
-            # volume dip -- not a bug in acrossfade itself (verified
-            # separately against constant-amplitude synthetic tones, which
-            # cross-fade cleanly). Only interior edges are trimmed: the
-            # very first track's own leading edge and the very last
-            # track's own trailing edge are left alone, since those are
-            # edge_fade_duration's job below, not a crossfade join.
-            track_labels = []
-            for i, path in enumerate(track_paths):
-                filters = []
-                if i > 0:
-                    filters.append(
-                        f"silenceremove=start_periods=1:start_threshold={_SILENCE_THRESHOLD}:"
-                        f"start_silence={_SILENCE_MIN_DURATION}:detection=rms"
-                    )
-                if i < len(track_paths) - 1:
-                    filters.append(
-                        f"silenceremove=stop_periods=-1:stop_threshold={_SILENCE_THRESHOLD}:"
-                        f"stop_silence={_SILENCE_MIN_DURATION}:detection=rms"
-                    )
-                if filters:
-                    label = f"trimmed{i}"
-                    stages.append(f"[{i}:a]{','.join(filters)}[{label}]")
-                    track_labels.append(label)
-                else:
-                    track_labels.append(f"{i}:a")
-
-            prev_label = track_labels[0]
-            for i in range(1, len(track_paths)):
-                out_label = f"a{i}"
-                stages.append(
-                    f"[{prev_label}][{track_labels[i]}]"
-                    f"acrossfade=d={crossfade_duration}:curve1=qsin:curve2=qsin[{out_label}]"
-                )
-                prev_label = out_label
+        prev_label = track_labels[0]
+        for i in range(1, len(track_paths)):
+            out_label = f"a{i}"
+            stages.append(
+                f"[{prev_label}][{track_labels[i]}]"
+                f"acrossfade=d={crossfade_duration}:curve1=qsin:curve2=qsin[{out_label}]"
+            )
+            prev_label = out_label
 
     if edge_fade_duration > 0:
-        # Approximate: durations are probed from the original files, before
-        # any interior-edge silence trimming above -- a real trim shortens
-        # the actual output slightly more than this estimate accounts for.
-        # Close enough for "fade out near the end" (trims are on the order
-        # of ~1s against tracks tens of seconds long); not worth a second
-        # probe pass on the trimmed intermediate audio for that precision.
-        total_duration = sum(probe_duration(p) for p in track_paths)
-        if gap_duration > 0 and len(track_paths) > 1:
-            total_duration += gap_duration * (len(track_paths) - 1)
-        else:
-            total_duration -= crossfade_duration * (len(track_paths) - 1)
-        fade_out_start = max(total_duration - edge_fade_duration, 0.0)
         stages.append(
             f"[{prev_label}]afade=t=in:st=0:d={edge_fade_duration},"
-            f"afade=t=out:st={fade_out_start}:d={edge_fade_duration}[out]"
+            f"areverse,afade=t=in:st=0:d={edge_fade_duration},areverse[out]"
         )
         final_label = "out"
     else:
         final_label = prev_label
 
-    if stages:
-        run_ffmpeg([
-            "-y", *inputs,
-            "-filter_complex", ";".join(stages),
-            "-map", f"[{final_label}]",
-            output_path,
-        ])
-    else:
-        # One track, no edge fade -- nothing to filter, just copy through.
-        run_ffmpeg(["-y", "-i", track_paths[0], "-c", "copy", output_path])
+    run_ffmpeg([
+        "-y", *inputs,
+        "-filter_complex", ";".join(stages),
+        "-map", f"[{final_label}]",
+        output_path,
+    ])
 
 
 def layer_sound_effects(
