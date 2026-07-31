@@ -725,6 +725,32 @@ during the gap window in the music-only track, and continuous non-zero energy th
 same window in the final music+effects mix. CLI: `--music-gap`. API/UI: `music_gap_duration`.
 See `docs/experiments/2026-07-31-music-gap-between-songs.md`.
 
+**Two real bugs fixed in the crossfade path itself (same day, follow-up):** the project owner
+reported the crossfade "doesn't work" after the gap work landed. Root-caused via real
+generated music, not assumption -- decoded actual ACE-Step output to raw PCM and found real
+songs commonly fade to near-total silence at their own tail (measured RMS ~40 out of a
+~1000-8000 range everywhere else, in the last ~1s of a real 30s track), so a short crossfade
+window lands mostly on two already-faded edges and blends two silences instead of two songs --
+audible as a dip, not a smooth transition, even though `acrossfade` itself was confirmed
+working correctly the whole time (verified separately against constant-amplitude synthetic
+tones, which blend cleanly with no unexpected dip). Fixed with `silenceremove`, trimming each
+*interior* join's own edges before crossfading (the very first/last track's own outer edges
+stay untouched -- that's `edge_fade_duration`'s job, not a crossfade join). Two real ffmpeg
+option bugs found and fixed while building this, both via testing against the real binary
+rather than trusting the docs: `silenceremove`'s threshold is a **linear amplitude** (0..1),
+not decibels, despite reading like it should accept a `-30dB`-style string (passing one didn't
+error, it silently produced empty output); and `stop_periods` must be **negative** to trim
+from the end (a positive value scans forward from the start and can cut a real quiet passage
+mid-song instead of the trailing edge). Also switched `acrossfade`'s curve from the default
+linear `tri` to the equal-power `qsin` (a secondary, smaller improvement -- confirmed the
+linear-vs-equal-power choice alone wasn't the main cause, but it's a legitimate change to keep
+regardless). Honest residual limitation, reported to the project owner rather than papered
+over: trimming reliably removes the worst near-total-silence case, but real songs vary
+naturally in loudness even outside their true silent edges (measured ~1000-8000 RMS range
+throughout one real track), so some residual dip at a crossfade point is an inherent content
+characteristic, not something further threshold-tuning alone can fully eliminate. See
+`docs/experiments/2026-07-31-crossfade-silence-bug.md`.
+
 ### 5.7 Audio (music + sound effects) — both IMPLEMENTED
 
 Three candidate models were researched (see decision log below for the full comparison);

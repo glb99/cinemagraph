@@ -120,10 +120,49 @@ def test_build_music_track_multiple_tracks_chains_acrossfade_then_edge_fades():
     )
 
     filter_complex = run.calls[0][run.calls[0].index("-filter_complex") + 1]
-    assert "[0:a][1:a]acrossfade=d=2.0[a1]" in filter_complex
-    # total = 6 + 6 - 2 = 10; fade-out starts at 10 - 1 = 9
+    assert "[trimmed0][trimmed1]acrossfade=d=2.0:curve1=qsin:curve2=qsin[a1]" in filter_complex
+    # total = 6 + 6 - 2 = 10; fade-out starts at 10 - 1 = 9 (approximate --
+    # doesn't account for the interior-edge trim below, see build_music_track's
+    # own comment on why that's an accepted approximation)
     assert "afade=t=in:st=0:d=1.0" in filter_complex
     assert "afade=t=out:st=9.0:d=1.0" in filter_complex
+
+
+def test_build_music_track_trims_near_silent_interior_edges_before_crossfading():
+    """Real generated music commonly fades to near-total silence at its own
+    tail (found by decoding real ACE-Step output to raw PCM); crossfading
+    two such edges together blends two silences, not two songs. Only
+    interior joins get trimmed -- the very first track's leading edge and
+    the very last track's trailing edge are edge_fade_duration's job, not a
+    crossfade join, so they're left alone here."""
+    run = _FakeRun()
+    probe = _fake_probe({"a.mp3": 6.0, "b.mp3": 6.0, "c.mp3": 6.0})
+
+    audio_track.build_music_track(
+        ["a.mp3", "b.mp3", "c.mp3"], "out.mp3",
+        crossfade_duration=2.0, edge_fade_duration=0, run_ffmpeg=run, probe_duration=probe,
+    )
+
+    filter_complex = run.calls[0][run.calls[0].index("-filter_complex") + 1]
+    stages = filter_complex.split(";")
+
+    # track 0 (first): only a trailing trim (no leading trim -- that's the
+    # very start of the whole piece, edge_fade_duration's job).
+    assert stages[0] == (
+        "[0:a]silenceremove=stop_periods=-1:stop_threshold=0.02:stop_silence=0.1:detection=rms[trimmed0]"
+    )
+    # track 1 (middle): both a leading and a trailing trim, chained.
+    assert stages[1] == (
+        "[1:a]silenceremove=start_periods=1:start_threshold=0.02:start_silence=0.1:detection=rms,"
+        "silenceremove=stop_periods=-1:stop_threshold=0.02:stop_silence=0.1:detection=rms[trimmed1]"
+    )
+    # track 2 (last): only a leading trim (no trailing trim -- that's the
+    # very end of the whole piece, edge_fade_duration's job).
+    assert stages[2] == (
+        "[2:a]silenceremove=start_periods=1:start_threshold=0.02:start_silence=0.1:detection=rms[trimmed2]"
+    )
+    assert stages[3] == "[trimmed0][trimmed1]acrossfade=d=2.0:curve1=qsin:curve2=qsin[a1]"
+    assert stages[4] == "[a1][trimmed2]acrossfade=d=2.0:curve1=qsin:curve2=qsin[a2]"
 
 
 def test_build_music_track_gap_duration_inserts_silence_instead_of_crossfade():
