@@ -710,6 +710,21 @@ CLI command against actual `cinemagraph from-photo`-rendered clips (confirming c
 duration, real non-blank frames, both video/audio streams present in the final mux). See
 `docs/experiments/2026-07-31-long-form-assembly.md`.
 
+**`music_gap_duration` (added same day, follow-up):** an alternative to crossfading between
+songs -- inserts real silence of that length instead, via ffmpeg's `concat` filter with a
+synthetic `anullsrc` segment spliced between each pair of tracks (`concat` alone only does
+hard joins, the silence itself has to be a real input). Mutually exclusive with
+`music_crossfade_duration` (gap wins if both are set -- they're opposite transition
+concepts, not a spectrum). `layer_sound_effects` still runs as a separate step *after* the
+music track is built, so sound effects keep playing continuously straight through the gap --
+only the music pauses. Verified by decoding the actual output to raw PCM and inspecting RMS
+per time window directly (not via ffmpeg's own `-ss`/`-t` + `volumedetect`, which turned out
+to give misleading readings for this -- a real methodology pitfall hit and worked around
+during verification, not a bug in the feature itself): confirmed genuine silence exactly
+during the gap window in the music-only track, and continuous non-zero energy through that
+same window in the final music+effects mix. CLI: `--music-gap`. API/UI: `music_gap_duration`.
+See `docs/experiments/2026-07-31-music-gap-between-songs.md`.
+
 ### 5.7 Audio (music + sound effects) — both IMPLEMENTED
 
 Three candidate models were researched (see decision log below for the full comparison);

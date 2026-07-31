@@ -183,7 +183,11 @@ def from_photo(photo_path, output_path, effects, mask_path, duration, fps, speed
 @click.option("--music-edge-fade", type=float, default=2.0,
               help="Fade-in at the very start and fade-out at the very end of the whole track, in seconds "
                    "(0 to disable).")
-def assemble(clip_paths, output_path, music_paths, sfx_paths, video_crossfade, music_crossfade, music_edge_fade):
+@click.option("--music-gap", type=float, default=0.0,
+              help="Silent pause between songs, in seconds, instead of crossfading them (0 = crossfade as "
+                   "usual). Sound effects keep playing continuously through the gap -- only the music pauses.")
+def assemble(clip_paths, output_path, music_paths, sfx_paths, video_crossfade, music_crossfade, music_edge_fade,
+             music_gap):
     """Assemble CLIP_PATHS (crossfaded) with music/sound effects into OUTPUT_PATH.
 
     Only combines already-rendered clips -- render each clip first with
@@ -198,6 +202,7 @@ def assemble(clip_paths, output_path, music_paths, sfx_paths, video_crossfade, m
             video_crossfade_duration=video_crossfade,
             music_crossfade_duration=music_crossfade,
             music_edge_fade_duration=music_edge_fade,
+            music_gap_duration=music_gap,
         )
     except (ValueError, RuntimeError) as e:
         raise click.UsageError(str(e))

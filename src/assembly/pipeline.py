@@ -16,6 +16,7 @@ def assemble(
     video_crossfade_duration: float = 1.0,
     music_crossfade_duration: float = 2.0,
     music_edge_fade_duration: float = 2.0,
+    music_gap_duration: float = 0.0,
     run_ffmpeg=ffmpeg_runner.run_ffmpeg, probe_duration=ffmpeg_runner.probe_duration,
 ) -> None:
     """Builds the video track (clips concatenated with crossfades) and the
@@ -25,6 +26,13 @@ def assemble(
     different lengths, the longer is trimmed to the shorter (`-shortest`) --
     simplest, most predictable outcome, no silence-padding or freeze-frame
     extension logic.
+
+    `music_gap_duration > 0` replaces the crossfade between songs with real
+    silence of that length instead (mutually exclusive with
+    `music_crossfade_duration` -- see `audio_track.build_music_track`'s own
+    docstring). Sound effects are layered in as a separate step *after* the
+    music track (with or without a gap) is finished, so they keep playing
+    continuously straight through any such gap -- only the music pauses.
 
     Intermediate video/audio track files live in a temp directory, cleaned
     up once the final mux is written (or if any step raises).
@@ -49,6 +57,7 @@ def assemble(
             music_track_paths, str(music_path),
             crossfade_duration=music_crossfade_duration,
             edge_fade_duration=music_edge_fade_duration,
+            gap_duration=music_gap_duration,
             run_ffmpeg=run_ffmpeg, probe_duration=probe_duration,
         )
         audio_track.layer_sound_effects(

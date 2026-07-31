@@ -587,12 +587,18 @@ async def assemble(
     video_crossfade_duration: float = Form(1.0),
     music_crossfade_duration: float = Form(2.0),
     music_edge_fade_duration: float = Form(2.0),
+    music_gap_duration: float = Form(0.0),
 ):
     """Combines already-generated library assets (clips, music, sound
     effects) into one finished video via assembly.pipeline.assemble --
     crossfades between clips, crossfades between songs plus a fade-in/out at
     the whole track's edges, sound effects layered continuously under the
-    music. See run_assembly_job's own docstring and docs/DESIGN.md sec 5.6.
+    music. `music_gap_duration > 0` replaces the crossfade between songs
+    with real silence instead (mutually exclusive with
+    `music_crossfade_duration`) -- sound effects still play continuously
+    through it, only the music pauses. See run_assembly_job's and
+    audio_track.build_music_track's own docstrings, and docs/DESIGN.md sec
+    5.6.
 
     Every input is a library asset id (not an upload) -- assembly consumes
     "generated resources" that already exist, it doesn't generate anything
@@ -616,6 +622,7 @@ async def assemble(
         video_crossfade_duration=video_crossfade_duration,
         music_crossfade_duration=music_crossfade_duration,
         music_edge_fade_duration=music_edge_fade_duration,
+        music_gap_duration=music_gap_duration,
         library_kind="generated",
         provenance={
             "clip_asset_ids": clip_asset_ids,
@@ -624,6 +631,7 @@ async def assemble(
             "video_crossfade_duration": video_crossfade_duration,
             "music_crossfade_duration": music_crossfade_duration,
             "music_edge_fade_duration": music_edge_fade_duration,
+            "music_gap_duration": music_gap_duration,
         },
     )
     return JobResponse(job_id=job.id)

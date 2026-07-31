@@ -272,7 +272,10 @@ together continuously under the music, order doesn't matter for those.</p>
   <label>Video crossfade (s) <input type="number" id="assemble-video-crossfade" value="1.0" step="0.1" min="0"></label>
   <label>Music crossfade (s) <input type="number" id="assemble-music-crossfade" value="2.0" step="0.1" min="0"></label>
   <label>Music edge fade (s) <input type="number" id="assemble-music-edge-fade" value="2.0" step="0.1" min="0"></label>
+  <label>Music gap (s) <input type="number" id="assemble-music-gap" value="0" step="0.1" min="0"></label>
 </div>
+<p class="hint">Music gap: a silent pause between songs instead of crossfading them (0 = crossfade
+as usual). Sound effects keep playing continuously through the gap -- only the music pauses.</p>
 <button type="button" id="assemble-refresh">Refresh assets</button>
 <button type="button" id="assemble-submit">Assemble</button>
 <div class="status" id="assemble-status"></div>
@@ -871,6 +874,7 @@ document.getElementById("assemble-submit").addEventListener("click", async () =>
   params.append("video_crossfade_duration", document.getElementById("assemble-video-crossfade").value);
   params.append("music_crossfade_duration", document.getElementById("assemble-music-crossfade").value);
   params.append("music_edge_fade_duration", document.getElementById("assemble-music-edge-fade").value);
+  params.append("music_gap_duration", document.getElementById("assemble-music-gap").value);
 
   const submitBtn = document.getElementById("assemble-submit");
   submitBtn.disabled = true;

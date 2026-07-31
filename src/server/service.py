@@ -314,6 +314,7 @@ def run_assembly_job(
     video_crossfade_duration: float = 1.0,
     music_crossfade_duration: float = 2.0,
     music_edge_fade_duration: float = 2.0,
+    music_gap_duration: float = 0.0,
     library_kind: str | None = None,
     provenance: dict | None = None,
     run_ffmpeg=assembly_ffmpeg_runner.run_ffmpeg,
@@ -339,6 +340,7 @@ def run_assembly_job(
             video_crossfade_duration=video_crossfade_duration,
             music_crossfade_duration=music_crossfade_duration,
             music_edge_fade_duration=music_edge_fade_duration,
+            music_gap_duration=music_gap_duration,
             run_ffmpeg=run_ffmpeg,
         )
     except Exception as e:

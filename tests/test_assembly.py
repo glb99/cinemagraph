@@ -126,6 +126,48 @@ def test_build_music_track_multiple_tracks_chains_acrossfade_then_edge_fades():
     assert "afade=t=out:st=9.0:d=1.0" in filter_complex
 
 
+def test_build_music_track_gap_duration_inserts_silence_instead_of_crossfade():
+    run = _FakeRun()
+    probe = _fake_probe({"a.mp3": 6.0, "b.mp3": 6.0, "c.mp3": 6.0})
+
+    audio_track.build_music_track(
+        ["a.mp3", "b.mp3", "c.mp3"], "out.mp3",
+        gap_duration=1.5, edge_fade_duration=0, run_ffmpeg=run, probe_duration=probe,
+    )
+
+    assert len(run.calls) == 1
+    args = run.calls[0]
+    filter_complex = args[args.index("-filter_complex") + 1]
+    assert "acrossfade" not in filter_complex
+    assert "concat=n=5:v=0:a=1" in filter_complex  # 3 tracks + 2 silence segments
+    assert args.count("anullsrc=channel_layout=stereo:sample_rate=44100") == 2
+    assert args.count("-stream_loop") == 0  # not to be confused with layer_sound_effects' own looping
+
+
+def test_build_music_track_gap_duration_extends_edge_fade_out_start():
+    run = _FakeRun()
+    probe = _fake_probe({"a.mp3": 6.0, "b.mp3": 6.0})
+
+    audio_track.build_music_track(
+        ["a.mp3", "b.mp3"], "out.mp3",
+        gap_duration=2.0, edge_fade_duration=1.0, run_ffmpeg=run, probe_duration=probe,
+    )
+
+    filter_complex = run.calls[0][run.calls[0].index("-filter_complex") + 1]
+    # gap adds duration rather than removing it: total = 6 + 6 + 2 = 14; fade-out at 14 - 1 = 13
+    assert "afade=t=out:st=13.0:d=1.0" in filter_complex
+
+
+def test_build_music_track_gap_duration_ignored_for_a_single_track():
+    """Nothing to insert a gap between with only one track -- falls back to
+    the plain single-track path (copy-through, or edge fade if requested)."""
+    run = _FakeRun()
+    audio_track.build_music_track(["song.mp3"], "out.mp3", gap_duration=2.0, edge_fade_duration=0, run_ffmpeg=run)
+
+    assert len(run.calls) == 1
+    assert "-c" in run.calls[0] and "copy" in run.calls[0]
+
+
 def test_build_music_track_zero_edge_fade_skips_afade_entirely():
     run = _FakeRun()
     probe = _fake_probe({"a.mp3": 6.0, "b.mp3": 6.0})
