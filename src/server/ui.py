@@ -59,6 +59,10 @@ INDEX_HTML = """<!doctype html>
   video, audio, img.preview { max-width: 100%; margin-top: 1rem; border-radius: 8px; }
   .row { margin-bottom: 0.6rem; }
   .hint { color: #888; font-size: 0.8rem; }
+  .config-hint {
+    color: #e0a83a; font-size: 0.85rem; background: #2a2410; border: 1px solid #4a3f18;
+    border-radius: 6px; padding: 0.6rem 0.8rem; margin-bottom: 0.8rem;
+  }
   .tab { display: none; }
   .tab.active { display: block; }
   .library-toolbar { display: flex; gap: 0.6rem; align-items: center; margin-bottom: 1rem; }
@@ -140,6 +144,7 @@ the underlying routes don't already do themselves.</p>
 
 <!-- Music -->
 <section class="tab" id="tab-music">
+<div class="config-hint" id="music-config-hint" style="display:none"></div>
 <form id="music-form">
   <div class="row">
     <label style="display:block">Prompt
@@ -164,6 +169,7 @@ the underlying routes don't already do themselves.</p>
 
 <!-- Sound effects -->
 <section class="tab" id="tab-sfx">
+<div class="config-hint" id="sfx-config-hint" style="display:none"></div>
 <form id="sfx-form">
   <div class="row">
     <label style="display:block">Prompt
@@ -181,6 +187,7 @@ the underlying routes don't already do themselves.</p>
 
 <!-- Image -->
 <section class="tab" id="tab-image">
+<div class="config-hint" id="image-config-hint" style="display:none"></div>
 <form id="image-form">
   <div class="row">
     <label style="display:block">Prompt
@@ -226,9 +233,18 @@ the underlying routes don't already do themselves.</p>
 const TABS = [
   { id: "photo", label: "Photo", always: true },
   { id: "video", label: "Video", always: true },
-  { id: "music", label: "Music", capability: "music_generation" },
-  { id: "sfx", label: "Sound effects", capability: "sound_effect_generation" },
-  { id: "image", label: "Image", capability: "image_generation" },
+  {
+    id: "music", label: "Music", capability: "music_generation",
+    startCommand: "docker compose --profile audio up acestep",
+  },
+  {
+    id: "sfx", label: "Sound effects", capability: "sound_effect_generation",
+    startCommand: "docker compose --profile audio up sound-effects",
+  },
+  {
+    id: "image", label: "Image", capability: "image_generation",
+    startCommand: "docker compose --profile image up image-generation",
+  },
   { id: "library", label: "Library", always: true },
 ];
 
@@ -268,14 +284,32 @@ async function loadCapabilities() {
   const nav = document.getElementById("nav");
   let firstVisible = null;
   for (const tab of TABS) {
-    if (!tab.always && !caps[tab.capability]) continue;
-    if (firstVisible === null) firstVisible = tab.id;
+    const available = tab.always || !!caps[tab.capability];
+    // Configured-but-unreachable (e.g. IMAGE_GENERATION_URL is set but the
+    // container isn't running right now) still shows the tab, with a hint
+    // banner inside it -- distinct from "not configured at all", which
+    // stays hidden (nothing to hint about without redeploying). See
+    // app.py's /capabilities docstring for the configured/available split.
+    const configured = !tab.always && !!(caps.configured && caps.configured[tab.capability]);
+    if (!available && !configured) continue;
+    if (firstVisible === null && available) firstVisible = tab.id;
+
     const btn = document.createElement("button");
     btn.type = "button";
-    btn.textContent = tab.label;
+    btn.textContent = available ? tab.label : `${tab.label} ⚠`;
     btn.dataset.tab = tab.id;
     btn.addEventListener("click", () => showTab(tab.id));
     nav.appendChild(btn);
+
+    if (!available && configured && tab.startCommand) {
+      const hintEl = document.getElementById(`${tab.id}-config-hint`);
+      if (hintEl) {
+        hintEl.textContent =
+          `${tab.label} is configured but not reachable right now -- ` +
+          `its container probably isn't running. Start it with: ${tab.startCommand}`;
+        hintEl.style.display = "block";
+      }
+    }
   }
   showTab(firstVisible || "photo");
 }

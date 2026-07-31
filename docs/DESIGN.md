@@ -397,7 +397,7 @@ cinemagraph-tool/
 ├── machine-learning/          # isolated service: CLIPSeg semantic masking (validated)
 ├── sound-effects/             # isolated service: Stable Audio Open (validated)
 ├── image-generation/          # isolated service: Stable Diffusion XL (validated)
-├── tests/                     # 86 tests: contracts, invariants, smoke (core + API + library);
+├── tests/                     # 87 tests: contracts, invariants, smoke (core + API + library);
 │                               #   tests/integration/ adds 2 more, excluded from the default
 │                               #   run (needs a live deployed stack -- see sec 3.7/5.9)
 ├── scripts/golden_check.py    # pixel-regression check, separate from pytest (see sec 6)
@@ -740,6 +740,34 @@ to (a regression in one of them, or the port/registry work in §5.8 landing) —
 speculatively ahead of that, same sequencing discipline as §5.8 itself. Not part of CI:
 needs a live GPU, takes real minutes, and outputs are generative/non-deterministic, so it
 stays a deliberately-run local suite for now.
+
+### 5.10 "Configured but not running" UI hint — IMPLEMENTED
+
+Prompted by a real dead-end: with just `core` running, a satellite whose env var is set
+(e.g. `ACESTEP_URL`) but whose container isn't up yet had its whole tab silently vanish
+from the web UI — indistinguishable from "never configured at all." Considered and
+rejected a heavier fix first: auto-deploying the right container from the UI on selection,
+which would need `core` to hold the Docker socket (a real privilege-escalation surface for
+a personal tool) and, since this project's single 8GB GPU can only usefully run one
+GPU-heavy service at a time (already-observed contention running `image-generation` and
+`acestep` together), would also need to auto-stop whatever else is running — a real
+orchestration layer, not justified for a single-user local tool per §6's own ceiling
+(`docker-compose`, nothing heavier without a real trigger).
+
+Built the cheap version instead: `GET /capabilities` gained a `configured: dict[str, bool]`
+field (per-capability, purely additive) distinguishing "no env var/key set at all" (nothing
+to hint about, tab correctly stays hidden) from "configured but the health check currently
+fails" (the tab now still shows, labeled with a `⚠`, and its own section displays a banner
+naming the exact `docker compose --profile X up service` command to run). `image_generation`'s
+own `configured` is true if *either* backend (`IMAGE_GENERATION_URL` or `GEMINI_API_KEY`) has
+any config present, matching how its `available` bool already unions the two. No server-side
+polling/push needed — this reuses the exact `GET /capabilities` call the UI already makes once
+on page load.
+
+Verified in a real browser against a real running `core` container (rebuilt after this
+change) with `ACESTEP_URL`/`SOUND_EFFECTS_URL` configured but neither container started:
+both tabs appeared (previously invisible), each showing its hint banner with the correct
+start command.
 
 ## 6. Laboratory tooling — what earns its place and what doesn't
 

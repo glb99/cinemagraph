@@ -51,7 +51,29 @@ def test_capabilities_without_optional_services_configured(api_client):
         "sound_effect_generation": False,
         "image_generation": False,
         "image_generation_models": ["sdxl"],
+        "configured": {
+            "semantic_mask": False,
+            "music_generation": False,
+            "sound_effect_generation": False,
+            "image_generation": False,
+        },
     }
+
+
+def test_capabilities_distinguishes_configured_but_unreachable(api_client, tmp_path):
+    """A service whose URL is set but which doesn't actually answer /health
+    (e.g. its container isn't running) should show up as unavailable *and*
+    configured -- the combination the web UI uses to show a hint instead of
+    hiding the tab. Distinct from the "nothing configured" case, where
+    configured stays False too (see ui.py's loadCapabilities)."""
+    app.dependency_overrides[get_settings] = lambda: Settings(
+        data_dir=tmp_path / "data", acestep_url="http://acestep.invalid:9"
+    )
+    resp = api_client.get("/capabilities")
+    body = resp.json()
+    assert body["music_generation"] is False
+    assert body["configured"]["music_generation"] is True
+    assert body["configured"]["sound_effect_generation"] is False
 
 
 def test_list_effects(api_client):

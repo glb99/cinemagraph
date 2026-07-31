@@ -130,6 +130,16 @@ async def capabilities(settings: SettingsDep):
     registered-but-currently-unreachable SDXL still shows up here, and a
     real generate request against it still degrades to a clear per-job
     error, exactly as before this adapter existed.
+
+    `configured` distinguishes "nothing to hint about" from "operator
+    likely just forgot to start a container": a satellite whose env var is
+    set but whose health check currently fails is `configured=True,
+    <bool>=False` -- the web UI uses that combination to show a hint instead
+    of hiding the tab outright (see ui.py). image_generation's own
+    `configured` is true if either backend has *any* config present (URL or
+    key), independent of live reachability -- deliberately not narrowed to
+    "SDXL only", since a Gemini key alone is enough to make the capability
+    genuinely configured even with no SDXL URL at all.
     """
     return CapabilitiesResponse(
         semantic_mask=await service_available(settings.semantic_mask_service),
@@ -140,6 +150,12 @@ async def capabilities(settings: SettingsDep):
             or bool(settings.gemini_api_key)
         ),
         image_generation_models=list(available_image_generators()),
+        configured={
+            "semantic_mask": bool(settings.ml_service_url),
+            "music_generation": bool(settings.acestep_url),
+            "sound_effect_generation": bool(settings.sound_effects_url),
+            "image_generation": bool(settings.image_generation_url) or bool(settings.gemini_api_key),
+        },
     )
 
 
