@@ -251,6 +251,35 @@ weight class as `service.py`/`_external_service.py` already in that package.
 backend); music and sound-effect generation follow the same shape once image generation
 proves it out, rather than doing all three at once speculatively.
 
+**A second real adapter (2026-07-31): `GeminiAdapter`.** With a working, paid Gemini API
+key finally available, Google's hosted image API was re-adopted -- this time coexisting
+with SDXL (per-request `model` field) rather than replacing it, the exact case this
+section's registry design was built for. `run_image_job`'s default now resolves through
+`generation_registry.get_image_generator(model)` instead of always building
+`SDXLAdapter(settings)` directly -- see the docstring on that function for why this
+doesn't reintroduce the earlier "registry vs. per-call `settings=`" shadowing risk (real
+request traffic's `settings` and the registry's own registered adapters are built from
+the exact same cached `get_settings()` singleton; only the direct-injection test seam
+changes, not real behavior).
+
+The concrete case this second adapter surfaced, which the loose `ImageGenerator`
+Protocol (`generate(prompt, **kwargs) -> bytes`) tolerates but doesn't enforce: adapters
+are not fully homogeneous peers. `GeminiAdapter` accepts `strength` (interface parity
+with `SDXLAdapter`) but silently ignores it -- Gemini's own image-editing API has no
+denoising-strength knob, confirmed against the real installed package. `effects/base.py`
+solves the analogous problem for effects via each `Effect`'s own `allowed_kwargs`,
+validated by `validation.resolve_effect_kwargs`; the generation registry doesn't have an
+equivalent yet. Deliberately not built now -- a capability-declaration mechanism for a
+registry of two, where the only actual divergence found so far is "one adapter ignores
+one kwarg with no user-visible harm," would be guessing at a shape before a real need
+(e.g. a feature one adapter supports and another can't safely no-op on) has shown up.
+Revisit if a future adapter's unsupported feature would silently produce a *wrong*
+result rather than just a no-op.
+
+Full account, including the real API contract confirmed via live introspection and a
+real key (not docs, which were already wrong once for this exact API in the first
+attempt): `docs/experiments/2026-07-31-gemini-adapter.md`.
+
 **Deliberately deferred: an actual event/message broker between services** (e.g. Redis
 Streams, RabbitMQ -- satellites become message consumers instead of HTTP servers). This
 is a different concern from the port/adapter work above: it buys resilience and fan-out
@@ -358,21 +387,23 @@ cinemagraph-tool/
 ├── src/
 │   ├── cinemagraph/           # the stable core: pipeline, effects registry, mask, grade, loop, io
 │   ├── asset_library/         # content-addressed local library, its own top-level package
+│   ├── generation/             # light sibling module: Gemini image API client (sec 3.2/3.6),
+│   │                           #   own root-pyproject extra ("generation"), gated by GEMINI_API_KEY
 │   └── server/                # FastAPI door: app.py (routes) + service.py (workflows) +
 │                               #   config.py (Settings/DI) + ui.py (GET / thin web UI: 6 tabs) +
 │                               #   generation_ports.py/generation_adapters.py/generation_registry.py
-│                               #   (ImageGenerator port + SDXLAdapter + registry, sec 3.6);
-│                               #   sibling package to cinemagraph, same distribution, no own pyproject
+│                               #   (ImageGenerator port + SDXLAdapter + GeminiAdapter + registry,
+│                               #   sec 3.6); sibling package to cinemagraph, same distribution
 ├── machine-learning/          # isolated service: CLIPSeg semantic masking (validated)
 ├── sound-effects/             # isolated service: Stable Audio Open (validated)
 ├── image-generation/          # isolated service: Stable Diffusion XL (validated)
-├── tests/                     # 78 tests: contracts, invariants, smoke (core + API + library);
+├── tests/                     # 86 tests: contracts, invariants, smoke (core + API + library);
 │                               #   tests/integration/ adds 2 more, excluded from the default
 │                               #   run (needs a live deployed stack -- see sec 3.7/5.9)
 ├── scripts/golden_check.py    # pixel-regression check, separate from pytest (see sec 6)
 ├── docs/experiments/          # lab notebook, one file per experiment
 ├── Dockerfile + docker-compose.yml   # core image (never torch); satellite services gated off
-└── pyproject.toml             # uv-managed; extra: server; dep-group: dev
+└── pyproject.toml             # uv-managed; extras: server, generation; dep-group: dev
 ```
 
 This package was originally a top-level `api/` directory, then moved into `src/` (setuptools'
@@ -666,6 +697,20 @@ injected `ImageGenerator` instead of building the image-generation/ request inli
 by `uv run pytest` (78 passed) plus a direct import check. Music/sound-effect generation
 remain hardcoded per §3.6's own sequencing — not started until this pattern is needed a
 second time.
+
+**Extended same day: `GeminiAdapter`, a real second adapter.** Google's hosted image API
+(§5.2's earlier reverted attempt) was re-adopted, this time coexisting with SDXL rather
+than replacing it — the registry's per-request `model` field now does real work for the
+first time. Lives in a new `generation/` sibling module (its own root-pyproject extra,
+`google-genai`, gated behind `GEMINI_API_KEY`) rather than `image-generation/`'s isolated-
+service shape, since it's a thin hosted-API client, not a multi-GB local model (§3.2's
+tier table already predicted this exact "light sibling module" placement). `GET
+/capabilities` gained `image_generation_models` so the web UI's model dropdown can build
+itself dynamically, present only once a second adapter is actually registered — no UI/API
+change needed the day only `sdxl` exists, exactly as designed above. Verified against the
+real Gemini API (not mocked) end to end through the actual HTTP route, both text-to-image
+and img2img, plus `uv run pytest` (86 passed). See
+`docs/experiments/2026-07-31-gemini-adapter.md`.
 
 ### 5.9 Post-deployment integration tests (`tests/integration/`) — IMPLEMENTED, music first
 

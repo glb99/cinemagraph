@@ -50,6 +50,7 @@ def test_capabilities_without_optional_services_configured(api_client):
         "music_generation": False,
         "sound_effect_generation": False,
         "image_generation": False,
+        "image_generation_models": ["sdxl"],
     }
 
 
@@ -285,6 +286,42 @@ def test_generate_image_without_service_configured_reports_job_error(api_client)
     status = api_client.get(f"/jobs/{job_id}").json()
     assert status["status"] == "error", status
     assert "IMAGE_GENERATION_URL" in status["error"]
+
+
+def test_generate_image_rejects_unknown_model(api_client):
+    """`model` is validated against generation_registry.available_image_generators()
+    before a job is even created -- an unregistered name is a 422, the same
+    "reject at the route" pattern /render/photo already uses for unknown effects."""
+    resp = api_client.post(
+        "/generate/image", data={"prompt": "a lofi bedroom at sunset", "model": "does-not-exist"}
+    )
+    assert resp.status_code == 422
+    assert "does-not-exist" in resp.json()["detail"]
+
+
+def test_generate_image_uses_requested_model(api_client):
+    """A registered adapter other than the default ("sdxl") is actually used
+    when named via `model` -- the real per-request selection path (see
+    run_image_job's docstring)."""
+    from server import generation_registry
+
+    class FakeGenerator:
+        async def generate(self, prompt, **kwargs):
+            return b"fake-png-bytes-from-route-test"
+
+    generation_registry.register_image_generator("test-route-fake", FakeGenerator())
+    try:
+        resp = api_client.post(
+            "/generate/image",
+            data={"prompt": "a lofi bedroom at sunset", "model": "test-route-fake"},
+        )
+        assert resp.status_code == 200, resp.text
+        job_id = resp.json()["job_id"]
+
+        status = api_client.get(f"/jobs/{job_id}").json()
+        assert status["status"] == "done", status
+    finally:
+        del generation_registry._IMAGE_GENERATORS["test-route-fake"]
 
 
 def test_library_add_list_get_file_and_remove(api_client, test_photo):

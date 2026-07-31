@@ -193,6 +193,9 @@ the underlying routes don't already do themselves.</p>
     </label>
   </div>
   <label>Strength <input type="number" id="image-strength" value="0.6" min="0" max="1" step="0.05"></label>
+  <div class="row" id="image-model-row" style="display:none">
+    <label>Model <select id="image-model"></select></label>
+  </div>
   <div class="row"></div>
   <button type="submit">Generate</button>
 </form>
@@ -243,6 +246,23 @@ async function loadCapabilities() {
   const caps = await (await fetch("/capabilities")).json();
   if (caps.semantic_mask) {
     document.getElementById("photo-mask-prompt-row").style.display = "block";
+  }
+
+  // Model choice only makes sense once a second adapter (e.g. Gemini) is
+  // actually registered -- with just "sdxl", the dropdown would be a choice
+  // of one, which is no choice at all (see docs/DESIGN.md sec 3.6).
+  const models = caps.image_generation_models || [];
+  if (models.length > 1) {
+    const row = document.getElementById("image-model-row");
+    const select = document.getElementById("image-model");
+    select.innerHTML = "";
+    for (const name of models) {
+      const opt = document.createElement("option");
+      opt.value = name;
+      opt.textContent = name;
+      select.appendChild(opt);
+    }
+    row.style.display = "block";
   }
 
   const nav = document.getElementById("nav");
@@ -536,6 +556,10 @@ wireForm("image-form", {
     if (referenceFile) {
       form.append("reference_image", referenceFile);
       form.append("strength", document.getElementById("image-strength").value);
+    }
+    const modelSelect = document.getElementById("image-model");
+    if (modelSelect.value) {
+      form.append("model", modelSelect.value);
     }
     return form;
   },

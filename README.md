@@ -209,16 +209,26 @@ blocking startup) whenever the service isn't configured or isn't reachable:
   Configure with `SOUND_EFFECTS_URL`; `docker compose --profile audio up sound-effects` runs it
   locally. Validated end-to-end against a real GPU — see `docs/experiments/`.
 - **`POST /generate/image`** — image generation (`prompt` form field, plus optional
-  `reference_image` upload + `strength` for img2img) via `image-generation/`, a small FastAPI
-  wrapper around Stable Diffusion XL that ships with this repo (own
-  `pyproject.toml`/`Dockerfile`, isolated from the core's dependencies — see that directory's
-  README). Configure with `IMAGE_GENERATION_URL`; `docker compose --profile image up
-  image-generation` runs it locally. Validated end-to-end against a real GPU — see
-  `docs/experiments/`. A hosted API (Gemini's native image models) was tried first and reverted
-  (new Google AI Studio accounts require a non-refundable minimum prepay to use it at all) — same
-  place has the full account. img2img is best-effort on this project's 8GB GPU (a real, accepted
-  VRAM tradeoff — see `image-generation/README.md`), and `GET /capabilities` has a known,
-  unresolved issue occasionally under-reporting `image_generation` for this service.
+  `reference_image` upload + `strength` for img2img, plus optional `model`) behind an
+  `ImageGenerator` port with two coexisting adapters (`server/generation_ports.py`/
+  `generation_adapters.py`/`generation_registry.py`, see `docs/DESIGN.md` sec 3.6):
+  - `model=sdxl` (default) — `image-generation/`, a small FastAPI wrapper around Stable
+    Diffusion XL that ships with this repo (own `pyproject.toml`/`Dockerfile`, isolated from the
+    core's dependencies — see that directory's README). Configure with `IMAGE_GENERATION_URL`;
+    `docker compose --profile image up image-generation` runs it locally. img2img is
+    best-effort on this project's 8GB GPU (a real, accepted VRAM tradeoff — see
+    `image-generation/README.md`).
+  - `model=gemini` — Google's hosted Gemini image API (`generation/`, a light sibling module,
+    `google-genai` via the root `generation` extra — `uv sync --extra server --extra
+    generation`). Configure with `GEMINI_API_KEY`. No `strength` equivalent (accepted and
+    ignored). Requires Google AI Studio's paid tier (non-refundable minimum prepay for new
+    accounts) — see `docs/experiments/` for the full account of the first, reverted attempt and
+    the later one that actually adopted it.
+
+  `GET /capabilities`'s `image_generation_models` lists every currently-registered adapter (the
+  web UI's model dropdown only appears once more than one is); `image_generation` itself is
+  `true` if either SDXL health-checks or Gemini is configured. Validated end-to-end against a
+  real GPU (SDXL) and the real API (Gemini) — see `docs/experiments/`.
 
 ## Reference library
 

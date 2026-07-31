@@ -253,7 +253,7 @@ async def test_image_job_downloads_image_and_registers_in_library(tmp_path):
     [asset] = asset_library.list_assets()
     assert asset.kind == "generated"
     assert asset.tags == ["image"]
-    assert asset.provenance == {"prompt": "a lofi bedroom at sunset"}
+    assert asset.provenance == {"prompt": "a lofi bedroom at sunset", "model": "sdxl"}
 
 
 @pytest.mark.anyio
@@ -290,7 +290,59 @@ async def test_image_job_with_reference_image_passes_bytes_and_strength_to_gener
     }
 
     [asset] = asset_library.list_assets()
-    assert asset.provenance == {"prompt": "a lofi bedroom at sunset", "strength": 0.4}
+    assert asset.provenance == {"prompt": "a lofi bedroom at sunset", "model": "sdxl", "strength": 0.4}
+
+
+@pytest.mark.anyio
+async def test_image_job_resolves_generator_from_registry_by_model_when_none_injected(tmp_path):
+    """Without an explicit image_generator=, run_image_job looks the `model`
+    name up in generation_registry -- the actual per-request model-selection
+    path real requests go through (app.py never passes image_generator=
+    itself), as opposed to every other test here which bypasses it via a
+    directly-injected fake."""
+    from server import generation_registry
+
+    class FakeGenerator:
+        async def generate(self, prompt, **kwargs):
+            return b"fake-from-registry-bytes"
+
+    generation_registry.register_image_generator("test-registry-fake", FakeGenerator())
+    try:
+        output = tmp_path / "out.png"
+        job = jobs.create_job()
+        await service.run_image_job(
+            job.id, output, settings=Settings(),
+            prompt="a lofi bedroom at sunset", model="test-registry-fake",
+            library_kind="generated",
+        )
+
+        result = jobs.get_job(job.id)
+        assert result.status is jobs.JobStatus.DONE, result.error
+        assert output.read_bytes() == b"fake-from-registry-bytes"
+
+        [asset] = asset_library.list_assets()
+        assert asset.provenance["model"] == "test-registry-fake"
+    finally:
+        del generation_registry._IMAGE_GENERATORS["test-registry-fake"]
+
+
+@pytest.mark.anyio
+async def test_image_job_errors_cleanly_for_unregistered_model(tmp_path):
+    """A model name unregistered by the time the background job actually
+    runs (registry state can't change between the route's own validation and
+    the job executing, but this is the last line of defense) should mark the
+    job as errored, not raise uncaught out of a BackgroundTask."""
+    output = tmp_path / "out.png"
+    job = jobs.create_job()
+    await service.run_image_job(
+        job.id, output, settings=Settings(),
+        prompt="a lofi bedroom at sunset", model="does-not-exist",
+        library_kind="generated",
+    )
+
+    result = jobs.get_job(job.id)
+    assert result.status is jobs.JobStatus.ERROR
+    assert "does-not-exist" in result.error
 
 
 @pytest.mark.anyio

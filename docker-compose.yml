@@ -27,6 +27,12 @@ services:
       # - ACESTEP_URL=http://host.docker.internal:8001
       - SOUND_EFFECTS_URL=http://sound-effects:8003
       - IMAGE_GENERATION_URL=http://image-generation:8005
+      # Hosted, not a satellite container -- unlike every URL above, this is
+      # a secret, read from the root .env file via Compose's own ${VAR}
+      # substitution (gitignored, never committed). Absent -> GeminiAdapter
+      # just never registers (server/app.py), same "not configured -> not
+      # offered" degrade every other optional capability already follows.
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
 
   # machine-learning/ -- CLIPSeg (via transformers), same shape as
   # sound-effects/ below: built, own pyproject/Dockerfile, `core` still

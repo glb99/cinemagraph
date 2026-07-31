@@ -23,6 +23,12 @@ server = [
     "httpx>=0.27.0,<1",
     "pydantic-settings>=2.2.0,<3",
 ]
+# Light sibling module (sec 3.2's "generation/ (planned, API-backend case)" row) --
+# its own extra, not folded into `server`, so a deployment that only wants the
+# self-hosted SDXL/ACE-Step/Stable-Audio backends never pulls in google-genai.
+generation = [
+    "google-genai>=2.16.0,<3",
+]
 
 [dependency-groups]
 dev = ["pytest>=8.0.0", "pytest-cov", "httpx>=0.27.0,<1"]

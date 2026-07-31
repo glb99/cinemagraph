@@ -71,21 +71,26 @@ from cinemagraph import effects as effects_pkg, pipeline, validation
 from . import jobs, service, ui
 from ._external_service import call_optional_service, service_available
 from .config import Settings, get_settings
-from .generation_adapters import SDXLAdapter
-from .generation_registry import register_image_generator
+from .generation_adapters import GeminiAdapter, SDXLAdapter
+from .generation_registry import available_image_generators, register_image_generator
 from .schemas import AssetResponse, CapabilitiesResponse, JobResponse, JobStatusResponse
 
 SettingsDep = Annotated[Settings, Depends(get_settings)]
 
 app = FastAPI(title="cinemagraph-tool API")
 
-# Populates generation_registry's mechanism for real (sec 3.6) -- nothing
-# looks this up by name per-request yet (that's the "model" field on
-# POST /generate/image, deferred until a second adapter justifies it);
-# run_image_job's own default still builds a fresh SDXLAdapter from whatever
-# settings it's called with, rather than pulling this registered instance,
-# so a test's own Settings(...) is never shadowed by this process-global one.
-register_image_generator("sdxl", SDXLAdapter(get_settings()))
+# Populates generation_registry for real (sec 3.6) -- "sdxl" always
+# registers (image-generation/'s own reachability is still checked fresh
+# per request via service_available, same as before); "gemini" only
+# registers when GEMINI_API_KEY is actually configured, the same
+# "absent -> just don't offer it" degrade every other optional capability
+# already follows. run_image_job's own default (server/service.py) resolves
+# a model name through this same registry -- see its docstring for why that
+# doesn't shadow a test's own Settings(...) for real request traffic.
+_settings = get_settings()
+register_image_generator("sdxl", SDXLAdapter(_settings))
+if _settings.gemini_api_key:
+    register_image_generator("gemini", GeminiAdapter(_settings))
 
 
 def _job_dir(settings: Settings, job_id: str) -> Path:
@@ -115,11 +120,26 @@ async def health():
 
 @app.get("/capabilities", response_model=CapabilitiesResponse)
 async def capabilities(settings: SettingsDep):
+    """image_generation is true if *either* SDXL health-checks (a real,
+    fresh-per-request call, same as every other satellite) or Gemini is
+    registered (no equivalent health check exists for a hosted API -- its
+    registration, gated on GEMINI_API_KEY at app startup in this module, is
+    the only signal available). image_generation_models lists every
+    registered adapter regardless of live reachability -- same "checked
+    fresh at actual request time" philosophy as the rest of this file: a
+    registered-but-currently-unreachable SDXL still shows up here, and a
+    real generate request against it still degrades to a clear per-job
+    error, exactly as before this adapter existed.
+    """
     return CapabilitiesResponse(
         semantic_mask=await service_available(settings.semantic_mask_service),
         music_generation=await service_available(settings.music_service),
         sound_effect_generation=await service_available(settings.sound_effect_service),
-        image_generation=await service_available(settings.image_generation_service),
+        image_generation=(
+            await service_available(settings.image_generation_service)
+            or bool(settings.gemini_api_key)
+        ),
+        image_generation_models=list(available_image_generators()),
     )
 
 
@@ -451,17 +471,24 @@ async def generate_image(
     prompt: str = Form(...),
     reference_image: UploadFile | None = File(None),
     strength: float = Form(0.6),
+    model: str = Form("sdxl"),
 ):
-    """Proxies to the image-generation/ service (local SDXL). Same shape as
-    /generate/sound-effect -- synchronous remote call, still run as a
-    background job since generation takes real time and shouldn't hold the
-    HTTP connection open.
+    """Proxies to a registered ImageGenerator adapter (generation_ports.py) --
+    `model` picks which one ("sdxl" = local SDXL/image-generation/, "gemini"
+    = Google's hosted API/generation/, when GEMINI_API_KEY is configured).
+    Same background-job shape as /generate/sound-effect either way --
+    generation takes real time and shouldn't hold the HTTP connection open.
 
     `reference_image` is optional (img2img mode -- see run_image_job's own
-    docstring); `strength` only matters when it's supplied. Saved to the job
-    directory before scheduling the background task, same as /render/photo's
-    mask upload -- the UploadFile itself doesn't survive past this request.
+    docstring); `strength` only matters for SDXL. Saved to the job directory
+    before scheduling the background task, same as /render/photo's mask
+    upload -- the UploadFile itself doesn't survive past this request.
     """
+    if model not in available_image_generators():
+        raise HTTPException(
+            422, f"Unknown model '{model}'. Choose from: {', '.join(available_image_generators())}"
+        )
+
     job = jobs.create_job()
     job_dir = _job_dir(settings, job.id)
     output_path = job_dir / "output.png"
@@ -474,7 +501,7 @@ async def generate_image(
     background_tasks.add_task(
         service.run_image_job, job.id, output_path,
         settings=settings, prompt=prompt,
-        reference_image_path=reference_image_path, strength=strength,
+        reference_image_path=reference_image_path, strength=strength, model=model,
         library_kind="generated",
     )
     return JobResponse(job_id=job.id)

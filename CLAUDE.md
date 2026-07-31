@@ -19,18 +19,22 @@ Uses [uv](https://docs.astral.sh/uv/):
 ```bash
 uv sync                       # core CLI only (opencv/numpy/click/imageio) + dev dependency group
 uv sync --extra server        # + fastapi/uvicorn/httpx, for server/app.py
+uv sync --extra server --extra generation   # + google-genai, for GeminiAdapter (sec 3.6)
 ```
 
 `dev` (pytest etc.) is a [PEP 735 dependency group](https://peps.python.org/pep-0735/), synced by
-default and never part of a real install's metadata. `server` is the only
-`[project.optional-dependencies]` extra — a real, installable feature, opt-in via `--extra`. There
-used to also be an `ml` extra (torch/transformers) here, predating `machine-learning/` becoming its
-own standalone project with its own `pyproject.toml`/deps; removed once confirmed dead (nothing in
-`cinemagraph` or `server` ever imported torch/transformers, and the root `Dockerfile` explicitly
-excluded it from every build).
+default and never part of a real install's metadata. `server` and `generation` are the
+`[project.optional-dependencies]` extras — real, installable features, opt-in via `--extra`.
+`generation` is `src/generation/`'s own extra (sec 3.2's "light sibling module" tier: a thin
+`google-genai` API client, not a multi-GB local model) — kept separate from `server` so a
+deployment that only wants the self-hosted backends (SDXL/ACE-Step/Stable Audio) never pulls it
+in. There used to also be an `ml` extra (torch/transformers) here, predating `machine-learning/`
+becoming its own standalone project with its own `pyproject.toml`/deps; removed once confirmed
+dead (nothing in `cinemagraph` or `server` ever imported torch/transformers, and the root
+`Dockerfile` explicitly excluded it from every build).
 
-Tests: `uv run pytest` (needs `--extra server` synced first, for the API smoke tests). No
-linter/formatter configured yet.
+Tests: `uv run pytest` (needs `--extra server --extra generation` synced first, for the API
+smoke tests and the Gemini-adapter unit tests). No linter/formatter configured yet.
 
 ## Running
 
@@ -300,20 +304,33 @@ Three more routes are optional-external-service seams, all using `_external_serv
   minutes) and the HTTP connection shouldn't be held open for it. Validated end-to-end against a real
   GPU (both the service standalone and the full chain through this API) — see
   `docs/experiments/2026-07-27-audio-model-serving-research.md`.
-- **`POST /generate/image`** — proxies to `image-generation/`, a small FastAPI service **this
-  project owns and built** wrapping Stable Diffusion XL (`diffusers`) — same shape as
-  `/generate/sound-effect` in every respect (env var `IMAGE_GENERATION_URL`, single synchronous
-  `POST /generate` call, still run as a background job here for the same reason). A hosted API
-  (Gemini's native image models) was built first and fully reverted: new Google AI Studio accounts
-  require a non-refundable minimum prepay to use it at all, found only by actually trying to
-  generate an image. See `docs/experiments/2026-07-29-image-generation-backend-choice.md` for the
-  full account of both attempts, and why local SDXL specifically (VRAM/quality tradeoffs checked
-  against current data, not assumed). Accepts an optional `reference_image` upload + `strength`
-  for img2img (generate conditioned on a photo instead of pure text) — best-effort under
-  heavy/rapid use on this project's 8GB GPU (real, accepted VRAM tradeoff, not a bug still being
-  chased); see `docs/experiments/2026-07-30-image-to-image-generation.md`, which also documents
-  an **open, unresolved issue**: `GET /capabilities` can report `image_generation: false` for a
-  demonstrably healthy service — root cause not found, predates the img2img work.
+- **`POST /generate/image`** — proxies to one of two registered `ImageGenerator` adapters
+  (`server/generation_ports.py`/`generation_adapters.py`/`generation_registry.py`, see
+  `docs/DESIGN.md` sec 3.6), chosen per request via an optional `model` field (default `sdxl`):
+  - `sdxl` — `image-generation/`, a small FastAPI service **this project owns and built**
+    wrapping Stable Diffusion XL (`diffusers`), same shape as `/generate/sound-effect` (env var
+    `IMAGE_GENERATION_URL`, single synchronous `POST /generate` call, still run as a background
+    job here for the same reason). Accepts an optional `reference_image` upload + `strength` for
+    img2img (generate conditioned on a photo instead of pure text) — best-effort under
+    heavy/rapid use on this project's 8GB GPU (real, accepted VRAM tradeoff, not a bug still
+    being chased); see `docs/experiments/2026-07-30-image-to-image-generation.md`.
+  - `gemini` — Google's hosted Gemini image API, called directly (no satellite container) via
+    `generation/`, a light sibling module (`google-genai`, its own root-pyproject `generation`
+    extra). Env var `GEMINI_API_KEY`; only registers (and only then appears in
+    `GET /capabilities`'s `image_generation_models`) when that's set. A hosted API was tried
+    first for image generation and fully reverted the first time (new Google AI Studio accounts
+    require a non-refundable minimum prepay to use it at all) — see
+    `docs/experiments/2026-07-29-image-generation-backend-choice.md` for that account, and
+    `docs/experiments/2026-07-31-gemini-adapter.md` for adopting it a second time, this time
+    coexisting with SDXL rather than replacing it. Supports img2img too (Gemini's own multimodal
+    `input`); no `strength` equivalent (accepted in the call for interface parity, silently
+    ignored).
+
+  `GET /capabilities`'s own `image_generation` bool is `true` if *either* SDXL health-checks or
+  Gemini is configured — the `/capabilities` under-reporting bug once open here (an
+  `image-generation/`'s blocked event loop, unrelated to this port work) was root-caused and
+  fixed earlier — see `docs/experiments/2026-07-30-image-to-image-generation.md`'s follow-up
+  section.
 
 All four routes read their env var **at request time**, never at startup, so the API always starts
 cleanly and simply reports the feature as unavailable (`503` from the `POST` route, `false` from

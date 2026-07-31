@@ -64,16 +64,21 @@ if an import is ever restructured; an injected parameter can't).
 run_image_job depends on an injected ImageGenerator (generation_ports.py)
 rather than building the image-generation/ request inline -- the same
 DI shape call_service=/render_fn= already use elsewhere in this file, one
-level higher (a whole capability, not one bare function). Defaults to a
-fresh SDXLAdapter(settings) per call, same as render_fn=pipeline.save_...
-defaults elsewhere: settings arrives explicit per call (background tasks
-can't use Depends()), so the default adapter is built from it fresh rather
-than pulled from generation_registry's process-global registry, which is
-populated from get_settings() at app import time and would silently ignore
-a test's own custom Settings(...) otherwise. See docs/DESIGN.md sec 3.6 for
-the full rationale (this existed as one hardcoded call before the refactor;
-image generation already lived through two real backends -- Gemini's hosted
-API, then local SDXL -- which is what justifies the port now).
+level higher (a whole capability, not one bare function). Now that a real
+second adapter exists (GeminiAdapter, alongside SDXLAdapter), the default
+comes from generation_registry.get_image_generator(model) -- the per-request
+`model` field lets a caller pick which registered adapter to use, which is
+the entire reason the registry (not just a single swappable reference)
+exists per §3.6. For real requests this is safe: app.py's route resolves
+`settings` via Depends(get_settings), the exact cached singleton the
+registry's adapters were themselves built from at app-import time, so
+there's no divergence. Tests that want to fake the HTTP/API layer inject
+`image_generator=` directly (bypassing model lookup entirely), same as
+before -- that seam doesn't care where the default would have come from.
+See docs/DESIGN.md sec 3.6 for the full rationale (this existed as one
+hardcoded call before the refactor; image generation already lived through
+two real backends -- Gemini's hosted API, then local SDXL, then Gemini again
+as a coexisting adapter -- which is what justifies the port and registry).
 
 Library registration: every job function below takes an optional
 `library_kind` -- when given (the four /render and /generate routes all
@@ -101,8 +106,8 @@ from cinemagraph import pipeline
 from . import jobs
 from ._external_service import call_optional_service
 from .config import Settings
-from .generation_adapters import SDXLAdapter
 from .generation_ports import ImageGenerator
+from .generation_registry import get_image_generator
 
 MUSIC_POLL_INTERVAL_SECONDS = 2.0
 MUSIC_POLL_MAX_ATTEMPTS = 150  # ~5 minutes total
@@ -298,27 +303,27 @@ async def run_image_job(
     job_id: str, output_path: Path, *, settings: Settings, prompt: str,
     reference_image_path: Path | None = None,
     strength: float = 0.6,
+    model: str = "sdxl",
     library_kind: str | None = None,
     image_generator: ImageGenerator | None = None,
 ) -> None:
-    """Proxies to an ImageGenerator adapter (generation_ports.py), defaulting
-    to SDXLAdapter (local SDXL, image-generation/). A hosted API (Gemini's
-    native image models) was tried first and reverted: new Google AI Studio
-    accounts require a non-refundable minimum prepay to use it at all,
-    discovered only by actually trying to generate an image, not from
-    reading pricing docs. Local SDXL avoids that entirely, at the cost of a
-    quality gap against frontier hosted models -- an accepted tradeoff given
-    the billing friction. See docs/experiments/ for the full account of both
-    attempts, and docs/DESIGN.md sec 3.6 for why that history is what
-    justifies the ImageGenerator port itself.
+    """Proxies to an ImageGenerator adapter (generation_ports.py) -- `model`
+    selects which registered adapter to use ("sdxl" = local SDXL,
+    image-generation/; "gemini" = Google's hosted API, generation/), each
+    with its own tradeoffs: SDXL is free and local but quality-gapped against
+    frontier hosted models; Gemini needs a paid API key but has no local
+    VRAM ceiling. See docs/experiments/ for the account of both, and
+    docs/DESIGN.md sec 3.6 for why that history is what justifies the
+    ImageGenerator port/registry.
 
     `reference_image_path`, when given, switches the adapter into img2img
-    mode. `strength` (0=stay close to the reference, 1=ignore it) is only
-    meaningful in that mode.
+    mode. `strength` (0=stay close to the reference, 1=ignore it) only
+    matters for SDXL -- GeminiAdapter accepts and ignores it (Gemini's own
+    API has no equivalent knob).
     """
     jobs.mark_running(job_id)
-    generator = image_generator or SDXLAdapter(settings)
     try:
+        generator = image_generator or get_image_generator(model)
         reference_image_bytes = None
         reference_image_filename = "reference.png"
         if reference_image_path is not None:
@@ -333,7 +338,7 @@ async def run_image_job(
         )
         output_path.write_bytes(image_bytes)
         jobs.mark_done(job_id, output_path)
-        provenance = {"prompt": prompt}
+        provenance = {"prompt": prompt, "model": model}
         if reference_image_path is not None:
             provenance["strength"] = strength
         _register_in_library(

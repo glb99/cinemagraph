@@ -18,6 +18,7 @@ class CapabilitiesResponse(BaseModel):
     music_generation: bool
     sound_effect_generation: bool
     image_generation: bool
+    image_generation_models: list[str] = []
 
 
 class AssetResponse(BaseModel):

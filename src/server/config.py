@@ -57,6 +57,11 @@ class Settings(BaseSettings):
     acestep_url: str | None = None
     sound_effects_url: str | None = None
     image_generation_url: str | None = None
+    # Not an OptionalService (no URL/health-check -- it's a hosted API called
+    # directly via generation/, not a satellite container). Presence alone
+    # gates whether GeminiAdapter gets registered (server/app.py); see
+    # docs/DESIGN.md sec 3.6's Gemini follow-up.
+    gemini_api_key: str | None = None
 
     @field_validator("data_dir")
     @classmethod
