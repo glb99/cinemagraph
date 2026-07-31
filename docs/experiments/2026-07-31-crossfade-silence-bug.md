@@ -201,3 +201,70 @@ raw PCM inspection, not by ear.
 - [x] Verified the fix produces a real, smooth, gradual fade at both true edges of the
   output, landing exactly at the stream's actual boundaries -- not just "duration looks
   about right."
+
+## Third round (same day): "still doesn't work well" -- default crossfade duration raised
+
+Reported again after the second fix shipped, this time with a specific symptom via a
+follow-up question: "volume dips or sounds weak during transitions" (not silence, not wrong
+duration) -- through the real web UI Assemble tab, with real songs.
+
+### Ruled out first: a stale deploy
+
+Before investigating further, checked the actually-running `core` container's own loaded
+code directly (`docker exec ... python -c "import inspect; ...build_music_track..."`) --
+confirmed it had the latest fix (`areverse`, `silenceremove`, no `probe_duration` param
+still present from before its removal). Not a caching/deploy issue; the dip being reported
+is real, on the current code.
+
+### Confirming the trim threshold itself is well-calibrated, not the cause
+
+Measured the two real songs already used for the earlier investigations with `astats`: peak
+levels -1.4dB and -3.7dB (close to 0dB -- normally mastered, not unusually quiet), RMS -16dB
+to -20dB. In linear terms that's roughly 0.1-0.16, while the trim threshold (`0.02`, ~-34dB)
+sits 15-18dB *below* the tracks' own average loudness -- correctly conservative, not
+accidentally too lenient or too aggressive. Ruled out the threshold itself as the remaining
+cause.
+
+### What actually still causes a dip, and why crossfade duration matters
+
+Even with true silence trimmed from every edge, real songs still vary *moderately* in
+loudness near their own edges (a quieter musical passage, not silence) -- overlapping two
+such regions during a *short* crossfade window means that quieter moment makes up a large
+fraction of the whole transition, reading as a dip. Tested directly: built the same two real
+songs with `crossfade_duration=2.0` (the then-current default) vs. `crossfade_duration=6.0`,
+decoded both to raw PCM, and compared the RMS trough during the transition against the
+surrounding level. At 2s, the trough was roughly 5-10x quieter than the surrounding audio
+(matching the earlier investigation's finding). At 6s, the trough was only about 2-6x
+quieter -- a real, measurable improvement, though not a complete elimination of the dip
+(some residual dip remains inherent to overlapping two independently-dynamic songs at any
+fixed point, as documented in the first round above).
+
+### Fix: raised the default `crossfade_duration` from 2.0s to 5.0s
+
+CLI (`--music-crossfade`), API/UI (`music_crossfade_duration`), and `build_music_track`'s own
+default all raised together -- still fully overridable in either direction. Explicitly
+documented as a practical mitigation, not a complete fix: a genuinely complete fix would mean
+choosing *where* in each song to place the crossfade based on measured loudness (avoiding
+each song's own quieter passages near its edges), not just extending a fixed-position window
+-- real, scoped-out future work, not attempted here since it's a meaningfully bigger feature
+than a default-value change.
+
+### Verification
+
+- `uv run pytest`: 115 passed (no test relied on the old default value -- every existing test
+  passes `crossfade_duration` explicitly), 2 deselected.
+- `scripts/golden_check.py`: unaffected.
+- Confirmed the new default (`5.0`) is actually loaded in the rebuilt, redeployed `core`
+  container via the same `docker exec` introspection technique used to rule out a stale
+  deploy at the start of this round.
+
+### Verdict
+
+- [x] Ruled out a stale deployment before investigating further, rather than assuming the
+  code fix from the previous round was insufficient without checking it was even running.
+- [x] Confirmed via real signal measurement (not guesswork) that the trim threshold itself
+  was correctly calibrated, narrowing the remaining cause to genuine content dynamics.
+- [x] Measured a real, quantified improvement (2s vs. 6s crossfade dip depth) before
+  committing to a default-value change, rather than picking a new default by feel.
+- [ ] Full fix (loudness-aware crossfade positioning) explicitly scoped out as real future
+  work, not silently promised or attempted speculatively.

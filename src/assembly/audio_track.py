@@ -18,13 +18,25 @@ _SILENCE_MIN_DURATION = 0.1
 
 def build_music_track(
     track_paths: list[str], output_path: str, *,
-    crossfade_duration: float = 2.0, edge_fade_duration: float = 2.0, gap_duration: float = 0.0,
+    crossfade_duration: float = 5.0, edge_fade_duration: float = 2.0, gap_duration: float = 0.0,
     run_ffmpeg=ffmpeg_runner.run_ffmpeg,
 ) -> None:
-    """Concatenates `track_paths` in order. Two mutually exclusive join
-    styles between consecutive songs -- `gap_duration > 0` wins if both are
-    set, since a silent pause and an overlapping blend are opposite
-    concepts, not a spectrum:
+    """Concatenates `track_paths` in order. `crossfade_duration` defaults to
+    5.0s, not a shorter value, because of a real, measured tradeoff: even
+    after trimming true silence (below), real generated songs still vary
+    naturally in loudness near their own edges -- overlapping two such
+    non-silent-but-quieter regions still produces a real dip, just a
+    shallower one the longer the overlap window is (confirmed by measuring
+    RMS through the transition at 2s vs. 6s crossfade duration against the
+    same real songs -- the dip's depth relative to the surrounding level
+    was roughly 5-10x worse at 2s than at 6s). A short crossfade makes that
+    dip a larger fraction of the transition and thus more audible; 5s is a
+    practical default, not a full fix -- see `docs/experiments/
+    2026-07-31-crossfade-silence-bug.md`'s second follow-up.
+
+    Two mutually exclusive join styles between consecutive songs --
+    `gap_duration > 0` wins if both are set, since a silent pause and an
+    overlapping blend are opposite concepts, not a spectrum:
 
     - Default (`gap_duration=0`): crossfade `crossfade_duration` seconds via
       ffmpeg's `acrossfade` filter with an equal-power curve (`curve1=

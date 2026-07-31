@@ -585,7 +585,7 @@ async def assemble(
     music_asset_ids: list[str] = Form(...),
     sound_effect_asset_ids: list[str] = Form([]),
     video_crossfade_duration: float = Form(1.0),
-    music_crossfade_duration: float = Form(2.0),
+    music_crossfade_duration: float = Form(5.0),
     music_edge_fade_duration: float = Form(2.0),
     music_gap_duration: float = Form(0.0),
 ):

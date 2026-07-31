@@ -14,7 +14,7 @@ def assemble(
     *,
     sound_effect_paths: list[str] | None = None,
     video_crossfade_duration: float = 1.0,
-    music_crossfade_duration: float = 2.0,
+    music_crossfade_duration: float = 5.0,
     music_edge_fade_duration: float = 2.0,
     music_gap_duration: float = 0.0,
     run_ffmpeg=ffmpeg_runner.run_ffmpeg, probe_duration=ffmpeg_runner.probe_duration,

@@ -774,6 +774,24 @@ and confirming a smooth, gradual ramp at both the true start and the true end, l
 exactly at the stream's actual boundaries. See
 `docs/experiments/2026-07-31-crossfade-silence-bug.md`'s own follow-up section.
 
+**A third round, same day: default `music_crossfade_duration` raised from 2.0s to 5.0s.**
+After the two fixes above, the project owner reported the crossfade *still* sounded weak at
+transitions -- confirmed the deployed container really had the latest code first (ruling out
+a stale-deploy explanation), then measured directly: even with true silence trimmed from
+every edge, real generated songs still vary naturally in loudness near their own edges (peak
+levels close to 0dB, RMS -16 to -20dB -- normally mastered, not the issue), so overlapping
+two such non-silent-but-quieter regions still produces a real dip, just a shallower one the
+longer the overlap window is. Measured directly on the same real songs: the dip's depth
+relative to the surrounding level was roughly 5-10x worse at a 2s crossfade than at 6s -- a
+short crossfade makes the same absolute dip a much larger fraction of the audible
+transition. Raised the default to 5.0s (CLI `--music-crossfade`, API/UI
+`music_crossfade_duration`, still fully overridable) as a practical mitigation backed by that
+measurement, explicitly documented as *not* a full fix -- genuine loudness-aware crossfade
+positioning (choosing where in each song to place the join based on measured energy, not just
+"the last/first N seconds") would be the complete fix, deferred as real, scoped-out future
+work rather than attempted speculatively. See
+`docs/experiments/2026-07-31-crossfade-silence-bug.md`'s third section.
+
 ### 5.7 Audio (music + sound effects) — both IMPLEMENTED
 
 Three candidate models were researched (see decision log below for the full comparison);

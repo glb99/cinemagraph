@@ -270,7 +270,7 @@ together continuously under the music, order doesn't matter for those.</p>
 </div>
 <div class="row">
   <label>Video crossfade (s) <input type="number" id="assemble-video-crossfade" value="1.0" step="0.1" min="0"></label>
-  <label>Music crossfade (s) <input type="number" id="assemble-music-crossfade" value="2.0" step="0.1" min="0"></label>
+  <label>Music crossfade (s) <input type="number" id="assemble-music-crossfade" value="5.0" step="0.1" min="0"></label>
   <label>Music edge fade (s) <input type="number" id="assemble-music-edge-fade" value="2.0" step="0.1" min="0"></label>
   <label>Music gap (s) <input type="number" id="assemble-music-gap" value="0" step="0.1" min="0"></label>
 </div>

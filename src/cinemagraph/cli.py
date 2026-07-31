@@ -179,7 +179,7 @@ def from_photo(photo_path, output_path, effects, mask_path, duration, fps, speed
 @click.option("--sound-effect", "sfx_paths", multiple=True, type=click.Path(exists=True),
               help="Sound effects to layer continuously under the music.")
 @click.option("--video-crossfade", type=float, default=1.0, help="Crossfade duration between clips, in seconds.")
-@click.option("--music-crossfade", type=float, default=2.0, help="Crossfade duration between songs, in seconds.")
+@click.option("--music-crossfade", type=float, default=5.0, help="Crossfade duration between songs, in seconds.")
 @click.option("--music-edge-fade", type=float, default=2.0,
               help="Fade-in at the very start and fade-out at the very end of the whole track, in seconds "
                    "(0 to disable).")
