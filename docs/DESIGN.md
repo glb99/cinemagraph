@@ -422,7 +422,7 @@ cinemagraph-tool/
 │   ├── generation/             # light sibling module: Gemini image API client (sec 3.2/3.6),
 │   │                           #   own root-pyproject extra ("generation"), gated by GEMINI_API_KEY
 │   └── server/                # FastAPI door: app.py (routes) + service.py (workflows) +
-│                               #   config.py (Settings/DI) + ui.py (GET / thin web UI: 6 tabs) +
+│                               #   config.py (Settings/DI) + ui.py (GET / thin web UI: 7 tabs) +
 │                               #   generation_ports.py/generation_adapters.py/generation_registry.py
 │                               #   (ImageGenerator/MusicGenerator/SoundEffectGenerator ports +
 │                               #   SDXLAdapter/GeminiAdapter/ACEStepAdapter/StableAudioAdapter +

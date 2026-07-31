@@ -3,17 +3,26 @@ step, no separate static-file packaging concerns (see the api-to-server move
 in docs/DESIGN.md's decision log for why non-.py assets are a real footgun
 here -- this sidesteps that entirely by being plain Python source).
 
-Six tabs: photo rendering, video rendering, music generation, sound-effect
-generation, image generation, and a library browser. Photo/video/library are
-always available; music, sound effects, and image generation are feature-gated
-on GET /capabilities, same signal the rest of the system already uses to
-degrade gracefully when an optional service isn't running -- their tab buttons
-are hidden entirely rather than shown-disabled, matching how mask_prompt was
-already hidden in the original photo-only version of this page. Per-effect
-override flags (--rain-count etc. on the CLI) and video's grade fine-tuning
-knobs are intentionally left out of every form here, same as the original
-photo tab -- this is a thin client covering the common path, not full parity
-with every CLI flag.
+Seven tabs: photo rendering, video rendering, music generation, sound-effect
+generation, image generation, long-form assembly (sec 5.6), and a library
+browser. Photo/video/assemble/library are always available; music, sound
+effects, and image generation are feature-gated on GET /capabilities, same
+signal the rest of the system already uses to degrade gracefully when an
+optional service isn't running -- their tab buttons are hidden entirely
+rather than shown-disabled, matching how mask_prompt was already hidden in
+the original photo-only version of this page. Per-effect override flags
+(--rain-count etc. on the CLI) and video's grade fine-tuning knobs are
+intentionally left out of every form here, same as the original photo tab
+-- this is a thin client covering the common path, not full parity with
+every CLI flag.
+
+The assemble tab is the one exception to "every form here is a single-file-
+upload" -- POST /assemble takes lists of library asset ids, not uploads, so
+its picker fetches GET /library?kind=generated once, buckets assets by file
+extension into clips/music/sound-effects (reusing assetPreviewElement's own
+extension classification below), and tracks selection as ordered arrays
+(clips/music, where playback order = click order) or an unordered list
+(sound effects, mixed together regardless of order) in `assembleState`.
 
 The library tab lists whatever /render and /generate have auto-registered
 (see service.py's library_kind wiring) via GET /library, with client-side
@@ -71,6 +80,22 @@ INDEX_HTML = """<!doctype html>
   .library-card img, .library-card video, .library-card audio { max-width: 100%; border-radius: 6px; margin-top: 0; }
   .library-meta { margin: 0.5rem 0; font-size: 0.85rem; }
   .library-card button { padding: 0.3rem 0.7rem; font-size: 0.85rem; background: #555; }
+  .asset-picker { border: 1px solid #333; border-radius: 8px; padding: 0.5rem 0.8rem; max-height: 10rem; overflow-y: auto; }
+  .asset-picker button {
+    display: block; width: 100%; text-align: left; background: none; color: #e8e8e8;
+    border: none; border-radius: 4px; padding: 0.35rem 0.4rem; font-size: 0.9rem; margin: 0.1rem 0;
+  }
+  .asset-picker button:hover { background: #24272e; }
+  .asset-picker button:disabled { color: #555; cursor: default; }
+  .asset-picker button:disabled:hover { background: none; }
+  .selected-chips { margin: 0.5rem 0; display: flex; flex-wrap: wrap; gap: 0.4rem; }
+  .chip {
+    display: inline-flex; align-items: center; gap: 0.4rem; background: #24272e;
+    border-radius: 999px; padding: 0.25rem 0.5rem 0.25rem 0.7rem; font-size: 0.85rem;
+  }
+  .chip button {
+    background: none; color: #aaa; border: none; padding: 0 0.2rem; font-size: 0.9rem; cursor: pointer;
+  }
 </style>
 </head>
 <body>
@@ -211,6 +236,38 @@ the underlying routes don't already do themselves.</p>
 <img id="image-preview" class="preview" style="display:none">
 </section>
 
+<!-- Assemble -->
+<section class="tab" id="tab-assemble">
+<p class="hint">Combines already-generated library assets into one video -- click to add each in
+playback order, click again from the selected list to remove. Sound effects (optional) mix
+together continuously under the music, order doesn't matter for those.</p>
+<div class="row">
+  <strong>Video clips (in order)</strong>
+  <div class="asset-picker" id="assemble-clip-picker"></div>
+  <div class="selected-chips" id="assemble-clip-selected"></div>
+</div>
+<div class="row">
+  <strong>Music tracks (in order)</strong>
+  <div class="asset-picker" id="assemble-music-picker"></div>
+  <div class="selected-chips" id="assemble-music-selected"></div>
+</div>
+<div class="row">
+  <strong>Sound effects (optional)</strong>
+  <div class="asset-picker" id="assemble-sfx-picker"></div>
+  <div class="selected-chips" id="assemble-sfx-selected"></div>
+</div>
+<div class="row">
+  <label>Video crossfade (s) <input type="number" id="assemble-video-crossfade" value="1.0" step="0.1" min="0"></label>
+  <label>Music crossfade (s) <input type="number" id="assemble-music-crossfade" value="2.0" step="0.1" min="0"></label>
+  <label>Music edge fade (s) <input type="number" id="assemble-music-edge-fade" value="2.0" step="0.1" min="0"></label>
+</div>
+<button type="button" id="assemble-refresh">Refresh assets</button>
+<button type="button" id="assemble-submit">Assemble</button>
+<div class="status" id="assemble-status"></div>
+<div class="error" id="assemble-error"></div>
+<video id="assemble-preview" class="preview" controls style="display:none"></video>
+</section>
+
 <!-- Library -->
 <section class="tab" id="tab-library">
 <div class="library-toolbar">
@@ -245,6 +302,7 @@ const TABS = [
     id: "image", label: "Image", capability: "image_generation",
     startCommand: "docker compose --profile image up image-generation",
   },
+  { id: "assemble", label: "Assemble", always: true },
   { id: "library", label: "Library", always: true },
 ];
 
@@ -256,6 +314,7 @@ function showTab(id) {
     btn.classList.toggle("active", btn.dataset.tab === id);
   }
   if (id === "library") loadLibrary();
+  if (id === "assemble") loadAssembleAssets();
 }
 
 async function loadCapabilities() {
@@ -597,6 +656,134 @@ wireForm("image-form", {
     }
     return form;
   },
+});
+
+/** Assemble tab state: clips/music are ordered arrays (playback order =
+ * click order, matching POST /assemble's own list-in-order contract);
+ * sound effects are an unordered Set (mixed together, order doesn't
+ * matter). Asset objects are cached by id so chip labels and re-renders
+ * don't need another fetch. */
+const assembleState = { clips: [], music: [], sfx: [], assetsById: {} };
+
+/** Buckets kind=generated library assets by file extension (reusing the
+ * same classification assetPreviewElement already uses for previews) --
+ * video extensions become clip candidates, audio extensions become music
+ * candidates, except those tagged "sound-effect" which become sfx
+ * candidates instead. A generated asset with neither extension (e.g. a
+ * mask PNG someone tagged "generated") is simply not offered anywhere. */
+async function loadAssembleAssets() {
+  const assets = await (await fetch("/library?kind=generated")).json();
+  const videoExts = ["mp4", "webm", "mov"];
+  const audioExts = ["mp3", "wav", "ogg"];
+  const clipAssets = [], musicAssets = [], sfxAssets = [];
+  for (const asset of assets) {
+    assembleState.assetsById[asset.id] = asset;
+    const ext = (asset.original_filename.split(".").pop() || "").toLowerCase();
+    if (videoExts.includes(ext)) clipAssets.push(asset);
+    else if (audioExts.includes(ext)) {
+      (asset.tags.includes("sound-effect") ? sfxAssets : musicAssets).push(asset);
+    }
+  }
+  renderAssemblePicker("assemble-clip-picker", clipAssets, "clips", false);
+  renderAssemblePicker("assemble-music-picker", musicAssets, "music", false);
+  renderAssemblePicker("assemble-sfx-picker", sfxAssets, "sfx", true);
+  renderAssembleChips();
+}
+
+function renderAssemblePicker(containerId, assets, bucket, allowMultiple) {
+  const container = document.getElementById(containerId);
+  container.innerHTML = "";
+  if (assets.length === 0) {
+    container.textContent = "(none available)";
+    return;
+  }
+  for (const asset of assets) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    const selected = assembleState[bucket].includes(asset.id);
+    // allowMultiple (sound effects): every click toggles this one asset in
+    // or out. Ordered buckets (clips/music): once selected, the button
+    // disables -- removing happens via the chip's own × below, since
+    // clicking here again wouldn't disambiguate *which* occurrence to drop
+    // if the same asset were ever added twice.
+    btn.textContent = (selected ? "✓ " : "+ ") + asset.original_filename;
+    btn.disabled = selected && !allowMultiple;
+    btn.addEventListener("click", () => {
+      if (allowMultiple && selected) {
+        assembleState[bucket].splice(assembleState[bucket].indexOf(asset.id), 1);
+      } else {
+        assembleState[bucket].push(asset.id);
+      }
+      renderAssemblePicker(containerId, assets, bucket, allowMultiple);
+      renderAssembleChips();
+    });
+    container.appendChild(btn);
+  }
+}
+
+function renderAssembleChips() {
+  for (const bucket of ["clips", "music", "sfx"]) {
+    const container = document.getElementById(`assemble-${bucket === "clips" ? "clip" : bucket}-selected`);
+    container.innerHTML = "";
+    assembleState[bucket].forEach((assetId, index) => {
+      const asset = assembleState.assetsById[assetId];
+      const chip = document.createElement("span");
+      chip.className = "chip";
+      const label = bucket === "sfx" ? asset.original_filename : `${index + 1}. ${asset.original_filename}`;
+      chip.appendChild(document.createTextNode(label));
+      const removeBtn = document.createElement("button");
+      removeBtn.type = "button";
+      removeBtn.textContent = "×";
+      removeBtn.addEventListener("click", () => {
+        assembleState[bucket].splice(assembleState[bucket].indexOf(assetId), 1);
+        loadAssembleAssets();
+      });
+      chip.appendChild(removeBtn);
+      container.appendChild(chip);
+    });
+  }
+}
+
+document.getElementById("assemble-refresh").addEventListener("click", loadAssembleAssets);
+document.getElementById("assemble-submit").addEventListener("click", async () => {
+  const statusEl = document.getElementById("assemble-status");
+  const errorEl = document.getElementById("assemble-error");
+  const previewEl = document.getElementById("assemble-preview");
+  errorEl.textContent = "";
+  previewEl.style.display = "none";
+
+  if (assembleState.clips.length === 0 || assembleState.music.length === 0) {
+    errorEl.textContent = "Pick at least one clip and one music track.";
+    return;
+  }
+
+  const params = new URLSearchParams();
+  for (const id of assembleState.clips) params.append("clip_asset_ids", id);
+  for (const id of assembleState.music) params.append("music_asset_ids", id);
+  for (const id of assembleState.sfx) params.append("sound_effect_asset_ids", id);
+  params.append("video_crossfade_duration", document.getElementById("assemble-video-crossfade").value);
+  params.append("music_crossfade_duration", document.getElementById("assemble-music-crossfade").value);
+  params.append("music_edge_fade_duration", document.getElementById("assemble-music-edge-fade").value);
+
+  const submitBtn = document.getElementById("assemble-submit");
+  submitBtn.disabled = true;
+  try {
+    const res = await fetch("/assemble", { method: "POST", body: params });
+    if (!res.ok) {
+      const detail = await res.json().catch(() => ({}));
+      throw new Error(detail.detail || `HTTP ${res.status}`);
+    }
+    const { job_id } = await res.json();
+    statusEl.textContent = `Job ${job_id}: submitted`;
+    await pollJob(job_id, {
+      statusEl, errorEl,
+      onDone: (url) => { previewEl.src = url; previewEl.style.display = "block"; },
+    });
+  } catch (err) {
+    errorEl.textContent = err.message;
+  } finally {
+    submitBtn.disabled = false;
+  }
 });
 
 document.getElementById("library-refresh").addEventListener("click", loadLibrary);
