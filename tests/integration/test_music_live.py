@@ -94,9 +94,13 @@ def test_music_generation_end_to_end(live_client):
 
 def test_music_generation_instrumental_overrides_lyrics(live_client):
     """instrumental=true must reach ACE-Step regardless of whatever lyrics
-    text is also submitted -- run_music_job's own docstring explains why an
+    text is also submitted -- ACEStepAdapter's own docstring explains why an
     empty lyrics field alone does not get this from the real server (only the
-    literal "[Instrumental]"/"[inst]" marker does).
+    literal "[Instrumental]"/"[inst]" marker does, sent over the wire by the
+    adapter itself). Provenance is asserted against the lyrics *actually
+    submitted* here, not that internal marker -- run_music_job deliberately
+    records the caller's real request, not a backend implementation detail
+    (see docs/DESIGN.md sec 3.6's music/sound-effect-ports follow-up).
     """
     prompt = "integration test: instrumental override, no vocals"
     resp = live_client.post(
@@ -120,5 +124,5 @@ def test_music_generation_instrumental_overrides_lyrics(live_client):
     _assert_valid_mp3(file_resp.content, TEST_DURATION)
 
     asset = _find_asset_by_prompt(live_client, prompt)
-    assert asset["provenance"]["lyrics"] == "[Instrumental]"
+    assert asset["provenance"]["lyrics"] == "these words must never be sung out loud"
     assert asset["provenance"]["instrumental"] is True
