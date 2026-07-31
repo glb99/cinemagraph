@@ -417,6 +417,8 @@ cinemagraph-tool/
 ├── src/
 │   ├── cinemagraph/           # the stable core: pipeline, effects registry, mask, grade, loop, io
 │   ├── asset_library/         # content-addressed local library, its own top-level package
+│   ├── assembly/                # long-form assembly (sec 5.6): ffmpeg_runner (the only
+│   │                           #   subprocess boundary) + video_track/audio_track/pipeline
 │   ├── generation/             # light sibling module: Gemini image API client (sec 3.2/3.6),
 │   │                           #   own root-pyproject extra ("generation"), gated by GEMINI_API_KEY
 │   └── server/                # FastAPI door: app.py (routes) + service.py (workflows) +
@@ -429,7 +431,7 @@ cinemagraph-tool/
 ├── machine-learning/          # isolated service: CLIPSeg semantic masking (validated)
 ├── sound-effects/             # isolated service: Stable Audio Open (validated)
 ├── image-generation/          # isolated service: Stable Diffusion XL (validated)
-├── tests/                     # 93 tests: contracts, invariants, smoke (core + API + library);
+├── tests/                     # 109 tests: contracts, invariants, smoke (core + API + library);
 │                               #   tests/integration/ adds 2 more, excluded from the default
 │                               #   run (needs a live deployed stack -- see sec 3.7/5.9)
 ├── scripts/golden_check.py    # pixel-regression check, separate from pytest (see sec 6)
@@ -635,10 +637,78 @@ Parity is deliberately *not* symmetric in one direction: `POST /render/photo`'s
 lives inside the core package and can't reach an HTTP client without putting one there.
 See the decision log.
 
-### 5.6 Long-form assembly (furthest out)
+### 5.6 Long-form assembly — IMPLEMENTED (2026-07-31)
 
-Sequencing multiple loops into a full video (crossfades, timing, maybe audio-reactive
-cuts). ffmpeg-concat-level tooling first; anything smarter is speculative.
+Sequencing multiple already-generated resources -- cinemagraph clips, AI-generated music,
+AI-generated sound effects -- into one finished long-form video, with smooth crossfade
+transitions between clips and between songs rather than every generated asset staying a
+standalone, disconnected file.
+
+**Scope, confirmed with the project owner before building:**
+- Independent tracks, combined at the end -- the video track (clips concatenated +
+  crossfaded) and the audio track (music concatenated + crossfaded, sound effects layered
+  in) are built independently, then muxed together as the final step. No forced 1:1
+  pairing between clip count and song count.
+- Sound effects are a continuous layer under/over the music (`amix`), not positioned at
+  specific timestamps.
+- The whole assembled audio also fades in at the very start and out at the very end
+  (`afade`), not just crossfades between consecutive songs in the middle.
+- `assemble()` only combines already-rendered clips -- it does not itself call into
+  `cinemagraph.pipeline` to render fresh clips from photos.
+- Both asset IDs (API, resolved via `asset_library.get()`) and plain file paths (CLI) are
+  supported as input, matching how the rest of the project already splits CLI-vs-API input
+  handling.
+
+**Architectural precedent, deliberate, not incidental:** this is the first place in the
+project's rendering path that shells out to an external process (`subprocess` +
+`imageio_ffmpeg.get_ffmpeg_exe()`, already a core dependency, bundles a full ffmpeg build)
+rather than calling numpy/opencv/imageio in-process. `io_utils.write_video`'s own docstring
+explicitly chose imageio's ffmpeg *plugin* (still in-process) over `cv2.VideoWriter` for
+codec reasons, but never shells out directly. This does, because crossfading and muxing at
+the filter-graph level (`xfade`, `acrossfade`, `afade`, `amix`, `-map`) is what ffmpeg is
+for -- reimplementing it by decoding finished clips back into numpy frame arrays would be
+slow, lossy (re-decode/re-encode every clip twice), and duplicate logic ffmpeg already has
+hardened. No new dependency needed.
+
+**Module placement:** new top-level sibling package `src/assembly/`, same tier as
+`src/asset_library/` (§3.2's own scope test: this isn't "animate an existing image/video"
+-- it's a cross-cutting capability consuming `cinemagraph`'s, ACE-Step's, and Stable
+Audio's output, none of which is cinemagraph's own job, the same reasoning that already
+moved `asset_library` out of `cinemagraph/`, §5.1).
+
+```
+src/assembly/
+├── ffmpeg_runner.py   # the only place this package touches subprocess:
+│                       #   run_ffmpeg(args) -> None, probe_duration(path) -> float
+├── video_track.py      # concat + chained xfade
+├── audio_track.py      # concat + chained acrossfade + edge afade; amix for sound effects
+└── pipeline.py          # assemble(): video track + audio track + final mux (-shortest)
+```
+
+Every function beyond `ffmpeg_runner.py` itself takes injected `run_ffmpeg`/
+`probe_duration` parameters (default: the real ones) -- the same DI convention
+`call_service`/`render_fn`/`music_generator` already use in `server/service.py` -- so tests
+fake the subprocess boundary entirely rather than monkeypatching module internals.
+`xfade` needs each clip's duration up front to compute an absolute `offset` into the
+running filter chain (unlike `acrossfade`, which self-aligns) -- the concrete reason a
+hand-built filtergraph is needed rather than ffmpeg's simpler `concat` demuxer, which only
+does hard cuts.
+
+CLI: `cinemagraph assemble CLIP_PATHS... OUTPUT_PATH --music ... [--sound-effect ...]
+[--video-crossfade] [--music-crossfade] [--music-edge-fade]`, matching `make`/`from-photo`'s
+exact argument/option/`click.UsageError` style. API: `POST /assemble` (asset IDs, not
+uploads -- "generated resources" already exist in the library), same background-job/
+`GET /jobs/{id}` pattern every other multi-second route already uses, registering output as
+`kind="generated", tags=["assembled"]`.
+
+**Verified:** unit tests assert filter-graph structure (offsets, chaining, edge cases like
+a single clip/track or zero effects) with a faked subprocess boundary -- no real ffmpeg in
+the fast suite. Real ffmpeg verified manually twice: once with clearly-distinguishable
+synthetic test patterns (confirming `xfade`/`acrossfade`/`afade`/`amix` filter syntax
+against the real bundled binary before writing any production code), once through the real
+CLI command against actual `cinemagraph from-photo`-rendered clips (confirming correct
+duration, real non-blank frames, both video/audio streams present in the final mux). See
+`docs/experiments/2026-07-31-long-form-assembly.md`.
 
 ### 5.7 Audio (music + sound effects) — both IMPLEMENTED
 

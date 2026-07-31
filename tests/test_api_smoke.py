@@ -400,3 +400,58 @@ def test_library_list_filters_by_kind(api_client, test_photo, test_video):
     result = api_client.get("/library", params={"kind": "source"}).json()
     assert len(result) == 1
     assert result[0]["kind"] == "source"
+
+
+def test_assemble_rejects_unknown_asset_id(api_client):
+    """Asset ids are validated eagerly at the route, same as /render/photo's
+    unknown-effect check -- a bad id is a 422 before any job/ffmpeg work
+    starts, not an opaque failure deep inside a background job."""
+    resp = api_client.post(
+        "/assemble",
+        data={"clip_asset_ids": ["does-not-exist"], "music_asset_ids": ["also-missing"]},
+    )
+    assert resp.status_code == 422
+    assert "does-not-exist" in resp.json()["detail"]
+
+
+def test_assemble_combines_real_assets_into_one_valid_file(api_client, test_video, tmp_path):
+    """Real end-to-end smoke test, matching test_pipeline_smoke.py's own
+    convention (real synthetic fixtures through the real pipeline, not
+    mocked) -- run_assembly_job's `run_ffmpeg` default is bound at
+    definition time, so it can't be faked through an HTTP round trip the
+    way generation_registry's adapters can; a tiny real ffmpeg call is fast
+    enough here to be a genuine smoke test rather than a slow one."""
+    import subprocess
+
+    import imageio_ffmpeg
+
+    import asset_library
+
+    audio_path = tmp_path / "tone.mp3"
+    exe = imageio_ffmpeg.get_ffmpeg_exe()
+    subprocess.run(
+        [exe, "-y", "-f", "lavfi", "-i", "sine=frequency=440:duration=1", str(audio_path)],
+        capture_output=True,
+    )
+
+    clip_asset = asset_library.add(test_video, kind="generated", tags=["photo"])
+    music_asset = asset_library.add(str(audio_path), kind="generated", tags=["music"])
+
+    resp = api_client.post(
+        "/assemble",
+        data={"clip_asset_ids": [clip_asset.id], "music_asset_ids": [music_asset.id]},
+    )
+    assert resp.status_code == 200, resp.text
+    job_id = resp.json()["job_id"]
+
+    status = api_client.get(f"/jobs/{job_id}").json()
+    assert status["status"] == "done", status
+
+    file_resp = api_client.get(f"/jobs/{job_id}/file")
+    assert file_resp.status_code == 200
+    assert len(file_resp.content) > 0
+
+    library_result = api_client.get("/library", params={"tag": "assembled"}).json()
+    assert len(library_result) == 1
+    assert library_result[0]["provenance"]["clip_asset_ids"] == [clip_asset.id]
+    assert library_result[0]["provenance"]["music_asset_ids"] == [music_asset.id]

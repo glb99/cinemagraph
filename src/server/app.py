@@ -56,6 +56,13 @@ every request:
   conditioned on a reference photo instead of pure text) plus `strength`
   (how far the result may deviate from it) -- see run_image_job's own
   docstring.
+- /assemble combines already-generated library assets (clips, music, sound
+  effects) into one finished video via assembly.pipeline.assemble --
+  crossfades between clips, crossfades between songs plus edge fades, sound
+  effects layered continuously under the music. Not one of the "optional
+  external service" routes above (no satellite container involved, no
+  service_available() check) -- purely local ffmpeg subprocess work. See
+  docs/DESIGN.md sec 5.6.
 """
 import shutil
 import tempfile
@@ -532,5 +539,72 @@ async def generate_image(
         settings=settings, prompt=prompt,
         reference_image_path=reference_image_path, strength=strength, model=model,
         library_kind="generated",
+    )
+    return JobResponse(job_id=job.id)
+
+
+def _resolve_asset_paths(asset_ids: list[str]) -> list[str]:
+    """Resolves each id via asset_library.get(), raising a 422-shaped
+    HTTPException naming the first missing one -- same eager-validation-at-
+    the-route style /render/photo already uses for unknown effect names,
+    rather than letting a bad id surface as an opaque failure deep inside
+    the background job."""
+    paths = []
+    for asset_id in asset_ids:
+        asset = library.get(asset_id)
+        if asset is None:
+            raise HTTPException(422, f"No asset with id '{asset_id}'")
+        paths.append(str(asset.path))
+    return paths
+
+
+@app.post("/assemble", response_model=JobResponse)
+async def assemble(
+    background_tasks: BackgroundTasks,
+    settings: SettingsDep,
+    clip_asset_ids: list[str] = Form(...),
+    music_asset_ids: list[str] = Form(...),
+    sound_effect_asset_ids: list[str] = Form([]),
+    video_crossfade_duration: float = Form(1.0),
+    music_crossfade_duration: float = Form(2.0),
+    music_edge_fade_duration: float = Form(2.0),
+):
+    """Combines already-generated library assets (clips, music, sound
+    effects) into one finished video via assembly.pipeline.assemble --
+    crossfades between clips, crossfades between songs plus a fade-in/out at
+    the whole track's edges, sound effects layered continuously under the
+    music. See run_assembly_job's own docstring and docs/DESIGN.md sec 5.6.
+
+    Every input is a library asset id (not an upload) -- assembly consumes
+    "generated resources" that already exist, it doesn't generate anything
+    new itself. Runs as a background job purely because ffmpeg's own work
+    takes real time, same as every other multi-second operation here --
+    no external HTTP call is involved, unlike /generate/music's own
+    async job (see run_assembly_job's own async-vs-sync note).
+    """
+    video_clip_paths = _resolve_asset_paths(clip_asset_ids)
+    music_track_paths = _resolve_asset_paths(music_asset_ids)
+    sound_effect_paths = _resolve_asset_paths(sound_effect_asset_ids) if sound_effect_asset_ids else None
+
+    job = jobs.create_job()
+    job_dir = _job_dir(settings, job.id)
+    output_path = job_dir / "output.mp4"
+
+    background_tasks.add_task(
+        service.run_assembly_job, job.id, output_path,
+        video_clip_paths=video_clip_paths, music_track_paths=music_track_paths,
+        sound_effect_paths=sound_effect_paths,
+        video_crossfade_duration=video_crossfade_duration,
+        music_crossfade_duration=music_crossfade_duration,
+        music_edge_fade_duration=music_edge_fade_duration,
+        library_kind="generated",
+        provenance={
+            "clip_asset_ids": clip_asset_ids,
+            "music_asset_ids": music_asset_ids,
+            "sound_effect_asset_ids": sound_effect_asset_ids,
+            "video_crossfade_duration": video_crossfade_duration,
+            "music_crossfade_duration": music_crossfade_duration,
+            "music_edge_fade_duration": music_edge_fade_duration,
+        },
     )
     return JobResponse(job_id=job.id)

@@ -95,6 +95,8 @@ from pathlib import Path
 import asset_library
 from fastapi import HTTPException
 
+from assembly import ffmpeg_runner as assembly_ffmpeg_runner
+from assembly import pipeline as assembly_pipeline
 from cinemagraph import pipeline
 
 from . import jobs
@@ -303,3 +305,44 @@ async def run_image_job(
         jobs.mark_error(job_id, e.detail)
     except Exception as e:
         jobs.mark_error(job_id, str(e))
+
+
+def run_assembly_job(
+    job_id: str, output_path: Path, *,
+    video_clip_paths: list[str], music_track_paths: list[str],
+    sound_effect_paths: list[str] | None = None,
+    video_crossfade_duration: float = 1.0,
+    music_crossfade_duration: float = 2.0,
+    music_edge_fade_duration: float = 2.0,
+    library_kind: str | None = None,
+    provenance: dict | None = None,
+    run_ffmpeg=assembly_ffmpeg_runner.run_ffmpeg,
+) -> None:
+    """Sync (threadpool) job: local ffmpeg subprocess work (assembly.pipeline
+    .assemble), no external HTTP call -- same shape as run_render_job, per
+    this module's own async-vs-sync rule (stay plain def unless there's a
+    genuine await-worthy operation). See docs/DESIGN.md sec 5.6.
+
+    `provenance` is built by the caller (app.py's route, which already
+    resolved whatever asset IDs were given to file paths) rather than by
+    this function -- unlike the generation jobs above, the meaningful
+    identifying info here is which *assets* were combined, not a handful of
+    scalar params this function itself owns.
+    """
+    jobs.mark_running(job_id)
+    try:
+        assembly_pipeline.assemble(
+            video_clip_paths=video_clip_paths,
+            music_track_paths=music_track_paths,
+            output_path=str(output_path),
+            sound_effect_paths=sound_effect_paths,
+            video_crossfade_duration=video_crossfade_duration,
+            music_crossfade_duration=music_crossfade_duration,
+            music_edge_fade_duration=music_edge_fade_duration,
+            run_ffmpeg=run_ffmpeg,
+        )
+    except Exception as e:
+        jobs.mark_error(job_id, str(e))
+        return
+    jobs.mark_done(job_id, output_path)
+    _register_in_library(output_path, library_kind, ["assembled"], provenance=provenance)

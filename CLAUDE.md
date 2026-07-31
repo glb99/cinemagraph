@@ -49,11 +49,14 @@ uv run cinemagraph make input.mp4 output.mp4 --mask mask_preview.png --no-grade
 # From a single photo (no video needed)
 uv run cinemagraph from-photo photo.jpg output.mp4 --effect smoke
 uv run cinemagraph from-photo photo.jpg output.mp4 --effect rain --mask window_mask.png
+
+# Assemble already-rendered clips + music (+ sound effects) into one long-form video (sec 5.6)
+uv run cinemagraph assemble clip1.mp4 clip2.mp4 out.mp4 --music song1.mp3 --music song2.mp3
 ```
 
-Run `uv run cinemagraph make --help` / `uv run cinemagraph from-photo --help` for the full flag list
-(feather, grade strength, grain, duration/fps/speed, GIF export, etc.) — flags are self-documenting
-via Click.
+Run `uv run cinemagraph make --help` / `uv run cinemagraph from-photo --help` / `uv run cinemagraph
+assemble --help` for the full flag list (feather, grade strength, grain, duration/fps/speed, GIF
+export, crossfade durations, etc.) — flags are self-documenting via Click.
 
 ### Generating synthetic test inputs
 
@@ -341,6 +344,21 @@ All four routes read their env var **at request time**, never at startup, so the
 cleanly and simply reports the feature as unavailable (`503` from the `POST` route, `false` from
 `GET /capabilities`) when that service isn't configured or isn't reachable — never a `500` or a
 failed startup.
+
+**`POST /assemble`** (sec 5.6) is different from all four above: no optional external service, no
+`service_available()` check — it combines already-generated library assets (clips, music, sound
+effects) via `src/assembly/`, its own top-level package driving `ffmpeg` (bundled through
+`imageio-ffmpeg`, already a dependency) directly via `subprocess` — the first place in this
+project's rendering path that shells out to an external process rather than calling
+numpy/opencv/imageio in-process, a deliberate choice (see `docs/DESIGN.md` sec 5.6 for the full
+rationale). `clip_asset_ids`/`music_asset_ids` (required) and `sound_effect_asset_ids` (optional)
+are resolved to file paths via `asset_library.get()` at the route (422 on any missing id). Video
+clips crossfade (`xfade`), music tracks crossfade plus fade in/out at the whole track's edges
+(`acrossfade` + `afade`), sound effects layer continuously under the music (`amix`), and the two
+finished tracks mux together (`-shortest`). `run_assembly_job` (`server/service.py`) is a plain
+`def`, not `async def` — no HTTP await, matching `run_render_job`'s own sync shape. Registers
+output as `kind="generated", tags=["assembled"]`. See
+`docs/experiments/2026-07-31-long-form-assembly.md`.
 
 `POST /library`, `GET /library`, `GET /library/{id}`, `GET /library/{id}/file`,
 `DELETE /library/{id}` are thin routes over the `asset_library` package (uploads are staged to a temp

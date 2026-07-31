@@ -8,6 +8,7 @@ Usage:
 import click
 
 import asset_library as library
+from assembly import pipeline as assembly_pipeline
 
 from . import effects as effects_pkg, pipeline, validation
 
@@ -168,6 +169,39 @@ def from_photo(photo_path, output_path, effects, mask_path, duration, fps, speed
     except ValueError as e:
         raise click.UsageError(str(e))
     click.echo(f"Saved cinemagraph to {output_path}")
+
+
+@cli.command()
+@click.argument("clip_paths", nargs=-1, type=click.Path(exists=True), required=True)
+@click.argument("output_path", type=click.Path())
+@click.option("--music", "music_paths", multiple=True, type=click.Path(exists=True), required=True,
+              help="Music tracks, in playback order. Repeat to crossfade between multiple.")
+@click.option("--sound-effect", "sfx_paths", multiple=True, type=click.Path(exists=True),
+              help="Sound effects to layer continuously under the music.")
+@click.option("--video-crossfade", type=float, default=1.0, help="Crossfade duration between clips, in seconds.")
+@click.option("--music-crossfade", type=float, default=2.0, help="Crossfade duration between songs, in seconds.")
+@click.option("--music-edge-fade", type=float, default=2.0,
+              help="Fade-in at the very start and fade-out at the very end of the whole track, in seconds "
+                   "(0 to disable).")
+def assemble(clip_paths, output_path, music_paths, sfx_paths, video_crossfade, music_crossfade, music_edge_fade):
+    """Assemble CLIP_PATHS (crossfaded) with music/sound effects into OUTPUT_PATH.
+
+    Only combines already-rendered clips -- render each clip first with
+    `make`/`from-photo`, then assemble them here. See docs/DESIGN.md sec 5.6.
+    """
+    try:
+        assembly_pipeline.assemble(
+            video_clip_paths=list(clip_paths),
+            music_track_paths=list(music_paths),
+            output_path=output_path,
+            sound_effect_paths=list(sfx_paths) or None,
+            video_crossfade_duration=video_crossfade,
+            music_crossfade_duration=music_crossfade,
+            music_edge_fade_duration=music_edge_fade,
+        )
+    except (ValueError, RuntimeError) as e:
+        raise click.UsageError(str(e))
+    click.echo(f"Saved assembled video to {output_path}")
 
 
 @cli.group()

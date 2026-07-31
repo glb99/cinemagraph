@@ -230,6 +230,20 @@ blocking startup) whenever the service isn't configured or isn't reachable:
   `true` if either SDXL health-checks or Gemini is configured. Validated end-to-end against a
   real GPU (SDXL) and the real API (Gemini) — see `docs/experiments/`.
 
+Two more routes don't proxy to an optional external service — they're purely local work:
+
+- **`POST /assemble`** — long-form assembly (`docs/DESIGN.md` sec 5.6): combines already-generated
+  library assets into one finished video via `src/assembly/` (its own top-level package, driving
+  `ffmpeg` — bundled via `imageio-ffmpeg`, already a dependency — directly through `subprocess`).
+  `clip_asset_ids`/`music_asset_ids` (required) and `sound_effect_asset_ids` (optional) are asset
+  IDs, resolved via the library; video clips are concatenated with crossfades (`xfade`), music
+  tracks are concatenated with crossfades (`acrossfade`) plus a fade-in/out at the whole track's
+  edges (`afade`), sound effects are layered continuously under the music (`amix`), and the two
+  finished tracks are muxed together. Same CLI equivalent: `cinemagraph assemble CLIP_PATHS...
+  OUTPUT_PATH --music ... [--sound-effect ...]`. Registers output as `kind="generated",
+  tags=["assembled"]`. Verified against real ffmpeg twice (synthetic filter-syntax checks, then
+  the real CLI against real `cinemagraph`-rendered clips) — see `docs/experiments/`.
+
 ## Reference library
 
 A persistent local store for source images/videos and generated outputs, so they can be found again
@@ -352,9 +366,9 @@ flowchart TB
     HttpUser -->|"multipart upload"| API
 
     subgraph EntryPoints["Doors in -- routes/flags parse and delegate, workflows live in service.py"]
-        CLI["cinemagraph.cli<br/>Click: make / mask-preview / from-photo"]
-        API["server.app -- routes only<br/>FastAPI: /render/video /render/photo<br/>/jobs/id /jobs/id/file<br/>/effects /health /capabilities"]
-        Service["server.service -- workflows<br/>run_render_job / run_music_job<br/>run_sound_effect_job<br/>run_photo_semantic_mask_job"]
+        CLI["cinemagraph.cli<br/>Click: make / mask-preview / from-photo / assemble"]
+        API["server.app -- routes only<br/>FastAPI: /render/video /render/photo /assemble<br/>/jobs/id /jobs/id/file<br/>/effects /health /capabilities"]
+        Service["server.service -- workflows<br/>run_render_job / run_music_job<br/>run_sound_effect_job<br/>run_photo_semantic_mask_job / run_assembly_job"]
         Jobs["server.jobs<br/>in-memory job dict<br/>pending / running / done / error"]
         API -->|"BackgroundTasks"| Service
         Service --> Jobs
