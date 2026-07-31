@@ -61,12 +61,19 @@ honest, refactor-safe seam than patching a module attribute (monkeypatch
 has to guess the exact name a call site looked up, which silently breaks
 if an import is ever restructured; an injected parameter can't).
 
-run_image_job follows the exact same shape as run_sound_effect_job --
-proxies to a local, self-hosted service (image-generation/, SDXL) over
-call_optional_service, degrading the same way the others do when
-IMAGE_GENERATION_URL isn't configured or the service isn't reachable. A
-hosted API (Gemini's native image models) was tried first; see this
-function's own docstring for why that was reverted.
+run_image_job depends on an injected ImageGenerator (generation_ports.py)
+rather than building the image-generation/ request inline -- the same
+DI shape call_service=/render_fn= already use elsewhere in this file, one
+level higher (a whole capability, not one bare function). Defaults to a
+fresh SDXLAdapter(settings) per call, same as render_fn=pipeline.save_...
+defaults elsewhere: settings arrives explicit per call (background tasks
+can't use Depends()), so the default adapter is built from it fresh rather
+than pulled from generation_registry's process-global registry, which is
+populated from get_settings() at app import time and would silently ignore
+a test's own custom Settings(...) otherwise. See docs/DESIGN.md sec 3.6 for
+the full rationale (this existed as one hardcoded call before the refactor;
+image generation already lived through two real backends -- Gemini's hosted
+API, then local SDXL -- which is what justifies the port now).
 
 Library registration: every job function below takes an optional
 `library_kind` -- when given (the four /render and /generate routes all
@@ -94,6 +101,8 @@ from cinemagraph import pipeline
 from . import jobs
 from ._external_service import call_optional_service
 from .config import Settings
+from .generation_adapters import SDXLAdapter
+from .generation_ports import ImageGenerator
 
 MUSIC_POLL_INTERVAL_SECONDS = 2.0
 MUSIC_POLL_MAX_ATTEMPTS = 150  # ~5 minutes total
@@ -290,38 +299,39 @@ async def run_image_job(
     reference_image_path: Path | None = None,
     strength: float = 0.6,
     library_kind: str | None = None,
-    call_service=call_optional_service,
+    image_generator: ImageGenerator | None = None,
 ) -> None:
-    """Proxies to the image-generation/ service (local SDXL). Same shape as
-    run_sound_effect_job -- a hosted API (Gemini's native image models) was
-    tried first and reverted: new Google AI Studio accounts require a
-    non-refundable minimum prepay to use it at all, discovered only by
-    actually trying to generate an image, not from reading pricing docs.
-    Local SDXL avoids that entirely, at the cost of a quality gap against
-    frontier hosted models -- an accepted tradeoff given the billing friction.
-    See docs/experiments/ for the full account of both attempts.
+    """Proxies to an ImageGenerator adapter (generation_ports.py), defaulting
+    to SDXLAdapter (local SDXL, image-generation/). A hosted API (Gemini's
+    native image models) was tried first and reverted: new Google AI Studio
+    accounts require a non-refundable minimum prepay to use it at all,
+    discovered only by actually trying to generate an image, not from
+    reading pricing docs. Local SDXL avoids that entirely, at the cost of a
+    quality gap against frontier hosted models -- an accepted tradeoff given
+    the billing friction. See docs/experiments/ for the full account of both
+    attempts, and docs/DESIGN.md sec 3.6 for why that history is what
+    justifies the ImageGenerator port itself.
 
-    `reference_image_path`, when given, switches the service into img2img
-    mode (StableDiffusionXLImg2ImgPipeline.from_pipe, sharing the same loaded
-    weights -- see image-generation/app.py). `strength` (0=stay close to the
-    reference, 1=ignore it) is only meaningful in that mode; the request
-    always goes as multipart/form-data now (not JSON), matching the
-    service's own contract, since a plain JSON body can't carry an uploaded
-    file cleanly.
+    `reference_image_path`, when given, switches the adapter into img2img
+    mode. `strength` (0=stay close to the reference, 1=ignore it) is only
+    meaningful in that mode.
     """
     jobs.mark_running(job_id)
+    generator = image_generator or SDXLAdapter(settings)
     try:
-        data = {"prompt": prompt}
-        files = None
+        reference_image_bytes = None
+        reference_image_filename = "reference.png"
         if reference_image_path is not None:
-            data["strength"] = strength
-            files = {"image": (reference_image_path.name, reference_image_path.read_bytes())}
+            reference_image_bytes = reference_image_path.read_bytes()
+            reference_image_filename = reference_image_path.name
 
-        resp = await call_service(
-            settings.image_generation_service, "POST", "/generate",
-            data=data, files=files, timeout=120.0,
+        image_bytes = await generator.generate(
+            prompt,
+            reference_image_bytes=reference_image_bytes,
+            reference_image_filename=reference_image_filename,
+            strength=strength,
         )
-        output_path.write_bytes(resp.content)
+        output_path.write_bytes(image_bytes)
         jobs.mark_done(job_id, output_path)
         provenance = {"prompt": prompt}
         if reference_image_path is not None:

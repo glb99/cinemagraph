@@ -43,15 +43,19 @@ every request:
   is synchronous (one request, one response with the finished audio), but
   it still runs as a background job since generation genuinely takes tens of
   seconds to minutes and the caller shouldn't hold the connection open.
-- /generate/image proxies to the image-generation/ service (IMAGE_GENERATION_URL,
-  local SDXL) -- same synchronous-call shape as /generate/sound-effect. A
-  hosted API (Gemini's native image models) was tried first and reverted:
-  new Google AI Studio accounts require a non-refundable minimum prepay to
-  use it at all, found only by actually trying to generate an image. See
-  docs/experiments/ for the full account. Accepts an optional
-  `reference_image` upload (img2img: generate conditioned on a reference
-  photo instead of pure text) plus `strength` (how far the result may
-  deviate from it) -- see run_image_job's own docstring.
+- /generate/image proxies to an ImageGenerator adapter (generation_ports.py/
+  generation_adapters.py), defaulting to SDXLAdapter (local SDXL,
+  IMAGE_GENERATION_URL) -- same synchronous-call shape as
+  /generate/sound-effect. A hosted API (Gemini's native image models) was
+  tried first and reverted: new Google AI Studio accounts require a
+  non-refundable minimum prepay to use it at all, found only by actually
+  trying to generate an image. See docs/experiments/ for the full account,
+  and docs/DESIGN.md sec 3.6 for why that history justifies the port/
+  registry indirection here rather than the previous inline HTTP call.
+  Accepts an optional `reference_image` upload (img2img: generate
+  conditioned on a reference photo instead of pure text) plus `strength`
+  (how far the result may deviate from it) -- see run_image_job's own
+  docstring.
 """
 import shutil
 import tempfile
@@ -67,11 +71,21 @@ from cinemagraph import effects as effects_pkg, pipeline, validation
 from . import jobs, service, ui
 from ._external_service import call_optional_service, service_available
 from .config import Settings, get_settings
+from .generation_adapters import SDXLAdapter
+from .generation_registry import register_image_generator
 from .schemas import AssetResponse, CapabilitiesResponse, JobResponse, JobStatusResponse
 
 SettingsDep = Annotated[Settings, Depends(get_settings)]
 
 app = FastAPI(title="cinemagraph-tool API")
+
+# Populates generation_registry's mechanism for real (sec 3.6) -- nothing
+# looks this up by name per-request yet (that's the "model" field on
+# POST /generate/image, deferred until a second adapter justifies it);
+# run_image_job's own default still builds a fresh SDXLAdapter from whatever
+# settings it's called with, rather than pulling this registered instance,
+# so a test's own Settings(...) is never shadowed by this process-global one.
+register_image_generator("sdxl", SDXLAdapter(get_settings()))
 
 
 def _job_dir(settings: Settings, job_id: str) -> Path:

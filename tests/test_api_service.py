@@ -235,17 +235,15 @@ async def test_sound_effect_job_downloads_audio_and_registers_in_library(tmp_pat
 
 @pytest.mark.anyio
 async def test_image_job_downloads_image_and_registers_in_library(tmp_path):
-    async def fake_call(svc, method, path, **kwargs):
-        class _Resp:
-            content = b"fake-png-bytes"
-
-        return _Resp()
+    class FakeGenerator:
+        async def generate(self, prompt, **kwargs):
+            return b"fake-png-bytes"
 
     output = tmp_path / "out.png"
     job = jobs.create_job()
     await service.run_image_job(
         job.id, output, settings=Settings(image_generation_url="http://img.invalid"),
-        prompt="a lofi bedroom at sunset", library_kind="generated", call_service=fake_call,
+        prompt="a lofi bedroom at sunset", library_kind="generated", image_generator=FakeGenerator(),
     )
 
     result = jobs.get_job(job.id)
@@ -259,37 +257,37 @@ async def test_image_job_downloads_image_and_registers_in_library(tmp_path):
 
 
 @pytest.mark.anyio
-async def test_image_job_with_reference_image_sends_multipart_with_strength(tmp_path):
-    """reference_image_path switches the request to img2img mode: the file's
-    bytes go as a multipart `files=` upload alongside `strength`, matching
-    image-generation/app.py's own contract (an optional `image` upload +
-    `strength`, everything else as plain form fields -- not JSON, since JSON
-    can't carry a file upload cleanly)."""
+async def test_image_job_with_reference_image_passes_bytes_and_strength_to_generator(tmp_path):
+    """reference_image_path switches the job into img2img mode: the file's
+    bytes and filename are read here and handed to the injected
+    ImageGenerator alongside strength -- run_image_job no longer builds the
+    HTTP request itself (see generation_adapters.SDXLAdapter, sec 3.6)."""
     reference = tmp_path / "reference.png"
     reference.write_bytes(b"fake-reference-image-bytes")
     captured = {}
 
-    async def fake_call(svc, method, path, **kwargs):
-        captured["data"] = kwargs["data"]
-        captured["files"] = kwargs["files"]
-
-        class _Resp:
-            content = b"fake-png-bytes"
-
-        return _Resp()
+    class FakeGenerator:
+        async def generate(self, prompt, **kwargs):
+            captured["prompt"] = prompt
+            captured["kwargs"] = kwargs
+            return b"fake-png-bytes"
 
     output = tmp_path / "out.png"
     job = jobs.create_job()
     await service.run_image_job(
         job.id, output, settings=Settings(image_generation_url="http://img.invalid"),
         prompt="a lofi bedroom at sunset", reference_image_path=reference, strength=0.4,
-        library_kind="generated", call_service=fake_call,
+        library_kind="generated", image_generator=FakeGenerator(),
     )
 
     result = jobs.get_job(job.id)
     assert result.status is jobs.JobStatus.DONE, result.error
-    assert captured["data"] == {"prompt": "a lofi bedroom at sunset", "strength": 0.4}
-    assert captured["files"]["image"] == ("reference.png", b"fake-reference-image-bytes")
+    assert captured["prompt"] == "a lofi bedroom at sunset"
+    assert captured["kwargs"] == {
+        "reference_image_bytes": b"fake-reference-image-bytes",
+        "reference_image_filename": "reference.png",
+        "strength": 0.4,
+    }
 
     [asset] = asset_library.list_assets()
     assert asset.provenance == {"prompt": "a lofi bedroom at sunset", "strength": 0.4}

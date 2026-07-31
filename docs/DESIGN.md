@@ -144,7 +144,7 @@ Tests protect what must *never* silently break, not what is still in flux:
 Experimental code gets tests **when it stabilizes**, not before. Chasing coverage on code
 that may be deleted next week is waste.
 
-### 3.6 Capability ports for generation backends (extending §3.1, not yet done)
+### 3.6 Capability ports for generation backends (extending §3.1; implemented for image generation, 2026-07-31)
 
 §3.1's seam principle is applied loosely today for the three generation capabilities
 (image, music, sound-effect): `call_optional_service`/`OptionalService` give every
@@ -226,6 +226,21 @@ registered for image generation for the time being -- this section documents the
 second concrete adapter (e.g. Gemini) yet. That stays deferred until a real second
 backend is actually worth having, matching §3.3's own bar and the earlier billing-wall
 lesson from `docs/experiments/`.
+
+**Implemented (2026-07-31), image generation only, per the sequencing plan below.**
+`server/generation_ports.py` (the `ImageGenerator` Protocol shown above, unchanged),
+`server/generation_adapters.py` (`SDXLAdapter`, a direct extraction of what
+`run_image_job` used to build inline -- same request shape, same
+`call_optional_service`/`Settings` dependencies, no behavior change), and
+`server/generation_registry.py` (the registry shown above, unchanged). `app.py`
+registers `"sdxl"` at import time from `get_settings()`; `run_image_job` takes an
+injected `image_generator: ImageGenerator | None = None` and defaults to a fresh
+`SDXLAdapter(settings)` built from whatever `Settings` it was called with -- not from
+the process-global registry -- so a test's own `Settings(...)` is never shadowed by
+the registered instance (the registry itself is real and populated, but nothing
+consults it by name per-request yet; that's the deferred `model` field/dropdown
+above). Verified via `uv run pytest` (78 passed, no regressions) plus a direct import
+check confirming `available_image_generators() == ("sdxl",)` at app startup.
 
 **Scope note:** this lives in `server/`, not `cinemagraph/` -- it's the orchestrator's own
 job-routing logic, not part of "animate an existing image/video" (§3.2's scope test).
@@ -344,12 +359,14 @@ cinemagraph-tool/
 │   ├── cinemagraph/           # the stable core: pipeline, effects registry, mask, grade, loop, io
 │   ├── asset_library/         # content-addressed local library, its own top-level package
 │   └── server/                # FastAPI door: app.py (routes) + service.py (workflows) +
-│                               #   config.py (Settings/DI) + ui.py (GET / thin web UI: 6 tabs);
+│                               #   config.py (Settings/DI) + ui.py (GET / thin web UI: 6 tabs) +
+│                               #   generation_ports.py/generation_adapters.py/generation_registry.py
+│                               #   (ImageGenerator port + SDXLAdapter + registry, sec 3.6);
 │                               #   sibling package to cinemagraph, same distribution, no own pyproject
 ├── machine-learning/          # isolated service: CLIPSeg semantic masking (validated)
 ├── sound-effects/             # isolated service: Stable Audio Open (validated)
 ├── image-generation/          # isolated service: Stable Diffusion XL (validated)
-├── tests/                     # 73 tests: contracts, invariants, smoke (core + API + library);
+├── tests/                     # 78 tests: contracts, invariants, smoke (core + API + library);
 │                               #   tests/integration/ adds 2 more, excluded from the default
 │                               #   run (needs a live deployed stack -- see sec 3.7/5.9)
 ├── scripts/golden_check.py    # pixel-regression check, separate from pytest (see sec 6)
@@ -620,7 +637,7 @@ ACE-Step's maintainer-published image, these are unaudited third-party wrappers 
 accountability equivalent to a real package registry entry; not a trust level worth
 extending to something that needs GPU access.
 
-### 5.8 Capability ports for generation backends (not started)
+### 5.8 Capability ports for generation backends — IMPLEMENTED, image generation first
 
 See §3.6 for the full design and rationale. In short: `run_image_job`/`run_music_job`/
 `run_sound_effect_job` each hardcode their one backend's exact request/response shape
@@ -641,6 +658,14 @@ purpose" note), just the shape that makes adding one later a registration, not a
 Music and sound-effect generation follow the same shape once image generation proves the
 pattern out. No new infrastructure — a message/event broker between services is a
 related but separate, deliberately deferred idea (§3.6, §6).
+
+**Done (2026-07-31):** `server/generation_ports.py`, `server/generation_adapters.py`
+(`SDXLAdapter`), `server/generation_registry.py` — `run_image_job` now depends on an
+injected `ImageGenerator` instead of building the image-generation/ request inline;
+`app.py` registers `"sdxl"` at import time. Pure refactor, no behavior change, verified
+by `uv run pytest` (78 passed) plus a direct import check. Music/sound-effect generation
+remain hardcoded per §3.6's own sequencing — not started until this pattern is needed a
+second time.
 
 ### 5.9 Post-deployment integration tests (`tests/integration/`) — IMPLEMENTED, music first
 
