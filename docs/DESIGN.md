@@ -673,6 +673,24 @@ same remaining work:
   the resulting `<audio>` element's own `readyState`/`duration`/`error` after the job
   finished, same rigor as photo/video/image. The host-native route is kept as a documented
   alternative in `docker-compose.yml`. See `docs/experiments/`.
+- **Hosted alternative considered and rejected (2026-07-31): Google Lyria.** With a
+  working paid Gemini API key already in hand (from the image-generation work), Lyria
+  looked like a natural second `MusicGenerator` adapter, the same shape `GeminiAdapter`
+  proved out for images. Confirmed via real API calls, not docs: `client.aio.interactions
+  .create(model="lyria-3-clip-preview", response_format={"type": "audio", ...})` --
+  the same one-shot request/response shape that worked for image generation -- rejects
+  *every* audio MIME type tried (`mp3`/`wav`/`ogg_opus`/`l16`/`alaw`/`mulaw`, all `400
+  invalid_request: Audio mime_type is not supported in response_format`). The only
+  working Lyria access path is `client.aio.live.music` -- a `[Experimental]`-labeled
+  WebSocket streaming session (`connect()` → `set_weighted_prompts()` → `play()` →
+  continuously `receive()` raw PCM chunks → `stop()`/`close()`), designed for live,
+  continuously-steerable music (a DJ tool, an adaptive game soundtrack) with no natural
+  "generate one finished N-second clip" operation, no lyrics/vocals control, and no
+  `duration` parameter -- fundamentally a different use case than this route's one-shot,
+  finished-file job model. Rejected: forcing a fixed-length clip out of a live stream
+  would mean arbitrarily cutting it off mid-stream (no proper musical ending), on top of
+  building against an API Google itself labels experimental. `ACEStepAdapter` remains the
+  only registered `MusicGenerator`.
 - **Sound effects — Stable Audio Open, wrapped in `sound-effects/` — done, and
   validated for real.** The premature-to-build call from the first pass of this section
   was revisited and reversed: once sound-effect generation is meant to be a
