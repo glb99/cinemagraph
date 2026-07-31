@@ -394,6 +394,25 @@ async function loadEffects() {
   }
 }
 
+/** Every generated asset's original_filename is literally "output.mp4"/
+ * "output.mp3"/"output.png" -- that's the fixed filename every job writes
+ * before it's hashed into the library, so it's the same for every
+ * generated asset and useless as a picker label on its own. Prefers the
+ * asset's own provenance.prompt (what you actually typed, if this was a
+ * generation job) when present; falls back to filename + when it was
+ * added, since even non-generated assets need *something* to tell two
+ * same-named entries apart. */
+function assetPickerLabel(asset) {
+  const shortId = asset.id.slice(0, 8);
+  const prompt = asset.provenance && asset.provenance.prompt;
+  if (prompt) {
+    const trimmed = prompt.length > 40 ? prompt.slice(0, 40) + "…" : prompt;
+    return `${trimmed} (${shortId})`;
+  }
+  const when = new Date(asset.added_at).toLocaleString();
+  return `${asset.original_filename} — ${when} (${shortId})`;
+}
+
 /** Photo tab's input is either a fresh upload or a library asset -- exactly
  * one, same "pick one or the other" pattern already used for mask vs
  * mask_prompt on this tab. Selecting a library asset clears any chosen
@@ -417,7 +436,7 @@ async function loadPhotoLibraryAssets() {
     const btn = document.createElement("button");
     btn.type = "button";
     const selected = photoLibraryAssetId === asset.id;
-    btn.textContent = (selected ? "✓ " : "+ ") + asset.original_filename;
+    btn.textContent = (selected ? "✓ " : "+ ") + assetPickerLabel(asset);
     btn.addEventListener("click", () => {
       photoLibraryAssetId = selected ? null : asset.id;
       document.getElementById("photo-input").value = "";
@@ -434,7 +453,7 @@ function renderPhotoLibrarySelection(asset) {
   if (!photoLibraryAssetId) return;
   const chip = document.createElement("span");
   chip.className = "chip";
-  chip.appendChild(document.createTextNode(asset.original_filename));
+  chip.appendChild(document.createTextNode(assetPickerLabel(asset)));
   const removeBtn = document.createElement("button");
   removeBtn.type = "button";
   removeBtn.textContent = "×";
@@ -778,7 +797,7 @@ function renderAssemblePicker(containerId, assets, bucket, allowMultiple) {
     // disables -- removing happens via the chip's own × below, since
     // clicking here again wouldn't disambiguate *which* occurrence to drop
     // if the same asset were ever added twice.
-    btn.textContent = (selected ? "✓ " : "+ ") + asset.original_filename;
+    btn.textContent = (selected ? "✓ " : "+ ") + assetPickerLabel(asset);
     btn.disabled = selected && !allowMultiple;
     btn.addEventListener("click", () => {
       if (allowMultiple && selected) {
@@ -801,7 +820,7 @@ function renderAssembleChips() {
       const asset = assembleState.assetsById[assetId];
       const chip = document.createElement("span");
       chip.className = "chip";
-      const label = bucket === "sfx" ? asset.original_filename : `${index + 1}. ${asset.original_filename}`;
+      const label = bucket === "sfx" ? assetPickerLabel(asset) : `${index + 1}. ${assetPickerLabel(asset)}`;
       chip.appendChild(document.createTextNode(label));
       const removeBtn = document.createElement("button");
       removeBtn.type = "button";
