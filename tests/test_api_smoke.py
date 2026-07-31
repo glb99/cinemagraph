@@ -111,6 +111,48 @@ def test_render_photo_then_job_status_and_download(api_client, test_photo):
     assert set(library[0]["tags"]) == {"photo", "dust", "ripple"}
 
 
+def test_render_photo_accepts_input_asset_id_from_library(api_client, test_photo):
+    """Alternative to input_file -- picks an existing library asset's own
+    stored file directly (no re-upload/copy), same "pick one or the other"
+    pattern already used for mask vs mask_prompt on this route."""
+    import asset_library
+
+    asset = asset_library.add(test_photo, kind="reference")
+
+    resp = api_client.post(
+        "/render/photo",
+        data={"input_asset_id": asset.id, "effect": ["dust"], "duration": "1.0", "fps": "10"},
+    )
+    assert resp.status_code == 200, resp.text
+    status = api_client.get(f"/jobs/{resp.json()['job_id']}").json()
+    assert status["status"] == "done", status
+
+
+def test_render_photo_rejects_neither_input_file_nor_asset_id(api_client):
+    resp = api_client.post("/render/photo", data={"effect": ["dust"]})
+    assert resp.status_code == 422
+    assert "exactly one" in resp.json()["detail"]
+
+
+def test_render_photo_rejects_both_input_file_and_asset_id(api_client, test_photo):
+    with open(test_photo, "rb") as f:
+        resp = api_client.post(
+            "/render/photo",
+            files={"input_file": ("photo.jpg", f, "image/jpeg")},
+            data={"input_asset_id": "some-id", "effect": ["dust"]},
+        )
+    assert resp.status_code == 422
+    assert "exactly one" in resp.json()["detail"]
+
+
+def test_render_photo_rejects_unknown_input_asset_id(api_client):
+    resp = api_client.post(
+        "/render/photo", data={"input_asset_id": "does-not-exist", "effect": ["dust"]},
+    )
+    assert resp.status_code == 422
+    assert "does-not-exist" in resp.json()["detail"]
+
+
 def test_render_video_then_job_status(api_client, test_video):
     with open(test_video, "rb") as f:
         resp = api_client.post(

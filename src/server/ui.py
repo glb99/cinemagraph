@@ -109,7 +109,12 @@ the underlying routes don't already do themselves.</p>
 <section class="tab active" id="tab-photo">
 <form id="photo-form">
   <div class="row">
-    <label>Photo <input type="file" id="photo-input" accept="image/*" required></label>
+    <label>Photo <input type="file" id="photo-input" accept="image/*"></label>
+  </div>
+  <div class="row">
+    <p class="hint">...or pick an existing photo/image from the library instead of uploading:</p>
+    <div class="asset-picker" id="photo-library-picker">(loading...)</div>
+    <div class="selected-chips" id="photo-library-selected"></div>
   </div>
   <fieldset>
     <legend>Effects</legend>
@@ -389,6 +394,67 @@ async function loadEffects() {
   }
 }
 
+/** Photo tab's input is either a fresh upload or a library asset -- exactly
+ * one, same "pick one or the other" pattern already used for mask vs
+ * mask_prompt on this tab. Selecting a library asset clears any chosen
+ * upload file and vice versa (wired below), rather than allowing both and
+ * discovering the conflict only at submit time. */
+let photoLibraryAssetId = null;
+
+async function loadPhotoLibraryAssets() {
+  const assets = await (await fetch("/library")).json();
+  const imageExts = ["jpg", "jpeg", "png", "webp"];
+  const container = document.getElementById("photo-library-picker");
+  container.innerHTML = "";
+  const imageAssets = assets.filter(
+    a => imageExts.includes((a.original_filename.split(".").pop() || "").toLowerCase())
+  );
+  if (imageAssets.length === 0) {
+    container.textContent = "(no images in the library yet)";
+    return;
+  }
+  for (const asset of imageAssets) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    const selected = photoLibraryAssetId === asset.id;
+    btn.textContent = (selected ? "✓ " : "+ ") + asset.original_filename;
+    btn.addEventListener("click", () => {
+      photoLibraryAssetId = selected ? null : asset.id;
+      document.getElementById("photo-input").value = "";
+      renderPhotoLibrarySelection(asset);
+      loadPhotoLibraryAssets();
+    });
+    container.appendChild(btn);
+  }
+}
+
+function renderPhotoLibrarySelection(asset) {
+  const container = document.getElementById("photo-library-selected");
+  container.innerHTML = "";
+  if (!photoLibraryAssetId) return;
+  const chip = document.createElement("span");
+  chip.className = "chip";
+  chip.appendChild(document.createTextNode(asset.original_filename));
+  const removeBtn = document.createElement("button");
+  removeBtn.type = "button";
+  removeBtn.textContent = "×";
+  removeBtn.addEventListener("click", () => {
+    photoLibraryAssetId = null;
+    loadPhotoLibraryAssets();
+    container.innerHTML = "";
+  });
+  chip.appendChild(removeBtn);
+  container.appendChild(chip);
+}
+
+document.getElementById("photo-input").addEventListener("change", () => {
+  if (document.getElementById("photo-input").files[0] && photoLibraryAssetId) {
+    photoLibraryAssetId = null;
+    document.getElementById("photo-library-selected").innerHTML = "";
+    loadPhotoLibraryAssets();
+  }
+});
+
 function selectedEffects() {
   return Array.from(document.querySelectorAll('input[name="effect"]:checked')).map(i => i.value);
 }
@@ -564,6 +630,11 @@ wireForm("photo-form", {
       document.getElementById("photo-error").textContent = "Select at least one effect.";
       return null;
     }
+    const photoFile = document.getElementById("photo-input").files[0];
+    if (!photoFile && !photoLibraryAssetId) {
+      document.getElementById("photo-error").textContent = "Upload a photo or pick one from the library.";
+      return null;
+    }
     const maskFile = document.getElementById("photo-mask").files[0];
     const maskPrompt = document.getElementById("photo-mask-prompt").value.trim();
     if (maskFile && maskPrompt) {
@@ -571,7 +642,8 @@ wireForm("photo-form", {
       return null;
     }
     const form = new FormData();
-    form.append("input_file", document.getElementById("photo-input").files[0]);
+    if (photoFile) form.append("input_file", photoFile);
+    else form.append("input_asset_id", photoLibraryAssetId);
     for (const eff of effects) form.append("effect", eff);
     if (maskFile) form.append("mask", maskFile);
     if (maskPrompt) form.append("mask_prompt", maskPrompt);
@@ -794,6 +866,7 @@ document.getElementById("library-tag-filter").addEventListener("keydown", (e) =>
 
 loadCapabilities();
 loadEffects();
+loadPhotoLibraryAssets();
 </script>
 </body>
 </html>

@@ -22,6 +22,13 @@ through the same functions and reject the same bad combinations, just
 translated into a click.UsageError on one side and an HTTP 422 on the other.
 /mask-preview is the API equivalent of `cinemagraph mask-preview`.
 
+/render/photo has one API-only capability beyond that parity: its input can
+be an existing library asset (`input_asset_id`, resolved via
+`asset_library.get()`) instead of a fresh upload (`input_file`) -- exactly
+one of the two, same "pick one or the other" pattern already used for
+`mask`/`mask_prompt` on this route. Web-UI-only by design (the CLI already
+works with any file path, including a library asset's own stored path).
+
 Routes that talk to optional external services do so via
 _external_service.py's shared call_optional_service()/service_available()
 helpers, both of which degrade to a clean 503/false rather than erroring
@@ -231,7 +238,8 @@ async def render_video(
 async def render_photo(
     background_tasks: BackgroundTasks,
     settings: SettingsDep,
-    input_file: UploadFile = File(...),
+    input_file: UploadFile | None = File(None),
+    input_asset_id: str | None = Form(None),
     effect: list[str] = Form(...),
     mask: UploadFile | None = File(None),
     mask_prompt: str | None = Form(None),
@@ -262,10 +270,13 @@ async def render_photo(
 ):
     """Render a photo cinemagraph.
 
-    Supply at most one of `mask` (a hand-painted mask file, same convention
-    as the CLI's --mask) or `mask_prompt` (e.g. "clouds", "sun" -- segments
-    the photo via the machine-learning service first and renders with that
-    mask; the job errors with a 503-style message if that service isn't
+    Supply exactly one of `input_file` (a fresh upload) or `input_asset_id`
+    (an existing library asset's id, resolved via `asset_library.get()` --
+    its stored file is used directly, no upload/copy needed). Supply at most
+    one of `mask` (a hand-painted mask file, same convention as the CLI's
+    --mask) or `mask_prompt` (e.g. "clouds", "sun" -- segments the photo via
+    the machine-learning service first and renders with that mask; the job
+    errors with a 503-style message if that service isn't
     configured/reachable, rather than silently rendering unmasked). Per-effect
     overrides (rain_count, ripple_amplitude, etc.) mirror the CLI's per-effect
     flags one-for-one and go through the same validation.resolve_effect_kwargs
@@ -279,6 +290,8 @@ async def render_photo(
         raise HTTPException(422, "Supply either `mask` or `mask_prompt`, not both.")
     if loop_duration and also_gif:
         raise HTTPException(422, pipeline._LOOP_DURATION_GIF_ERROR)
+    if (input_file is None) == (input_asset_id is None):
+        raise HTTPException(422, "Supply exactly one of `input_file` or `input_asset_id`.")
 
     per_effect_options = {
         "rain": {"count": rain_count, "opacity": rain_opacity},
@@ -298,8 +311,14 @@ async def render_photo(
 
     job = jobs.create_job()
     job_dir = _job_dir(settings, job.id)
-    input_path = job_dir / (input_file.filename or "input")
-    await _save_upload(input_file, input_path)
+    if input_asset_id is not None:
+        asset = library.get(input_asset_id)
+        if asset is None:
+            raise HTTPException(422, f"No asset with id '{input_asset_id}'")
+        input_path = asset.path
+    else:
+        input_path = job_dir / (input_file.filename or "input")
+        await _save_upload(input_file, input_path)
     output_path = job_dir / "output.mp4"
 
     render_kwargs = dict(
