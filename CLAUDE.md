@@ -280,27 +280,32 @@ Three more routes are optional-external-service seams, all using `_external_serv
   Directory named to match [Immich](https://github.com/immich-app/immich/tree/main/machine-learning)'s
   convention for the same core-app-plus-optional-ML-service split. Env var `ML_SERVICE_URL`. Response
   is proxied through as raw `image/png` bytes, same as the request came back from the service.
-- **`POST /generate/music`** — proxies to an [ACE-Step](https://github.com/ace-step/ACE-Step) API
-  server. Env var `ACESTEP_URL`. ACE-Step already ships its own FastAPI server and a published image
-  (`ghcr.io/ace-step/ace-step-1.5:latest`, see `docker-compose.yml`'s `acestep` service, gated behind
-  `--profile audio` like `sound-effects`/`image-generation`) —
-  there is no wrapper for this project to write, only a client. That client is more involved than
-  `/mask/semantic`'s single proxied call because ACE-Step's own API is itself an async job queue
-  (`POST /release_task` → poll `POST /query_result` → `GET /v1/audio`): `app.py`'s `_run_music_job`
-  drives that queue to completion inside *our* `BackgroundTasks` job, which is why `POST
-  /generate/music` needs no new status/download routes of its own — `GET /jobs/{job_id}` and
-  `GET /jobs/{job_id}/file` already work for it unchanged. (Full request/response contract: ACE-Step's
-  own `docs/api/API.md`, reachable via its `acestep-docs` skill.) `instrumental` (form field) overrides
-  whatever `lyrics` was submitted with ACE-Step's own instrumental marker (`"[Instrumental]"`) before
-  it's sent — found by reading ACE-Step's own source (`acestep/api/server_utils.py`'s
+- **`POST /generate/music`** — proxies to a `MusicGenerator` adapter (`server/generation_ports.py`/
+  `generation_adapters.py`, see §3.6), currently just `ACEStepAdapter` against an
+  [ACE-Step](https://github.com/ace-step/ACE-Step) API server. Env var `ACESTEP_URL`. ACE-Step
+  already ships its own FastAPI server and a published image (`ghcr.io/ace-step/ace-step-1.5:latest`,
+  see `docker-compose.yml`'s `acestep` service, gated behind `--profile audio` like
+  `sound-effects`/`image-generation`) — there is no wrapper for this project to write, only a client.
+  That client is more involved than `/mask/semantic`'s single proxied call because ACE-Step's own API
+  is itself an async job queue (`POST /release_task` → poll `POST /query_result` → `GET /v1/audio`):
+  `ACEStepAdapter.generate()` drives that queue to completion inside *our* `BackgroundTasks` job
+  (`server/service.py`'s `run_music_job`), which is why `POST /generate/music` needs no new
+  status/download routes of its own — `GET /jobs/{job_id}` and `GET /jobs/{job_id}/file` already work
+  for it unchanged. (Full request/response contract: ACE-Step's own `docs/api/API.md`, reachable via
+  its `acestep-docs` skill.) `instrumental` (form field) is translated by `ACEStepAdapter` itself —
+  not `run_music_job` — into ACE-Step's own instrumental marker (`"[Instrumental]"`) sent as the
+  `lyrics` field, found by reading ACE-Step's own source (`acestep/api/server_utils.py`'s
   `is_instrumental`), not its REST docs, which don't mention a boolean `instrumental` field at all
   (that only exists on ACE-Step's separate OpenRouter-compatible wrapper). An empty `lyrics` field
-  does *not* make the real server skip vocals on its own.
-- **`POST /generate/sound-effect`** — proxies to `sound-effects/`, a small FastAPI service **this
-  project owns and built** (unlike ACE-Step) wrapping Stable Audio Open — see that directory's own
-  README for its contract and how to run it. Env var `SOUND_EFFECTS_URL`. Unlike ACE-Step's job queue,
-  that service's own `POST /generate` is a single synchronous call; `_run_sound_effect_job` still runs
-  it as a background job here purely because generation takes real time (tens of seconds to a couple
+  does *not* make the real server skip vocals on its own. `run_music_job`'s own provenance records the
+  *lyrics actually submitted* by the caller, not this internal marker substitution — kept as the
+  adapter's own concern precisely so that distinction holds.
+- **`POST /generate/sound-effect`** — proxies to a `SoundEffectGenerator` adapter, currently just
+  `StableAudioAdapter` against `sound-effects/`, a small FastAPI service **this project owns and
+  built** (unlike ACE-Step) wrapping Stable Audio Open — see that directory's own README for its
+  contract and how to run it. Env var `SOUND_EFFECTS_URL`. Unlike ACE-Step's job queue, that service's
+  own `POST /generate` is a single synchronous call; `run_sound_effect_job` still runs it as a
+  background job here purely because generation takes real time (tens of seconds to a couple
   minutes) and the HTTP connection shouldn't be held open for it. Validated end-to-end against a real
   GPU (both the service standalone and the full chain through this API) — see
   `docs/experiments/2026-07-27-audio-model-serving-research.md`.

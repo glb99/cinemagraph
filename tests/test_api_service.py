@@ -1,16 +1,20 @@
 """Unit tests for server/service.py's workflows.
 
-These call the job functions directly rather than through a route. That's
-the point of the module existing: run_music_job's polling branches (remote
-reports failure, polling times out) are effectively unreachable through an
-HTTP round-trip, so they went untested while this code lived in app.py.
+These call the job functions directly rather than through a route -- lets
+each job's own orchestration (mark_running/done/error, library
+registration, provenance) be tested without an HTTP round-trip or a real
+external service. Backend-specific request/response mechanics (ACE-Step's
+polling loop, SDXL's img2img request shape, Gemini's multimodal input) live
+one level down in generation_adapters.py, tested directly in
+test_generation_ports.py instead -- these tests inject a fake
+port (ImageGenerator/MusicGenerator/SoundEffectGenerator) rather than a fake
+HTTP call, since that's the seam this module's jobs actually depend on.
 
 Settings are constructed directly (Settings(acestep_url=...)) rather than
 via monkeypatch.setenv, since service.py now takes settings as an explicit
 argument instead of reading the environment itself -- config is resolved
 once by the route (via Depends(get_settings)) and passed through.
 """
-import json
 from pathlib import Path
 
 import asset_library
@@ -80,84 +84,22 @@ def test_render_job_library_failure_does_not_flip_job_to_error(monkeypatch, tmp_
     assert output.read_bytes() == b"fake-video-bytes"
 
 
-def _ace_response(payload):
-    """Minimal stand-in for the httpx.Response that call_optional_service returns."""
-    class _Resp:
-        content = b"audio-bytes"
-
-        def json(self):
-            return payload
-
-    return _Resp()
-
-
 @pytest.mark.anyio
-async def test_music_job_reports_remote_failure(monkeypatch, tmp_path, acestep_settings):
-    """ACE-Step status == 2 means it gave up -- surface that as a job error
-    rather than polling until the timeout."""
-    monkeypatch.setattr(service, "MUSIC_POLL_INTERVAL_SECONDS", 0)
-
-    async def fake_call(svc, method, path, **kwargs):
-        if path == "/release_task":
-            return _ace_response({"data": {"task_id": "t1"}})
-        return _ace_response({"data": [{"status": 2, "result": None}]})
-
-    job = jobs.create_job()
-    await service.run_music_job(
-        job.id, tmp_path / "out.mp3",
-        settings=acestep_settings, prompt="p", lyrics="", duration=10.0, thinking=False,
-        call_service=fake_call,
-    )
-
-    result = jobs.get_job(job.id)
-    assert result.status is jobs.JobStatus.ERROR
-    assert "failure" in result.error.lower()
-
-
-@pytest.mark.anyio
-async def test_music_job_times_out_when_never_ready(monkeypatch, tmp_path, acestep_settings):
-    """status == 0 forever: the loop must give up rather than hang."""
-    monkeypatch.setattr(service, "MUSIC_POLL_INTERVAL_SECONDS", 0)
-    monkeypatch.setattr(service, "MUSIC_POLL_MAX_ATTEMPTS", 3)
-
-    async def fake_call(svc, method, path, **kwargs):
-        if path == "/release_task":
-            return _ace_response({"data": {"task_id": "t1"}})
-        return _ace_response({"data": [{"status": 0, "result": None}]})
-
-    job = jobs.create_job()
-    await service.run_music_job(
-        job.id, tmp_path / "out.mp3",
-        settings=acestep_settings, prompt="p", lyrics="", duration=10.0, thinking=False,
-        call_service=fake_call,
-    )
-
-    result = jobs.get_job(job.id)
-    assert result.status is jobs.JobStatus.ERROR
-    assert "timed out" in result.error.lower()
-
-
-@pytest.mark.anyio
-async def test_music_job_downloads_audio_on_success(monkeypatch, tmp_path, acestep_settings):
-    """The happy path -- pins the response-envelope parsing (data[0].result
-    is a JSON *string* holding a list), also verified against a live
-    ACE-Step server (see docs/experiments/)."""
-    monkeypatch.setattr(service, "MUSIC_POLL_INTERVAL_SECONDS", 0)
-
-    async def fake_call(svc, method, path, **kwargs):
-        if path == "/release_task":
-            return _ace_response({"data": {"task_id": "t1"}})
-        if path == "/query_result":
-            return _ace_response(
-                {"data": [{"status": 1, "result": json.dumps([{"file": "/v1/audio/t1.mp3"}])}]}
-            )
-        return _ace_response({})  # the audio download
+async def test_music_job_downloads_audio_and_registers_in_library(tmp_path, acestep_settings):
+    """ACE-Step's own polling-loop details (remote failure, timeout, the
+    response-envelope parsing) are now ACEStepAdapter's concern, tested
+    directly in test_generation_ports.py -- this just confirms run_music_job
+    delegates to an injected MusicGenerator and records provenance
+    correctly, the same job-level shape run_image_job's tests already use."""
+    class FakeGenerator:
+        async def generate(self, prompt, **kwargs):
+            return b"audio-bytes"
 
     output = tmp_path / "out.mp3"
     job = jobs.create_job()
     await service.run_music_job(
         job.id, output, settings=acestep_settings, prompt="p", lyrics="", duration=10.0, thinking=False,
-        library_kind="generated", call_service=fake_call,
+        library_kind="generated", music_generator=FakeGenerator(),
     )
 
     result = jobs.get_job(job.id)
@@ -173,54 +115,62 @@ async def test_music_job_downloads_audio_on_success(monkeypatch, tmp_path, acest
 
 
 @pytest.mark.anyio
-async def test_music_job_instrumental_overrides_lyrics(monkeypatch, tmp_path, acestep_settings):
-    """instrumental=True must send ACE-Step's own instrumental marker as the
-    lyrics field, regardless of what lyrics text was supplied -- an empty (or
-    any other) lyrics string does not make ACE-Step's real server omit vocals
-    on its own; only this exact marker does (see run_music_job's docstring)."""
-    monkeypatch.setattr(service, "MUSIC_POLL_INTERVAL_SECONDS", 0)
-    sent_lyrics = []
-
-    async def fake_call(svc, method, path, **kwargs):
-        if path == "/release_task":
-            sent_lyrics.append(kwargs["json"]["lyrics"])
-            return _ace_response({"data": {"task_id": "t1"}})
-        if path == "/query_result":
-            return _ace_response(
-                {"data": [{"status": 1, "result": json.dumps([{"file": "/v1/audio/t1.mp3"}])}]}
-            )
-        return _ace_response({})  # the audio download
+async def test_music_job_provenance_records_submitted_lyrics_not_backend_marker(tmp_path, acestep_settings):
+    """Provenance must reflect what the caller actually asked for
+    (instrumental=True, original lyrics text) -- not whatever
+    backend-internal substitution an adapter makes to achieve it (ACE-Step's
+    own "[Instrumental]" marker hack, entirely ACEStepAdapter's concern per
+    its own docstring)."""
+    class FakeGenerator:
+        async def generate(self, prompt, **kwargs):
+            return b"audio-bytes"
 
     output = tmp_path / "out.mp3"
     job = jobs.create_job()
     await service.run_music_job(
         job.id, output, settings=acestep_settings, prompt="p", lyrics="some lyrics I typed",
         duration=10.0, thinking=False, instrumental=True,
-        library_kind="generated", call_service=fake_call,
+        library_kind="generated", music_generator=FakeGenerator(),
     )
 
     result = jobs.get_job(job.id)
     assert result.status is jobs.JobStatus.DONE, result.error
-    assert sent_lyrics == ["[Instrumental]"]
 
     [asset] = asset_library.list_assets()
-    assert asset.provenance["lyrics"] == "[Instrumental]"
+    assert asset.provenance["lyrics"] == "some lyrics I typed"
     assert asset.provenance["instrumental"] is True
 
 
 @pytest.mark.anyio
-async def test_sound_effect_job_downloads_audio_and_registers_in_library(tmp_path):
-    async def fake_call(svc, method, path, **kwargs):
-        class _Resp:
-            content = b"sfx-bytes"
+async def test_music_job_reports_generator_error(tmp_path, acestep_settings):
+    class FailingGenerator:
+        async def generate(self, prompt, **kwargs):
+            raise RuntimeError("ACE-Step reported generation failure.")
 
-        return _Resp()
+    job = jobs.create_job()
+    await service.run_music_job(
+        job.id, tmp_path / "out.mp3",
+        settings=acestep_settings, prompt="p", lyrics="", duration=10.0, thinking=False,
+        music_generator=FailingGenerator(),
+    )
+
+    result = jobs.get_job(job.id)
+    assert result.status is jobs.JobStatus.ERROR
+    assert "failure" in result.error.lower()
+
+
+@pytest.mark.anyio
+async def test_sound_effect_job_downloads_audio_and_registers_in_library(tmp_path):
+    class FakeGenerator:
+        async def generate(self, prompt, **kwargs):
+            return b"sfx-bytes"
 
     output = tmp_path / "out.wav"
     job = jobs.create_job()
     await service.run_sound_effect_job(
         job.id, output, settings=Settings(sound_effects_url="http://sfx.invalid"),
-        prompt="gentle wind chimes", duration=8.0, library_kind="generated", call_service=fake_call,
+        prompt="gentle wind chimes", duration=8.0, library_kind="generated",
+        sound_effect_generator=FakeGenerator(),
     )
 
     result = jobs.get_job(job.id)

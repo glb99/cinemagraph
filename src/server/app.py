@@ -71,8 +71,13 @@ from cinemagraph import effects as effects_pkg, pipeline, validation
 from . import jobs, service, ui
 from ._external_service import call_optional_service, service_available
 from .config import Settings, get_settings
-from .generation_adapters import GeminiAdapter, SDXLAdapter
-from .generation_registry import available_image_generators, register_image_generator
+from .generation_adapters import ACEStepAdapter, GeminiAdapter, SDXLAdapter, StableAudioAdapter
+from .generation_registry import (
+    available_image_generators,
+    register_image_generator,
+    register_music_generator,
+    register_sound_effect_generator,
+)
 from .schemas import AssetResponse, CapabilitiesResponse, JobResponse, JobStatusResponse
 
 SettingsDep = Annotated[Settings, Depends(get_settings)]
@@ -87,10 +92,18 @@ app = FastAPI(title="cinemagraph-tool API")
 # already follows. run_image_job's own default (server/service.py) resolves
 # a model name through this same registry -- see its docstring for why that
 # doesn't shadow a test's own Settings(...) for real request traffic.
+#
+# "acestep"/"stable-audio" register unconditionally too (same as "sdxl") --
+# reachability is still checked fresh per request either way; nothing in
+# server/service.py looks these up by name yet (no second music/sound-effect
+# backend exists), same "mechanism present, unconsumed" phase image
+# generation itself started in. See generation_registry.py's own docstring.
 _settings = get_settings()
 register_image_generator("sdxl", SDXLAdapter(_settings))
 if _settings.gemini_api_key:
     register_image_generator("gemini", GeminiAdapter(_settings))
+register_music_generator("acestep", ACEStepAdapter(_settings))
+register_sound_effect_generator("stable-audio", StableAudioAdapter(_settings))
 
 
 def _job_dir(settings: Settings, job_id: str) -> Path:

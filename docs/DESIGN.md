@@ -144,7 +144,7 @@ Tests protect what must *never* silently break, not what is still in flux:
 Experimental code gets tests **when it stabilizes**, not before. Chasing coverage on code
 that may be deleted next week is waste.
 
-### 3.6 Capability ports for generation backends (extending §3.1; implemented for image generation, 2026-07-31)
+### 3.6 Capability ports for generation backends (extending §3.1; implemented for all three generation capabilities, 2026-07-31)
 
 §3.1's seam principle is applied loosely today for the three generation capabilities
 (image, music, sound-effect): `call_optional_service`/`OptionalService` give every
@@ -280,6 +280,36 @@ Full account, including the real API contract confirmed via live introspection a
 real key (not docs, which were already wrong once for this exact API in the first
 attempt): `docs/experiments/2026-07-31-gemini-adapter.md`.
 
+**Music and sound-effect generation ported too (2026-07-31), per the sequencing above.**
+`generation_ports.py` gained `MusicGenerator`/`SoundEffectGenerator`, `generation_adapters.py`
+gained `ACEStepAdapter`/`StableAudioAdapter` (direct extractions of what
+`run_music_job`/`run_sound_effect_job` used to build inline -- ACE-Step's own job-queue
+polling loop moved into `ACEStepAdapter.generate()` unchanged), and
+`generation_registry.py` gained a second and third independent registry (`_MUSIC_GENERATORS`/
+`_SOUND_EFFECT_GENERATORS`, same shape as `_IMAGE_GENERATORS` -- kept separate per capability
+rather than one shared generic registry, since a `MusicGenerator` and an `ImageGenerator`
+are not genuine peers under §3.3's own bar, only adapters within the same capability are).
+Only `"acestep"`/`"stable-audio"` are registered -- no second backend exists for either
+yet, so (matching image generation's own first pass before `GeminiAdapter` existed) neither
+gained a `model` field or per-request registry lookup; `run_music_job`/`run_sound_effect_job`
+default to a freshly-built adapter from the call's own `settings`, not a registry lookup.
+
+One real design question resolved in the process: ACE-Step's "[Instrumental]" lyrics-marker
+hack (its `/release_task` has no real `instrumental` field; the marker is the only way to
+suppress vocals) moved *into* `ACEStepAdapter`, not left in `run_music_job` -- it's backend-
+specific wire-format knowledge, the same class of thing `GeminiAdapter` silently ignoring
+`strength` already is. Consequence: `run_music_job`'s own provenance now records the lyrics
+the *caller* actually submitted, not the backend's internal substitution (previously it
+recorded `"[Instrumental]"` verbatim when `instrumental=True`, which was really an
+implementation leak, not a meaningful record of the request).
+
+Verified via `uv run pytest` (93 passed -- the four ACE-Step polling-loop tests, previously
+exercised through `run_music_job` directly, moved down to test `ACEStepAdapter` directly,
+matching where that logic now actually lives) and `scripts/golden_check.py` (unaffected).
+No live-GPU re-verification needed: the wire request/response shapes are byte-for-byte
+identical to before this refactor, only their location moved -- `tests/integration/
+test_music_live.py` (HTTP-only, unaware of this internal split) would catch any real drift.
+
 **Deliberately deferred: an actual event/message broker between services** (e.g. Redis
 Streams, RabbitMQ -- satellites become message consumers instead of HTTP servers). This
 is a different concern from the port/adapter work above: it buys resilience and fan-out
@@ -392,12 +422,14 @@ cinemagraph-tool/
 │   └── server/                # FastAPI door: app.py (routes) + service.py (workflows) +
 │                               #   config.py (Settings/DI) + ui.py (GET / thin web UI: 6 tabs) +
 │                               #   generation_ports.py/generation_adapters.py/generation_registry.py
-│                               #   (ImageGenerator port + SDXLAdapter + GeminiAdapter + registry,
-│                               #   sec 3.6); sibling package to cinemagraph, same distribution
+│                               #   (ImageGenerator/MusicGenerator/SoundEffectGenerator ports +
+│                               #   SDXLAdapter/GeminiAdapter/ACEStepAdapter/StableAudioAdapter +
+│                               #   3 independent registries, sec 3.6); sibling package to
+│                               #   cinemagraph, same distribution
 ├── machine-learning/          # isolated service: CLIPSeg semantic masking (validated)
 ├── sound-effects/             # isolated service: Stable Audio Open (validated)
 ├── image-generation/          # isolated service: Stable Diffusion XL (validated)
-├── tests/                     # 87 tests: contracts, invariants, smoke (core + API + library);
+├── tests/                     # 93 tests: contracts, invariants, smoke (core + API + library);
 │                               #   tests/integration/ adds 2 more, excluded from the default
 │                               #   run (needs a live deployed stack -- see sec 3.7/5.9)
 ├── scripts/golden_check.py    # pixel-regression check, separate from pytest (see sec 6)
@@ -668,7 +700,7 @@ ACE-Step's maintainer-published image, these are unaudited third-party wrappers 
 accountability equivalent to a real package registry entry; not a trust level worth
 extending to something that needs GPU access.
 
-### 5.8 Capability ports for generation backends — IMPLEMENTED, image generation first
+### 5.8 Capability ports for generation backends — IMPLEMENTED, all three capabilities
 
 See §3.6 for the full design and rationale. In short: `run_image_job`/`run_music_job`/
 `run_sound_effect_job` each hardcode their one backend's exact request/response shape
@@ -711,6 +743,20 @@ change needed the day only `sdxl` exists, exactly as designed above. Verified ag
 real Gemini API (not mocked) end to end through the actual HTTP route, both text-to-image
 and img2img, plus `uv run pytest` (86 passed). See
 `docs/experiments/2026-07-31-gemini-adapter.md`.
+
+**Extended again same day: music and sound-effect generation.** `MusicGenerator`/
+`SoundEffectGenerator` ports, `ACEStepAdapter`/`StableAudioAdapter` (direct extractions,
+ACE-Step's own polling loop moved unchanged), and two more independent registries
+(`_MUSIC_GENERATORS`/`_SOUND_EFFECT_GENERATORS`). Only one adapter registered for each --
+same "mechanism present, unconsumed" phase image generation itself started in, no `model`
+field added to either route since no second backend exists yet to justify one. The
+ACE-Step-specific "[Instrumental]" lyrics-marker hack moved into `ACEStepAdapter` itself
+(backend-specific wire knowledge, not `run_music_job`'s concern) -- `run_music_job`'s
+provenance now records the lyrics actually submitted rather than that internal
+substitution. Verified via `uv run pytest` (93 passed, including the four ACE-Step
+polling-loop tests moved down to test `ACEStepAdapter` directly) and `golden_check.py`;
+no live-GPU re-verification needed since the wire contracts are unchanged, only their
+location moved. See §3.6's own follow-up entry for the full account.
 
 ### 5.9 Post-deployment integration tests (`tests/integration/`) — IMPLEMENTED, music first
 

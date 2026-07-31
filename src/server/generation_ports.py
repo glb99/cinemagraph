@@ -10,3 +10,13 @@ from typing import Protocol
 
 class ImageGenerator(Protocol):
     async def generate(self, prompt: str, **kwargs) -> bytes: ...
+
+
+class MusicGenerator(Protocol):
+    async def generate(
+        self, prompt: str, *, lyrics: str, duration: float, thinking: bool, instrumental: bool = False
+    ) -> bytes: ...
+
+
+class SoundEffectGenerator(Protocol):
+    async def generate(self, prompt: str, *, duration: float) -> bytes: ...

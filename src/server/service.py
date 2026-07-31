@@ -7,10 +7,10 @@ of any size (see docs/DESIGN.md's decision log).
 
 Two concrete payoffs beyond tidiness:
 
-- These functions are unit-testable on their own. The polling branches in
-  run_music_job (remote failure, timeout) are otherwise only reachable by
-  driving a whole HTTP round-trip, which is why they went untested while
-  this lived in app.py.
+- These functions are unit-testable on their own. (ACE-Step's own polling
+  loop -- remote failure, timeout -- now lives in generation_adapters.py's
+  ACEStepAdapter, tested there directly; run_music_job's own tests just
+  confirm it delegates to an injected MusicGenerator correctly.)
 - This is the one module that knows about *both* the external services and
   the rendering pipeline. Neither knows about the other: cinemagraph/ never
   learns that HTTP exists, _external_service.py never learns that renders
@@ -43,42 +43,37 @@ FastAPI's Depends() cannot inject into them -- the route resolves settings
 module free of any environment lookups, which is also why its tests can
 construct a Settings() directly instead of monkeypatching os.environ.
 
-External-service calls and the actual render are dependency-injected the
-same way run_render_job already injects render_fn: each async job takes an
-explicit `call_service` parameter (defaulting to the real
-call_optional_service), and run_photo_semantic_mask_job additionally takes
-`render_fn` (defaulting to pipeline.save_cinemagraph_from_photo), rather
-than calling either name directly via module import. Tests pass a fake in
-as an argument instead of monkeypatching this module's namespace -- the
-seam is the same one either way (both are genuinely the one function that
-crosses an I/O boundary here, network for one and disk/CPU-bound render
-for the other), this just makes it an explicit part of each function's
-signature instead of an implicit one only reachable by patching internals.
-Neither parameter ever varies across real callers today -- app.py never
-passes anything but the default for either -- so the justification isn't
-"production polymorphism," it's that an explicit parameter is a more
-honest, refactor-safe seam than patching a module attribute (monkeypatch
-has to guess the exact name a call site looked up, which silently breaks
-if an import is ever restructured; an injected parameter can't).
+External services are dependency-injected the same way run_render_job
+already injects render_fn -- an explicit parameter each job takes rather
+than calling a name directly via module import, so tests pass a fake in as
+an argument instead of monkeypatching this module's namespace. Two shapes
+of that seam exist here now:
 
-run_image_job depends on an injected ImageGenerator (generation_ports.py)
-rather than building the image-generation/ request inline -- the same
-DI shape call_service=/render_fn= already use elsewhere in this file, one
-level higher (a whole capability, not one bare function). Now that a real
-second adapter exists (GeminiAdapter, alongside SDXLAdapter), the default
-comes from generation_registry.get_image_generator(model) -- the per-request
-`model` field lets a caller pick which registered adapter to use, which is
-the entire reason the registry (not just a single swappable reference)
-exists per §3.6. For real requests this is safe: app.py's route resolves
-`settings` via Depends(get_settings), the exact cached singleton the
-registry's adapters were themselves built from at app-import time, so
-there's no divergence. Tests that want to fake the HTTP/API layer inject
-`image_generator=` directly (bypassing model lookup entirely), same as
-before -- that seam doesn't care where the default would have come from.
-See docs/DESIGN.md sec 3.6 for the full rationale (this existed as one
-hardcoded call before the refactor; image generation already lived through
-two real backends -- Gemini's hosted API, then local SDXL, then Gemini again
-as a coexisting adapter -- which is what justifies the port and registry).
+- run_photo_semantic_mask_job (the one job with no dedicated port/adapter of
+  its own -- semantic masking has never lived through a second backend, so
+  there's nothing yet to justify one per §3.3's own bar) takes `call_service`
+  (defaulting to call_optional_service) and `render_fn` (defaulting to
+  pipeline.save_cinemagraph_from_photo) directly.
+- run_image_job/run_music_job/run_sound_effect_job each take an injected
+  port object (ImageGenerator/MusicGenerator/SoundEffectGenerator,
+  generation_ports.py) instead -- one level of abstraction higher (a whole
+  capability, not one bare function). run_image_job's default comes from
+  generation_registry.get_image_generator(model): a real second adapter
+  (GeminiAdapter, alongside SDXLAdapter) exists, so a per-request `model`
+  field lets a caller pick which one, the entire reason the registry (not
+  just a single swappable reference) exists per §3.6. run_music_job/
+  run_sound_effect_job default to a freshly-built ACEStepAdapter(settings)/
+  StableAudioAdapter(settings) instead -- registered in generation_registry
+  for mechanism-completeness, but not consulted by name yet, since no
+  second music/sound-effect backend exists to justify a `model` field
+  (image generation went through this identical single-adapter phase before
+  Gemini existed). For real requests using the registry is safe regardless:
+  app.py's routes resolve `settings` via Depends(get_settings), the exact
+  cached singleton every registered adapter was itself built from at
+  app-import time, so there's no divergence from a test's own custom
+  Settings(...) -- tests that want to fake the HTTP/API layer inject the
+  port parameter directly, bypassing lookup entirely either way. See
+  docs/DESIGN.md sec 3.6 for the full rationale and history.
 
 Library registration: every job function below takes an optional
 `library_kind` -- when given (the four /render and /generate routes all
@@ -95,7 +90,6 @@ upload passing through this API is not necessarily something the user
 wants kept forever.
 """
 import asyncio
-import json
 from pathlib import Path
 
 import asset_library
@@ -106,11 +100,9 @@ from cinemagraph import pipeline
 from . import jobs
 from ._external_service import call_optional_service
 from .config import Settings
-from .generation_ports import ImageGenerator
+from .generation_adapters import ACEStepAdapter, StableAudioAdapter
+from .generation_ports import ImageGenerator, MusicGenerator, SoundEffectGenerator
 from .generation_registry import get_image_generator
-
-MUSIC_POLL_INTERVAL_SECONDS = 2.0
-MUSIC_POLL_MAX_ATTEMPTS = 150  # ~5 minutes total
 
 
 def _register_in_library(output_path: Path, kind: str | None, tags: list[str] | None, provenance: dict | None) -> None:
@@ -202,68 +194,31 @@ async def run_music_job(
     thinking: bool,
     instrumental: bool = False,
     library_kind: str | None = None,
-    call_service=call_optional_service,
+    music_generator: MusicGenerator | None = None,
 ) -> None:
-    """Drives ACE-Step's own job-queue API to completion: create a task,
-    poll until it reports success/failure, download the resulting audio.
-    ACE-Step's response envelope wraps everything in {"data": ..., "code": ...};
-    see docs/DESIGN.md / the acestep-docs skill's API.md for the full contract.
+    """Proxies to a MusicGenerator adapter (generation_ports.py), defaulting
+    to ACEStepAdapter (generation_adapters.py) -- same DI shape run_image_job
+    already uses, extracted once image generation had proven the pattern
+    twice over (see docs/DESIGN.md sec 3.6). Only "acestep" exists as a
+    backend today, so unlike run_image_job there's no `model` field yet.
 
-    ACE-Step's /release_task has no separate "instrumental" field (that only
-    exists on its higher-level OpenRouter-compatible wrapper, a different API
-    surface than the one this client talks to) -- its own server derives
-    instrumental mode purely from the *lyrics string itself*
-    (`acestep/api/server_utils.py`'s `is_instrumental`: true iff the
-    stripped/lowercased lyrics equal "[inst]" or "[instrumental]"). An empty
-    lyrics field does NOT trigger it -- ACE-Step will still attempt vocals.
-    `instrumental=True` here overrides whatever lyrics text was provided with
-    that exact marker, mirroring what ACE-Step's own Gradio UI's
-    "Instrumental" checkbox does.
+    Provenance records the *lyrics actually submitted*, not whatever
+    backend-internal marker an adapter substitutes for `instrumental=True`
+    (ACEStepAdapter's own docstring explains why that substitution is its
+    concern, not this function's).
     """
     jobs.mark_running(job_id)
-    service = settings.music_service
-    effective_lyrics = "[Instrumental]" if instrumental else lyrics
     try:
-        create_resp = await call_service(
-            service, "POST", "/release_task",
-            json={
-                "prompt": prompt, "lyrics": effective_lyrics,
-                "audio_duration": duration, "thinking": thinking,
-            },
+        generator = music_generator or ACEStepAdapter(settings)
+        audio_bytes = await generator.generate(
+            prompt, lyrics=lyrics, duration=duration, thinking=thinking, instrumental=instrumental,
         )
-        task_id = create_resp.json()["data"]["task_id"]
-
-        result = None
-        for _ in range(MUSIC_POLL_MAX_ATTEMPTS):
-            await asyncio.sleep(MUSIC_POLL_INTERVAL_SECONDS)
-            # timeout=90 (call_optional_service's default is 30): found via a
-            # real failure -- on a cold/just-restarted ACE-Step instance, its
-            # own model-loading work blocks a single /query_result call
-            # synchronously for the full duration of loading + first
-            # generation, not just returning a quick "still running" status
-            # the way it does once warm. 30s wasn't enough margin for that;
-            # steady-state polling (the overwhelmingly common case) is
-            # unaffected since those calls return almost immediately either way.
-            query_resp = await call_service(
-                service, "POST", "/query_result",
-                json={"task_id_list": [task_id]}, timeout=90.0,
-            )
-            entry = query_resp.json()["data"][0]
-            if entry["status"] == 1:
-                result = json.loads(entry["result"])[0]
-                break
-            if entry["status"] == 2:
-                raise RuntimeError("ACE-Step reported generation failure.")
-        if result is None:
-            raise RuntimeError(f"ACE-Step generation timed out after {MUSIC_POLL_MAX_ATTEMPTS} polls.")
-
-        audio_resp = await call_service(service, "GET", result["file"], timeout=60.0)
-        output_path.write_bytes(audio_resp.content)
+        output_path.write_bytes(audio_bytes)
         jobs.mark_done(job_id, output_path)
         _register_in_library(
             output_path, library_kind, tags=["music"],
             provenance={
-                "prompt": prompt, "lyrics": effective_lyrics,
+                "prompt": prompt, "lyrics": lyrics,
                 "duration": duration, "thinking": thinking, "instrumental": instrumental,
             },
         )
@@ -276,18 +231,17 @@ async def run_music_job(
 async def run_sound_effect_job(
     job_id: str, output_path: Path, *, settings: Settings, prompt: str, duration: float,
     library_kind: str | None = None,
-    call_service=call_optional_service,
+    sound_effect_generator: SoundEffectGenerator | None = None,
 ) -> None:
-    """Unlike ACE-Step's queue, sound-effects/ answers in one synchronous
-    call -- still a background job here because generation takes real time.
+    """Proxies to a SoundEffectGenerator adapter (generation_ports.py),
+    defaulting to StableAudioAdapter -- same DI shape/history as
+    run_music_job above.
     """
     jobs.mark_running(job_id)
     try:
-        resp = await call_service(
-            settings.sound_effect_service, "POST", "/generate",
-            json={"prompt": prompt, "duration": duration}, timeout=300.0,
-        )
-        output_path.write_bytes(resp.content)
+        generator = sound_effect_generator or StableAudioAdapter(settings)
+        audio_bytes = await generator.generate(prompt, duration=duration)
+        output_path.write_bytes(audio_bytes)
         jobs.mark_done(job_id, output_path)
         _register_in_library(
             output_path, library_kind, tags=["sound-effect"],
