@@ -136,6 +136,9 @@ the underlying routes don't already do themselves.</p>
     <label>Duration (s) <input type="number" id="photo-duration" value="4" min="0.5" step="0.5"></label>
     <label>FPS <input type="number" id="photo-fps" value="30" min="1"></label>
     <label>Speed <input type="number" id="photo-speed" value="1.0" min="0.1" step="0.1"></label>
+    <label>Loop duration (s) <input type="number" id="photo-loop-duration" min="1" step="1" placeholder="e.g. 3600"></label>
+    <p class="hint">Stretches the output to this length by repeating the --duration loop, instead of
+    rendering unique frames the whole way (e.g. an hour-long ambient loop).</p>
   </fieldset>
   <button type="submit">Render</button>
 </form>
@@ -164,6 +167,10 @@ the underlying routes don't already do themselves.</p>
   <fieldset>
     <legend>Output</legend>
     <label><input type="checkbox" id="video-gif"> Also export .gif</label>
+    <label>Loop duration (s) <input type="number" id="video-loop-duration" min="1" step="1" placeholder="e.g. 3600"></label>
+    <p class="hint">Stretches the output to this length by repeating the detected loop, instead of
+    rendering unique frames the whole way (e.g. an hour-long ambient loop from a few seconds of
+    source). Not compatible with .gif export.</p>
   </fieldset>
   <button type="submit">Render</button>
 </form>
@@ -669,6 +676,8 @@ wireForm("photo-form", {
     form.append("duration", document.getElementById("photo-duration").value);
     form.append("fps", document.getElementById("photo-fps").value);
     form.append("speed", document.getElementById("photo-speed").value);
+    const loopDuration = document.getElementById("photo-loop-duration").value;
+    if (loopDuration) form.append("loop_duration", loopDuration);
     return form;
   },
 });
@@ -677,6 +686,12 @@ wireForm("video-form", {
   endpoint: "/render/video",
   statusId: "video-status", errorId: "video-error", previewId: "video-preview",
   buildForm: () => {
+    const loopDuration = document.getElementById("video-loop-duration").value;
+    const alsoGif = document.getElementById("video-gif").checked;
+    if (loopDuration && alsoGif) {
+      document.getElementById("video-error").textContent = "Loop duration isn't compatible with .gif export.";
+      return null;
+    }
     const form = new FormData();
     form.append("input_file", document.getElementById("video-input").files[0]);
     const maskFile = document.getElementById("video-mask").files[0];
@@ -685,7 +700,8 @@ wireForm("video-form", {
     form.append("still_frame_index", document.getElementById("video-still-frame").value);
     form.append("blend_frames", document.getElementById("video-blend-frames").value);
     form.append("auto_trim", document.getElementById("video-auto-trim").checked);
-    form.append("also_gif", document.getElementById("video-gif").checked);
+    form.append("also_gif", alsoGif);
+    if (loopDuration) form.append("loop_duration", loopDuration);
     return form;
   },
 });
