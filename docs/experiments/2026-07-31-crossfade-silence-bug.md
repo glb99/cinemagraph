@@ -268,3 +268,87 @@ than a default-value change.
   committing to a default-value change, rather than picking a new default by feel.
 - [ ] Full fix (loudness-aware crossfade positioning) explicitly scoped out as real future
   work, not silently promised or attempted speculatively.
+
+## Fourth round (2026-08-01): "if I add a gap, there is a 2 second fade whatever seconds I put"
+
+Reported after the crossfade-duration change above. This round took several wrong turns
+before landing on the real issue -- recorded here in full, including the mistakes, since the
+methodology lessons matter as much as the fix.
+
+### Wrong turn 1: assumed the gap duration itself was wrong, couldn't reproduce
+
+Tested `build_music_track` directly with several `(gap, edge_fade)` combinations, all
+producing correct gap durations. Drove the real browser through the project owner's exact
+workflow (same Assemble tab, same submit button, real network request captured, real job
+completed) -- the server received `music_gap_duration: 7.0` exactly as entered, and the
+resulting real output's audio measured a full 7.0s of silence. Could not reproduce anything
+wrong.
+
+### Wrong turn 2: project owner shared the actual broken file -- still misread it
+
+Downloaded and decoded the shared file's real audio to raw PCM. A **coarse, 1-second-
+resolution** scan (printing RMS at whole-second intervals) showed only 2 rows near zero
+(t=29s, t=30s) before real audio resumed at t=31s -- read as "the gap is 2 seconds, not the
+requested value." Reported this as confirmed.
+
+This was **this project's own measurement error, again** (a near-identical pitfall to the one
+already documented earlier in this file for a different check): a precise algorithm --
+scanning in 0.05s windows and finding the longest contiguous run below a fixed threshold,
+rather than eyeballing rounded per-second printouts -- run on the *exact same file* measured
+the true silence run at **exactly 3.00 seconds**, matching the project owner's actual
+requested gap. The coarse per-second printout made a 3-second run that doesn't align to whole
+second boundaries *look* like 2 whole rows of near-zero values. Caught by re-measuring with
+the precise method before concluding anything further, not after a next report of "still
+wrong."
+
+### Finding the real problem: not asked, offered directly by the project owner
+
+After confirming the gap length was correct, the project owner clarified directly: "it is not
+the gap, is the absence of fade between the 2 songs the problem." This reframed the whole
+investigation -- the *duration* was never wrong; there was simply no fade *shape* around the
+silence at all. Each track's own silence-trimmed edge (from the earlier crossfade-dip fix)
+butts directly against the synthetic `anullsrc` segment with a hard, instant cut -- audible as
+an abrupt drop to silence and an abrupt return, not a graceful pause. This is a real gap in
+the original gap-mode design: crossfade mode gets its smooth transition for free from
+`acrossfade` itself; gap mode never had an equivalent for its own boundaries -- only the
+*outer* edges of the whole piece got `edge_fade_duration`'s treatment.
+
+### Fix
+
+Extended the same duration-independent fade technique already used for the whole piece's
+outer edges (`afade=t=in:st=0:d=X` for a fade-in anchored at `st=0`; `areverse,afade=t=in:
+st=0:d=X,areverse` for a fade-out at the true end, regardless of that track's own exact
+post-trim duration) to every *interior* gap-adjacent edge: a track that follows a gap gets a
+fade-in at its start, a track that precedes a gap gets a fade-out at its end, chained right
+after that track's own existing silence-trim filters. Reuses `edge_fade_duration` as the fade
+length rather than introducing a new parameter -- one consistent knob for "how gently do
+transitions fade" across both the outer edges and every interior gap boundary;
+`edge_fade_duration=0` disables both, same convention as everywhere else in this module.
+
+### Verification
+
+- `uv run pytest`: 117 passed (2 new tests -- the exact per-track filter-graph structure for
+  a 3-track gap scenario, confirming the first track gets fade-out only, the middle track
+  gets both, the last track gets fade-in only, and a second test confirming
+  `edge_fade_duration=0` still produces a hard cut with no `afade` at all), 2 deselected.
+- `scripts/golden_check.py`: unaffected.
+- Real ffmpeg, raw-PCM verification against the same real songs used throughout this file's
+  investigations: before the fix, the transition into the gap was a sudden drop (the last
+  non-zero sample immediately preceding true silence); after the fix, RMS ramps down smoothly
+  over roughly 1.5 seconds (2611 -> 1158 -> 530 -> 123 -> 0) into the silence, and ramps back
+  up just as gradually coming out of it, matching the requested `edge_fade_duration`.
+
+### Verdict
+
+- [x] The actual reported symptom (a hard cut, not a wrong duration) was correctly identified
+  only after two rounds of chasing the wrong hypothesis -- recorded honestly, not smoothed
+  over.
+- [x] A real, repeated measurement-methodology lesson (coarse per-second RMS printouts can
+  misrepresent a precise sub-second-aligned silence run) was caught a second time and
+  corrected with the same precise method as before, rather than trusting the eyeball scan
+  again.
+- [x] Fixed by extending an existing, already-verified technique (duration-independent
+  fade via `areverse`) to a new location, rather than inventing a new mechanism -- consistent
+  with how the rest of this module already solves the same class of problem.
+- [x] Verified via raw PCM that the actual fade shape is now smooth and gradual, not just
+  "duration matches."

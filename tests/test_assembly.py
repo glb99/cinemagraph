@@ -168,6 +168,61 @@ def test_build_music_track_gap_duration_inserts_silence_instead_of_crossfade():
     assert args.count("-stream_loop") == 0  # not to be confused with layer_sound_effects' own looping
 
 
+def test_build_music_track_gap_duration_fades_into_and_out_of_each_gap():
+    """Found via real user feedback: without this, each track's trimmed edge
+    butted directly against real silence with no transition -- an audible
+    hard cut, unlike crossfade mode where acrossfade itself already blends
+    smoothly. Every gap-adjacent edge (not the very first track's own
+    leading edge, not the very last track's own trailing edge -- those are
+    edge_fade_duration's job on the *whole piece*, applied afterward) now
+    gets its own duration-independent fade into/out of the gap's silence."""
+    run = _FakeRun()
+
+    audio_track.build_music_track(
+        ["a.mp3", "b.mp3", "c.mp3"], "out.mp3",
+        gap_duration=3.0, edge_fade_duration=2.0, run_ffmpeg=run,
+    )
+
+    filter_complex = run.calls[0][run.calls[0].index("-filter_complex") + 1]
+    stages = filter_complex.split(";")
+
+    def trim_filters(index: int) -> str:
+        return (
+            f"silenceremove=start_periods=1:{_TRIM_ARGS},"
+            f"silenceremove=stop_periods=-1:{_TRIM_STOP_ARGS}"
+        )
+
+    # track 0 (first): trim, then only a fade-*out* (precedes a gap) -- no
+    # fade-in, that's the whole piece's own leading edge_fade_duration fade.
+    assert stages[0] == f"[0:a]{trim_filters(0)},areverse,afade=t=in:st=0:d=2.0,areverse[trimmed0]"
+    # track 1 (middle): trim, then both a fade-in (follows a gap) and a
+    # fade-out (precedes the next gap).
+    assert stages[1] == (
+        f"[1:a]{trim_filters(1)},afade=t=in:st=0:d=2.0,areverse,afade=t=in:st=0:d=2.0,areverse[trimmed1]"
+    )
+    # track 2 (last): trim, then only a fade-*in* (follows a gap) -- no
+    # fade-out, that's the whole piece's own trailing edge_fade_duration fade.
+    assert stages[2] == f"[2:a]{trim_filters(2)},afade=t=in:st=0:d=2.0[trimmed2]"
+
+
+def test_build_music_track_gap_duration_no_edge_fade_stays_a_hard_cut():
+    """edge_fade_duration=0 disables gap-boundary fades too, same "0 to
+    disable" convention as everywhere else -- confirms the new fades are
+    additive/optional, not forced on."""
+    run = _FakeRun()
+
+    audio_track.build_music_track(
+        ["a.mp3", "b.mp3"], "out.mp3",
+        gap_duration=3.0, edge_fade_duration=0, run_ffmpeg=run,
+    )
+
+    filter_complex = run.calls[0][run.calls[0].index("-filter_complex") + 1]
+    stages = filter_complex.split(";")
+    assert stages[0] == _trim_stage(0)
+    assert stages[1] == _trim_stage(1)
+    assert "afade" not in filter_complex
+
+
 def test_build_music_track_gap_duration_still_gets_duration_independent_edge_fade():
     run = _FakeRun()
 

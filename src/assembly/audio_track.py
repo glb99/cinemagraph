@@ -49,10 +49,15 @@ def build_music_track(
       each pair of songs instead -- built via ffmpeg's `concat` filter with
       a synthetic `anullsrc` silent segment spliced between each track
       (`concat` alone only does hard joins with no gap of its own; the
-      silence has to be a real input). `layer_sound_effects` (below) mixes
-      any sound effects in as a *separate* step over the finished track, so
+      silence has to be a real input). Every gap-adjacent edge also gets its
+      own `edge_fade_duration`-length fade into/out of that silence (found
+      via real user feedback: without it, each track's trimmed edge butts
+      directly against real silence with no transition at all -- an
+      audible hard cut, unlike crossfade mode where `acrossfade` itself
+      already blends smoothly). `layer_sound_effects` (below) mixes any
+      sound effects in as a *separate* step over the finished track, so
       effects keep playing continuously straight through this gap -- the
-      gap only ever affects the music.
+      gap (and its fades) only ever affect the music.
 
     Before either join style, **every** track's own leading/trailing
     near-silence is trimmed first (`silenceremove`) -- found via real
@@ -96,21 +101,35 @@ def build_music_track(
     for path in track_paths:
         inputs += ["-i", path]
 
+    is_gap_mode = gap_duration > 0 and len(track_paths) > 1
+
     stages = []
     track_labels = []
     for i, path in enumerate(track_paths):
-        label = f"trimmed{i}"
-        stages.append(
-            f"[{i}:a]"
+        filters = [
             f"silenceremove=start_periods=1:start_threshold={_SILENCE_THRESHOLD}:"
-            f"start_silence={_SILENCE_MIN_DURATION}:detection=rms,"
+            f"start_silence={_SILENCE_MIN_DURATION}:detection=rms",
             f"silenceremove=stop_periods=-1:stop_threshold={_SILENCE_THRESHOLD}:"
-            f"stop_silence={_SILENCE_MIN_DURATION}:detection=rms"
-            f"[{label}]"
-        )
+            f"stop_silence={_SILENCE_MIN_DURATION}:detection=rms",
+        ]
+        # In gap mode, each track's edges butt directly against real silence
+        # (the anullsrc segment below), not another song's own overlapping
+        # content the way acrossfade already blends smoothly in crossfade
+        # mode -- so without this, every gap boundary is a hard, audible cut
+        # straight to/from silence rather than a graceful pause. Fades every
+        # gap-adjacent edge the same duration-independent way the outer
+        # edges already do (`edge_fade_duration=0` disables these too, same
+        # "0 to disable" convention as everywhere else here).
+        if is_gap_mode and edge_fade_duration > 0:
+            if i > 0:
+                filters.append(f"afade=t=in:st=0:d={edge_fade_duration}")
+            if i < len(track_paths) - 1:
+                filters.append(f"areverse,afade=t=in:st=0:d={edge_fade_duration},areverse")
+        label = f"trimmed{i}"
+        stages.append(f"[{i}:a]{','.join(filters)}[{label}]")
         track_labels.append(label)
 
-    if gap_duration > 0 and len(track_paths) > 1:
+    if is_gap_mode:
         concat_labels = []
         silence_input_index = len(track_paths)
         for i in range(len(track_paths)):

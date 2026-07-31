@@ -792,6 +792,24 @@ positioning (choosing where in each song to place the join based on measured ene
 work rather than attempted speculatively. See
 `docs/experiments/2026-07-31-crossfade-silence-bug.md`'s third section.
 
+**A fourth round (2026-08-01): gap mode's silence boundaries had no fade at all.** The
+project owner reported "if I add a gap, there is a 2 second fade whatever seconds I put."
+Extensive verification -- including driving the real browser through their exact workflow and
+downloading their actual output file -- found the *gap duration itself* was always exactly
+correct (confirmed by precise raw-PCM silence-run measurement on their real file: exactly
+3.00s for a requested 3s gap; an earlier "2 seconds" reading was this project's own
+measurement error, a coarse 1-second-resolution scan making a sub-second-aligned 3s run look
+like 2 whole rows). The real issue, once correctly identified: **not the gap length, but the
+complete absence of any fade into or out of it** -- each track's silence-trimmed edge butted
+directly against the `anullsrc` silence with a hard, audible cut, unlike crossfade mode where
+`acrossfade` itself already blends smoothly. Fixed by extending the same duration-independent
+fade technique (`afade=t=in`/`areverse,afade=t=in,areverse`) already used for the whole
+piece's outer edges to every *interior* gap boundary too, reusing `edge_fade_duration` as the
+fade length (consistent single knob for "how gently do transitions fade," `0` still disables
+it everywhere). Verified via raw PCM: a clean, gradual ~1.5s ramp down into the silence and a
+gentle ramp back out, not an abrupt jump. See
+`docs/experiments/2026-07-31-crossfade-silence-bug.md`'s fourth section.
+
 ### 5.7 Audio (music + sound effects) — both IMPLEMENTED
 
 Three candidate models were researched (see decision log below for the full comparison);
