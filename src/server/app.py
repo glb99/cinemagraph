@@ -85,9 +85,10 @@ from cinemagraph import effects as effects_pkg, pipeline, validation
 from . import jobs, service, ui
 from ._external_service import call_optional_service, service_available
 from .config import Settings, get_settings
-from .generation_adapters import ACEStepAdapter, GeminiAdapter, SDXLAdapter, StableAudioAdapter
+from .generation_adapters import ACEStepAdapter, GeminiAdapter, Lyria3Adapter, SDXLAdapter, StableAudioAdapter
 from .generation_registry import (
     available_image_generators,
+    available_music_generators,
     register_image_generator,
     register_music_generator,
     register_sound_effect_generator,
@@ -98,25 +99,28 @@ SettingsDep = Annotated[Settings, Depends(get_settings)]
 
 app = FastAPI(title="cinemagraph-tool API")
 
-# Populates generation_registry for real (sec 3.6) -- "sdxl" always
-# registers (image-generation/'s own reachability is still checked fresh
-# per request via service_available, same as before); "gemini" only
-# registers when GEMINI_API_KEY is actually configured, the same
+# Populates generation_registry for real (sec 3.6) -- "sdxl"/"acestep" always
+# register (their own satellite reachability is still checked fresh per
+# request via service_available, same as before); "gemini"/"lyria3" only
+# register when GEMINI_API_KEY is actually configured, the same
 # "absent -> just don't offer it" degrade every other optional capability
-# already follows. run_image_job's own default (server/service.py) resolves
-# a model name through this same registry -- see its docstring for why that
-# doesn't shadow a test's own Settings(...) for real request traffic.
+# already follows -- both are hosted APIs behind the same key, not a
+# self-hosted GPU service. run_image_job's/run_music_job's own defaults
+# (server/service.py) resolve a model name through this same registry -- see
+# their docstrings for why that doesn't shadow a test's own Settings(...)
+# for real request traffic.
 #
-# "acestep"/"stable-audio" register unconditionally too (same as "sdxl") --
+# "stable-audio" registers unconditionally too (same as "sdxl"/"acestep") --
 # reachability is still checked fresh per request either way; nothing in
-# server/service.py looks these up by name yet (no second music/sound-effect
-# backend exists), same "mechanism present, unconsumed" phase image
-# generation itself started in. See generation_registry.py's own docstring.
+# server/service.py looks it up by name yet (no second sound-effect backend
+# exists), the same "mechanism present, unconsumed" phase image and music
+# generation themselves started in. See generation_registry.py's own docstring.
 _settings = get_settings()
 register_image_generator("sdxl", SDXLAdapter(_settings))
+register_music_generator("acestep", ACEStepAdapter(_settings))
 if _settings.gemini_api_key:
     register_image_generator("gemini", GeminiAdapter(_settings))
-register_music_generator("acestep", ACEStepAdapter(_settings))
+    register_music_generator("lyria3", Lyria3Adapter(_settings))
 register_sound_effect_generator("stable-audio", StableAudioAdapter(_settings))
 
 
@@ -147,39 +151,45 @@ async def health():
 
 @app.get("/capabilities", response_model=CapabilitiesResponse)
 async def capabilities(settings: SettingsDep):
-    """image_generation is true if *either* SDXL health-checks (a real,
-    fresh-per-request call, same as every other satellite) or Gemini is
-    registered (no equivalent health check exists for a hosted API -- its
-    registration, gated on GEMINI_API_KEY at app startup in this module, is
-    the only signal available). image_generation_models lists every
-    registered adapter regardless of live reachability -- same "checked
-    fresh at actual request time" philosophy as the rest of this file: a
-    registered-but-currently-unreachable SDXL still shows up here, and a
-    real generate request against it still degrades to a clear per-job
-    error, exactly as before this adapter existed.
+    """image_generation/music_generation are each true if *either* their
+    self-hosted satellite health-checks (a real, fresh-per-request call, same
+    as every other satellite) or Gemini/Lyria3 is registered (no equivalent
+    health check exists for a hosted API -- its registration, gated on
+    GEMINI_API_KEY at app startup in this module, is the only signal
+    available). *_models lists every registered adapter regardless of live
+    reachability -- same "checked fresh at actual request time" philosophy as
+    the rest of this file: a registered-but-currently-unreachable SDXL/
+    ACE-Step still shows up here, and a real generate request against it
+    still degrades to a clear per-job error, exactly as before either
+    adapter existed.
 
     `configured` distinguishes "nothing to hint about" from "operator
     likely just forgot to start a container": a satellite whose env var is
     set but whose health check currently fails is `configured=True,
     <bool>=False` -- the web UI uses that combination to show a hint instead
-    of hiding the tab outright (see ui.py). image_generation's own
-    `configured` is true if either backend has *any* config present (URL or
-    key), independent of live reachability -- deliberately not narrowed to
-    "SDXL only", since a Gemini key alone is enough to make the capability
-    genuinely configured even with no SDXL URL at all.
+    of hiding the tab outright (see ui.py). image_generation's/
+    music_generation's own `configured` is true if either backend has *any*
+    config present (URL or key), independent of live reachability --
+    deliberately not narrowed to "SDXL/ACE-Step only", since a Gemini key
+    alone is enough to make either capability genuinely configured even with
+    no self-hosted URL at all.
     """
     return CapabilitiesResponse(
         semantic_mask=await service_available(settings.semantic_mask_service),
-        music_generation=await service_available(settings.music_service),
+        music_generation=(
+            await service_available(settings.music_service)
+            or bool(settings.gemini_api_key)
+        ),
         sound_effect_generation=await service_available(settings.sound_effect_service),
         image_generation=(
             await service_available(settings.image_generation_service)
             or bool(settings.gemini_api_key)
         ),
         image_generation_models=list(available_image_generators()),
+        music_generation_models=list(available_music_generators()),
         configured={
             "semantic_mask": bool(settings.ml_service_url),
-            "music_generation": bool(settings.acestep_url),
+            "music_generation": bool(settings.acestep_url) or bool(settings.gemini_api_key),
             "sound_effect_generation": bool(settings.sound_effects_url),
             "image_generation": bool(settings.image_generation_url) or bool(settings.gemini_api_key),
         },
@@ -474,16 +484,26 @@ async def generate_music(
     duration: float = Form(30.0),
     thinking: bool = Form(True),
     instrumental: bool = Form(False),
+    model: str = Form("acestep"),
 ):
-    """Proxies to an ACE-Step API server. Same degrade-cleanly contract as
-    /mask/semantic: reuses this file's own job system rather than adding new
-    status-tracking routes -- GET /jobs/{job_id} and /jobs/{job_id}/file
-    already work for this without any changes.
+    """Proxies to a registered MusicGenerator adapter (generation_ports.py) --
+    `model` picks which one ("acestep" = local ACE-Step, self-hosted GPU
+    queue; "lyria3" = Google's hosted Lyria 3, when GEMINI_API_KEY is
+    configured). Same degrade-cleanly contract as /mask/semantic: reuses
+    this file's own job system rather than adding new status-tracking
+    routes -- GET /jobs/{job_id} and /jobs/{job_id}/file already work for
+    this without any changes.
 
-    `instrumental` overrides whatever `lyrics` was submitted -- see
-    run_music_job's docstring for why that's the only reliable way to get
-    ACE-Step to actually omit vocals (an empty lyrics field doesn't).
+    `instrumental`'s exact effect depends on the chosen `model` -- see each
+    adapter's own docstring (ACEStepAdapter substitutes a marker that
+    reliably forces it; Lyria3Adapter only requests it via a prompt
+    instruction, not a guaranteed override).
     """
+    if model not in available_music_generators():
+        raise HTTPException(
+            422, f"Unknown model '{model}'. Choose from: {', '.join(available_music_generators())}"
+        )
+
     job = jobs.create_job()
     job_dir = _job_dir(settings, job.id)
     output_path = job_dir / "output.mp3"
@@ -491,7 +511,7 @@ async def generate_music(
     background_tasks.add_task(
         service.run_music_job, job.id, output_path,
         settings=settings, prompt=prompt, lyrics=lyrics, duration=duration, thinking=thinking,
-        instrumental=instrumental, library_kind="generated",
+        instrumental=instrumental, model=model, library_kind="generated",
     )
     return JobResponse(job_id=job.id)
 

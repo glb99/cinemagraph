@@ -11,10 +11,17 @@ see docs/DESIGN.md sec 3.6.
 ACEStepAdapter/StableAudioAdapter are the same extraction applied to music
 and sound-effect generation once image generation had proven the pattern
 twice over -- each wraps exactly what run_music_job/run_sound_effect_job
-used to build inline, no behavior change to the wire contract. Only one
-adapter is registered for each (no second music/sound-effect backend exists
-yet) -- same "mechanism present, not speculatively populated" stance the
-image port started with before GeminiAdapter existed.
+used to build inline, no behavior change to the wire contract.
+
+Lyria3Adapter (added 2026-08-01) is MusicGenerator's own GeminiAdapter
+equivalent: a second, hosted-API backend registered alongside ACEStepAdapter,
+confirmed against a real key (see docs/experiments/2026-08-01-lyria3-adapter.md)
+after Lyria RealTime was investigated and rejected the day before for being a
+live-streaming-only API with no natural clip boundary
+(docs/experiments/2026-07-31-lyria-music-rejected.md) -- Lyria 3 is a genuine
+one-shot `prompt in, file out` API, unlike that one. StableAudioAdapter still
+has only one registered backend (no second sound-effect API has been found
+yet).
 """
 import asyncio
 import json
@@ -23,7 +30,19 @@ from ._external_service import call_optional_service
 from .config import Settings
 
 MUSIC_POLL_INTERVAL_SECONDS = 2.0
-MUSIC_POLL_MAX_ATTEMPTS = 150  # ~5 minutes total
+# 800s total. Not an arbitrary round number -- ACE-Step's own server logs its
+# LM "thinking" step's own budget at startup ("Setting constrained decoding
+# max_duration to Ns based on GPU config (tier: ...)"); on an 8GB "tier3" GPU
+# that's 480s for the LM step alone, confirmed via a real request that got
+# wrongly marked errored by this client at the old 300s (150 x 2s) budget
+# while the server was still actively computing (worker process's own CPU
+# time was sampled twice, 5s apart, and was still climbing -- not hung).
+# 800s leaves real margin above that 480s floor for the diffusion+VAE-decode
+# steps that run after thinking finishes (a real successful request took
+# ~77s past that point). If a lower/higher-tier GPU's own max_duration ever
+# needs to be read here instead of hardcoded, that's a genuine future
+# improvement, not done now -- see docs/experiments/2026-08-01-acestep-poll-timeout.md.
+MUSIC_POLL_MAX_ATTEMPTS = 400
 
 
 class SDXLAdapter:
@@ -134,6 +153,14 @@ class ACEStepAdapter:
             json={
                 "prompt": prompt, "lyrics": effective_lyrics,
                 "audio_duration": duration, "thinking": thinking,
+                # ACE-Step's own default is 2 (confirmed in its API.md) -- it
+                # generates that many candidate variations per task, but this
+                # adapter only ever keeps result[0] (below), so the second
+                # candidate was pure wasted GPU time: roughly double the
+                # "thinking"/decode and diffusion work for nothing, which was
+                # also what pushed real requests close to the poll-timeout
+                # ceiling (see docs/experiments/2026-08-01-acestep-poll-timeout.md).
+                "batch_size": 1,
             },
         )
         task_id = create_resp.json()["data"]["task_id"]
@@ -164,6 +191,50 @@ class ACEStepAdapter:
 
         audio_resp = await self._call_service(service, "GET", result["file"], timeout=60.0)
         return audio_resp.content
+
+
+class Lyria3Adapter:
+    """Talks to Google's Lyria 3 directly via generation/ -- a hosted API
+    needing a key, exactly the same shape GeminiAdapter already established
+    for images, not a self-hosted queue like ACEStepAdapter. See
+    generation/__init__.py's docstring and
+    docs/experiments/2026-08-01-lyria3-adapter.md for the real-API findings
+    behind every choice below.
+
+    `thinking` is accepted for interface parity with ACEStepAdapter but
+    silently ignored -- Lyria 3 has no chain-of-thought-style knob (confirmed
+    against the public docs: its own internal prompt-rewriting step has no
+    exposed toggle), the same "accept and ignore" precedent GeminiAdapter set
+    for `strength`.
+
+    `instrumental=True` is sent as a plain-language instruction in the
+    prompt, not ACEStepAdapter's own `"[Instrumental]"` marker substitution --
+    Lyria 3 has no equivalent marker to substitute in the first place (no
+    separate lyrics field exists at all), so unlike ACEStepAdapter there is
+    nothing to override: whatever `lyrics` was submitted is always sent
+    as-is, just with an added instruction alongside it. Because of that,
+    `instrumental` is a *request*, not a guaranteed override the way
+    ACEStepAdapter's marker is -- flagged, not glossed over, since a real
+    call without an explicit instruction was seen to auto-classify as
+    instrumental on its own, meaning the reverse (an explicit instruction
+    being ignored) hasn't been ruled out by any real test yet either.
+    """
+
+    def __init__(self, settings: Settings):
+        self._settings = settings
+
+    async def generate(
+        self, prompt: str, *, lyrics: str, duration: float, thinking: bool, instrumental: bool = False
+    ) -> bytes:
+        from generation import generate_music
+
+        return await generate_music(
+            self._settings.gemini_api_key,
+            prompt,
+            lyrics=lyrics,
+            duration=duration,
+            instrumental=instrumental,
+        )
 
 
 class StableAudioAdapter:

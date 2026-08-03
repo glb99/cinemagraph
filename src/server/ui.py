@@ -196,6 +196,9 @@ the underlying routes don't already do themselves.</p>
   <label>Duration (s) <input type="number" id="music-duration" value="30" min="5"></label>
   <label><input type="checkbox" id="music-thinking" checked> Thinking mode</label>
   <label><input type="checkbox" id="music-instrumental"> Instrumental (no vocals)</label>
+  <div class="row" id="music-model-row" style="display:none">
+    <label>Model <select id="music-model"></select></label>
+  </div>
   <div class="row"></div>
   <button type="submit">Generate</button>
 </form>
@@ -347,6 +350,20 @@ async function loadCapabilities() {
     const select = document.getElementById("image-model");
     select.innerHTML = "";
     for (const name of models) {
+      const opt = document.createElement("option");
+      opt.value = name;
+      opt.textContent = name;
+      select.appendChild(opt);
+    }
+    row.style.display = "block";
+  }
+
+  const musicModels = caps.music_generation_models || [];
+  if (musicModels.length > 1) {
+    const row = document.getElementById("music-model-row");
+    const select = document.getElementById("music-model");
+    select.innerHTML = "";
+    for (const name of musicModels) {
       const opt = document.createElement("option");
       opt.value = name;
       opt.textContent = name;
@@ -724,6 +741,10 @@ wireForm("music-form", {
     form.append("duration", document.getElementById("music-duration").value);
     form.append("thinking", document.getElementById("music-thinking").checked);
     form.append("instrumental", document.getElementById("music-instrumental").checked);
+    const modelSelect = document.getElementById("music-model");
+    if (modelSelect.value) {
+      form.append("model", modelSelect.value);
+    }
     return form;
   },
 });

@@ -51,6 +51,7 @@ def test_capabilities_without_optional_services_configured(api_client):
         "sound_effect_generation": False,
         "image_generation": False,
         "image_generation_models": ["sdxl"],
+        "music_generation_models": ["acestep"],
         "configured": {
             "semantic_mask": False,
             "music_generation": False,

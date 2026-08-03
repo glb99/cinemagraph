@@ -110,7 +110,8 @@ async def test_music_job_downloads_audio_and_registers_in_library(tmp_path, aces
     assert asset.kind == "generated"
     assert asset.tags == ["music"]
     assert asset.provenance == {
-        "prompt": "p", "lyrics": "", "duration": 10.0, "thinking": False, "instrumental": False,
+        "prompt": "p", "lyrics": "", "model": "acestep",
+        "duration": 10.0, "thinking": False, "instrumental": False,
     }
 
 

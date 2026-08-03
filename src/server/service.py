@@ -57,17 +57,19 @@ of that seam exist here now:
 - run_image_job/run_music_job/run_sound_effect_job each take an injected
   port object (ImageGenerator/MusicGenerator/SoundEffectGenerator,
   generation_ports.py) instead -- one level of abstraction higher (a whole
-  capability, not one bare function). run_image_job's default comes from
-  generation_registry.get_image_generator(model): a real second adapter
-  (GeminiAdapter, alongside SDXLAdapter) exists, so a per-request `model`
-  field lets a caller pick which one, the entire reason the registry (not
-  just a single swappable reference) exists per §3.6. run_music_job/
-  run_sound_effect_job default to a freshly-built ACEStepAdapter(settings)/
-  StableAudioAdapter(settings) instead -- registered in generation_registry
-  for mechanism-completeness, but not consulted by name yet, since no
-  second music/sound-effect backend exists to justify a `model` field
-  (image generation went through this identical single-adapter phase before
-  Gemini existed). For real requests using the registry is safe regardless:
+  capability, not one bare function). run_image_job's and run_music_job's
+  defaults both come from the registry (get_image_generator(model)/
+  get_music_generator(model)): each has a real second adapter now
+  (GeminiAdapter alongside SDXLAdapter; Lyria3Adapter alongside
+  ACEStepAdapter, added 2026-08-01 once Lyria 3 proved out as a genuine
+  one-shot backend -- see docs/experiments/2026-08-01-lyria3-adapter.md), so
+  a per-request `model` field lets a caller pick which one, the entire
+  reason the registry (not just a single swappable reference) exists per
+  §3.6. run_sound_effect_job still defaults to a freshly-built
+  StableAudioAdapter(settings) directly -- no second sound-effect backend
+  exists yet to justify a `model` field there (music generation went through
+  this identical single-adapter phase before Lyria3Adapter existed). For
+  real requests using the registry is safe regardless:
   app.py's routes resolve `settings` via Depends(get_settings), the exact
   cached singleton every registered adapter was itself built from at
   app-import time, so there's no divergence from a test's own custom
@@ -102,9 +104,9 @@ from cinemagraph import pipeline
 from . import jobs
 from ._external_service import call_optional_service
 from .config import Settings
-from .generation_adapters import ACEStepAdapter, StableAudioAdapter
+from .generation_adapters import StableAudioAdapter
 from .generation_ports import ImageGenerator, MusicGenerator, SoundEffectGenerator
-from .generation_registry import get_image_generator
+from .generation_registry import get_image_generator, get_music_generator
 
 
 def _register_in_library(output_path: Path, kind: str | None, tags: list[str] | None, provenance: dict | None) -> None:
@@ -195,23 +197,30 @@ async def run_music_job(
     duration: float,
     thinking: bool,
     instrumental: bool = False,
+    model: str = "acestep",
     library_kind: str | None = None,
     music_generator: MusicGenerator | None = None,
 ) -> None:
-    """Proxies to a MusicGenerator adapter (generation_ports.py), defaulting
-    to ACEStepAdapter (generation_adapters.py) -- same DI shape run_image_job
-    already uses, extracted once image generation had proven the pattern
-    twice over (see docs/DESIGN.md sec 3.6). Only "acestep" exists as a
-    backend today, so unlike run_image_job there's no `model` field yet.
+    """Proxies to a MusicGenerator adapter (generation_ports.py) -- `model`
+    selects which registered adapter to use ("acestep" = local ACE-Step,
+    self-hosted GPU queue; "lyria3" = Google's hosted Lyria 3, when
+    GEMINI_API_KEY is configured), the same `model`-field shape run_image_job
+    already uses once a second adapter (GeminiAdapter) existed to justify it
+    -- see docs/DESIGN.md sec 3.6. Added once Lyria3Adapter gave music
+    generation its own real second backend, mirroring that history exactly.
 
-    Provenance records the *lyrics actually submitted*, not whatever
-    backend-internal marker an adapter substitutes for `instrumental=True`
-    (ACEStepAdapter's own docstring explains why that substitution is its
-    concern, not this function's).
+    `thinking` only matters for ACEStepAdapter (its own 5Hz LM chain-of-
+    thought step) -- Lyria3Adapter accepts and ignores it, the same
+    "accept and ignore" precedent GeminiAdapter set for `strength`.
+
+    Provenance records the *lyrics actually submitted* and the `model` used,
+    not whatever backend-internal marker/instruction an adapter substitutes
+    for `instrumental=True` (each adapter's own docstring explains why that
+    substitution is its concern, not this function's).
     """
     jobs.mark_running(job_id)
     try:
-        generator = music_generator or ACEStepAdapter(settings)
+        generator = music_generator or get_music_generator(model)
         audio_bytes = await generator.generate(
             prompt, lyrics=lyrics, duration=duration, thinking=thinking, instrumental=instrumental,
         )
@@ -220,7 +229,7 @@ async def run_music_job(
         _register_in_library(
             output_path, library_kind, tags=["music"],
             provenance={
-                "prompt": prompt, "lyrics": lyrics,
+                "prompt": prompt, "lyrics": lyrics, "model": model,
                 "duration": duration, "thinking": thinking, "instrumental": instrumental,
             },
         )

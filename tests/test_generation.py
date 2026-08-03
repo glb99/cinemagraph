@@ -1,10 +1,13 @@
-"""Unit tests for generation/__init__.py (Gemini image client) and
-server/generation_adapters.py's GeminiAdapter. Mocks google.genai's Client
-entirely -- these must never make a real network call; the real contract
-(model name, MIME types, base64 response, io.BytesIO requirement for
-reference images) was confirmed separately against the live API and is
-recorded in generation/__init__.py's own docstring and
-docs/experiments/2026-07-31-gemini-adapter.md, not re-verified here.
+"""Unit tests for generation/__init__.py (Gemini image + Lyria 3 music
+client) and server/generation_adapters.py's GeminiAdapter/Lyria3Adapter.
+Mocks google.genai's Client and generate_music's own injected
+`post_interaction` entirely -- these must never make a real network call;
+the real contract (model names, MIME types, base64 response, io.BytesIO
+requirement for reference images, the `response_format` mime_type bug, the
+steps[]-scanning response shape) was confirmed separately against the live
+API and is recorded in generation/__init__.py's own docstring and
+docs/experiments/2026-07-31-gemini-adapter.md /
+docs/experiments/2026-08-01-lyria3-adapter.md, not re-verified here.
 """
 import base64
 import io
@@ -15,7 +18,7 @@ import pytest
 
 import generation
 from server.config import Settings
-from server.generation_adapters import GeminiAdapter
+from server.generation_adapters import GeminiAdapter, Lyria3Adapter
 
 
 def _fake_jpeg_base64() -> str:
@@ -139,3 +142,113 @@ async def test_gemini_adapter_delegates_to_generation_module(monkeypatch):
         "reference_image_bytes": b"ref-bytes",
         "reference_image_filename": "ref.png",
     }
+
+
+class _FakeAudioResp:
+    def __init__(self, status_code, json_data, text=""):
+        self.status_code = status_code
+        self._json = json_data
+        self.text = text
+
+    def json(self):
+        return self._json
+
+
+def _audio_step(mime_type="audio/mpeg", data=b"fake-mp3-bytes"):
+    return {
+        "type": "model_output",
+        "content": [{"type": "audio", "mime_type": mime_type, "data": base64.b64encode(data).decode("ascii")}],
+    }
+
+
+@pytest.mark.anyio
+async def test_generate_music_omits_mime_type_and_scans_steps_for_audio():
+    """Pins the two real findings from docs/experiments/2026-08-01-lyria3-adapter.md:
+    `response_format` must NOT include `mime_type` (the real API 400s on it),
+    and the audio comes back inside `steps[].content[]`, not a top-level field."""
+    captured = {}
+
+    async def fake_post(api_key, payload):
+        captured["api_key"] = api_key
+        captured["payload"] = payload
+        return _FakeAudioResp(200, {"steps": [{"type": "model_output", "content": [{"type": "text", "text": "<instrumental>"}]}, _audio_step()]})
+
+    result = await generation.generate_music("fake-key", "cinematic piano", post_interaction=fake_post)
+
+    assert captured["api_key"] == "fake-key"
+    assert captured["payload"]["model"] == generation.MUSIC_MODEL
+    assert captured["payload"]["response_format"] == {"type": "audio"}
+    assert "mime_type" not in captured["payload"]["response_format"]
+    assert result == b"fake-mp3-bytes"
+
+
+@pytest.mark.anyio
+async def test_generate_music_folds_lyrics_instrumental_duration_into_prompt_text():
+    """Lyria 3 has no separate fields for any of these (confirmed against the
+    real API/docs) -- all three must show up as text inside `input`."""
+    captured = {}
+
+    async def fake_post(api_key, payload):
+        captured["payload"] = payload
+        return _FakeAudioResp(200, {"steps": [_audio_step()]})
+
+    await generation.generate_music(
+        "fake-key", "a ballad",
+        lyrics="[Verse]\nHello world",
+        duration=90.0,
+        instrumental=True,
+        post_interaction=fake_post,
+    )
+
+    input_text = captured["payload"]["input"]
+    assert "a ballad" in input_text
+    assert "[Verse]\nHello world" in input_text
+    assert "instrumental" in input_text.lower()
+    assert "90" in input_text
+
+
+@pytest.mark.anyio
+async def test_generate_music_raises_clearly_on_non_200():
+    async def fake_post(api_key, payload):
+        return _FakeAudioResp(400, {}, text='{"error": {"message": "boom"}}')
+
+    with pytest.raises(RuntimeError, match="400"):
+        await generation.generate_music("fake-key", "prompt", post_interaction=fake_post)
+
+
+@pytest.mark.anyio
+async def test_generate_music_raises_clearly_when_no_audio_step():
+    async def fake_post(api_key, payload):
+        return _FakeAudioResp(200, {"steps": [{"type": "model_output", "content": [{"type": "text", "text": "oops"}]}]})
+
+    with pytest.raises(RuntimeError, match="no audio"):
+        await generation.generate_music("fake-key", "prompt", post_interaction=fake_post)
+
+
+@pytest.mark.anyio
+async def test_lyria3_adapter_delegates_to_generation_module(monkeypatch):
+    """Lyria3Adapter is a thin pass-through, same shape as GeminiAdapter's own
+    test -- confirms it wires settings.gemini_api_key through and that
+    `thinking` is accepted but never forwarded (Lyria 3 has no equivalent)."""
+    captured = {}
+
+    async def fake_generate_music(api_key, prompt, **kwargs):
+        captured["api_key"] = api_key
+        captured["prompt"] = prompt
+        captured["kwargs"] = kwargs
+        return b"fake-mp3-bytes"
+
+    monkeypatch.setattr(generation, "generate_music", fake_generate_music)
+
+    adapter = Lyria3Adapter(Settings(gemini_api_key="fake-key"))
+    result = await adapter.generate(
+        "cinematic piano", lyrics="[Verse]\nHi", duration=90.0, thinking=True, instrumental=True,
+    )
+
+    assert result == b"fake-mp3-bytes"
+    assert captured["api_key"] == "fake-key"
+    assert captured["prompt"] == "cinematic piano"
+    assert captured["kwargs"] == {
+        "lyrics": "[Verse]\nHi", "duration": 90.0, "instrumental": True,
+    }
+    assert "thinking" not in captured["kwargs"]
