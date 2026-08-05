@@ -118,12 +118,13 @@ services:
       - ACESTEP_MODE=api
       - ACESTEP_NO_INIT=false
       - ACESTEP_LM_MODEL_PATH=acestep-5Hz-lm-0.6B
+      - ACESTEP_LM_BACKEND=pt
     ports:
       - "8001:8001"
     volumes:
       - acestep-checkpoints:/app/checkpoints
       - acestep-hf-cache:/root/.cache/huggingface
-    shm_size: "2gb"
+    shm_size: "8gb"
     deploy:
       resources:
         reservations:
