@@ -52,6 +52,7 @@ def test_capabilities_without_optional_services_configured(api_client):
         "image_generation": False,
         "image_generation_models": ["sdxl"],
         "music_generation_models": ["acestep"],
+        "music_remix_models": ["acestep"],
         "configured": {
             "semantic_mask": False,
             "music_generation": False,
@@ -112,6 +113,25 @@ def test_render_photo_then_job_status_and_download(api_client, test_photo):
     assert set(library[0]["tags"]) == {"photo", "dust", "ripple"}
 
 
+def test_render_photo_save_to_library_false_skips_registration(api_client, test_photo):
+    """save_to_library=False must still finish the render successfully --
+    only the library-cataloging step is skipped, same as omitting
+    library_kind entirely at the service.py layer (which already treated
+    None as "skip", unchanged by this feature -- see service.py)."""
+    with open(test_photo, "rb") as f:
+        resp = api_client.post(
+            "/render/photo",
+            files={"input_file": ("photo.jpg", f, "image/jpeg")},
+            data={"effect": ["dust"], "duration": "1.0", "fps": "10", "save_to_library": "false"},
+        )
+    assert resp.status_code == 200, resp.text
+    status = api_client.get(f"/jobs/{resp.json()['job_id']}").json()
+    assert status["status"] == "done", status
+    assert status["output_path"]
+
+    assert api_client.get("/library").json() == []
+
+
 def test_render_photo_accepts_input_asset_id_from_library(api_client, test_photo):
     """Alternative to input_file -- picks an existing library asset's own
     stored file directly (no re-upload/copy), same "pick one or the other"
@@ -170,6 +190,20 @@ def test_render_video_then_job_status(api_client, test_video):
     assert len(library) == 1
     assert library[0]["kind"] == "generated"
     assert library[0]["tags"] == ["video"]
+
+
+def test_render_video_save_to_library_false_skips_registration(api_client, test_video):
+    with open(test_video, "rb") as f:
+        resp = api_client.post(
+            "/render/video",
+            files={"input_file": ("input.mp4", f, "video/mp4")},
+            data={"save_to_library": "false"},
+        )
+    assert resp.status_code == 200, resp.text
+    status = api_client.get(f"/jobs/{resp.json()['job_id']}").json()
+    assert status["status"] == "done", status
+
+    assert api_client.get("/library").json() == []
 
 
 def _hand_painted_mask_bytes(w=160, h=100):
@@ -326,6 +360,112 @@ def test_generate_music_without_acestep_configured_reports_job_error(api_client)
     assert "ACESTEP_URL" in status["error"]
 
 
+def test_generate_music_rejects_unsupported_task_type(api_client):
+    """lego/extract/complete are real ACE-Step task types but base-model-only
+    -- rejected here since the currently deployed model is turbo, a
+    deployment fact this route can't work around (see route docstring)."""
+    resp = api_client.post("/generate/music", data={"prompt": "p", "task_type": "lego"})
+    assert resp.status_code == 422
+    assert "lego" in resp.json()["detail"]
+
+
+def test_generate_music_rejects_cover_without_source_audio(api_client):
+    resp = api_client.post("/generate/music", data={"prompt": "p", "task_type": "cover"})
+    assert resp.status_code == 422
+    assert "src_audio" in resp.json()["detail"]
+
+
+def test_generate_music_rejects_remix_incapable_model(api_client, tmp_path):
+    """A model that's registered but doesn't support_remix (Lyria3Adapter,
+    stood in here by a fake with supports_remix=False so this test doesn't
+    depend on GEMINI_API_KEY being set) must be rejected for a remix
+    request -- the server-side backstop for the UI's own model-dropdown
+    filtering (see /capabilities' music_remix_models docstring)."""
+    import asset_library
+    from server import generation_registry
+
+    class NonRemixFake:
+        supports_remix = False
+
+        async def generate(self, prompt, **kwargs):
+            return b"x"
+
+    source = tmp_path / "source.mp3"
+    source.write_bytes(b"fake-source-audio")
+    asset = asset_library.add(str(source), kind="generated", tags=["music"])
+
+    generation_registry.register_music_generator("test-nonremix-fake", NonRemixFake())
+    try:
+        resp = api_client.post(
+            "/generate/music",
+            data={"prompt": "p", "task_type": "cover", "model": "test-nonremix-fake", "src_audio_asset_id": asset.id},
+        )
+        assert resp.status_code == 422
+        assert "test-nonremix-fake" in resp.json()["detail"]
+    finally:
+        del generation_registry._MUSIC_GENERATORS["test-nonremix-fake"]
+
+
+def test_generate_music_cover_with_remix_capable_model_succeeds(api_client, tmp_path):
+    """Real end-to-end route test for the remix path -- confirms task_type/
+    src_audio_asset_id/cover_strength actually reach run_music_job's remix()
+    call through the full HTTP request, not just at the unit level (see
+    test_api_service.py for the job-level routing tests)."""
+    import asset_library
+    from server import generation_registry
+
+    class RemixCapableFake:
+        supports_remix = True
+
+        async def generate(self, prompt, **kwargs):
+            return b"should-not-be-called"
+
+        async def remix(self, prompt, **kwargs):
+            assert kwargs["task_type"] == "cover"
+            assert kwargs["cover_strength"] == 0.3
+            return b"remixed-bytes"
+
+    source = tmp_path / "source.mp3"
+    source.write_bytes(b"fake-source-audio")
+    asset = asset_library.add(str(source), kind="generated", tags=["music"])
+
+    generation_registry.register_music_generator("test-remix-fake", RemixCapableFake())
+    try:
+        resp = api_client.post(
+            "/generate/music",
+            data={
+                "prompt": "jazzier", "task_type": "cover", "model": "test-remix-fake",
+                "src_audio_asset_id": asset.id, "cover_strength": "0.3",
+            },
+        )
+        assert resp.status_code == 200, resp.text
+        status = api_client.get(f"/jobs/{resp.json()['job_id']}").json()
+        assert status["status"] == "done", status
+    finally:
+        del generation_registry._MUSIC_GENERATORS["test-remix-fake"]
+
+
+def test_generate_music_save_to_library_false_skips_registration(api_client):
+    from server import generation_registry
+
+    class FakeGenerator:
+        async def generate(self, prompt, **kwargs):
+            return b"audio-bytes"
+
+    generation_registry.register_music_generator("test-save-toggle-fake", FakeGenerator())
+    try:
+        resp = api_client.post(
+            "/generate/music",
+            data={"prompt": "p", "model": "test-save-toggle-fake", "save_to_library": "false"},
+        )
+        assert resp.status_code == 200, resp.text
+        status = api_client.get(f"/jobs/{resp.json()['job_id']}").json()
+        assert status["status"] == "done", status
+        assert api_client.get("/library").json() == []
+    finally:
+        del generation_registry._MUSIC_GENERATORS["test-save-toggle-fake"]
+
+
 def test_generate_sound_effect_without_service_configured_reports_job_error(api_client):
     """Same shape as the music-generation test above -- see that test's
     docstring. Validated for real against a live sound-effects/ instance
@@ -387,6 +527,27 @@ def test_generate_image_uses_requested_model(api_client):
         assert status["status"] == "done", status
     finally:
         del generation_registry._IMAGE_GENERATORS["test-route-fake"]
+
+
+def test_generate_image_save_to_library_false_skips_registration(api_client):
+    from server import generation_registry
+
+    class FakeGenerator:
+        async def generate(self, prompt, **kwargs):
+            return b"fake-png-bytes"
+
+    generation_registry.register_image_generator("test-save-toggle-fake", FakeGenerator())
+    try:
+        resp = api_client.post(
+            "/generate/image",
+            data={"prompt": "p", "model": "test-save-toggle-fake", "save_to_library": "false"},
+        )
+        assert resp.status_code == 200, resp.text
+        status = api_client.get(f"/jobs/{resp.json()['job_id']}").json()
+        assert status["status"] == "done", status
+        assert api_client.get("/library").json() == []
+    finally:
+        del generation_registry._IMAGE_GENERATORS["test-save-toggle-fake"]
 
 
 def test_library_add_list_get_file_and_remove(api_client, test_photo):
@@ -498,3 +659,38 @@ def test_assemble_combines_real_assets_into_one_valid_file(api_client, test_vide
     assert len(library_result) == 1
     assert library_result[0]["provenance"]["clip_asset_ids"] == [clip_asset.id]
     assert library_result[0]["provenance"]["music_asset_ids"] == [music_asset.id]
+
+
+def test_assemble_save_to_library_false_skips_registration(api_client, test_video, tmp_path):
+    """save_to_library=False only skips the *output's* own registration --
+    the clip/music assets already in the library as inputs are unaffected."""
+    import subprocess
+
+    import imageio_ffmpeg
+
+    import asset_library
+
+    audio_path = tmp_path / "tone.mp3"
+    exe = imageio_ffmpeg.get_ffmpeg_exe()
+    subprocess.run(
+        [exe, "-y", "-f", "lavfi", "-i", "sine=frequency=440:duration=1", str(audio_path)],
+        capture_output=True,
+    )
+
+    clip_asset = asset_library.add(test_video, kind="generated", tags=["photo"])
+    music_asset = asset_library.add(str(audio_path), kind="generated", tags=["music"])
+
+    resp = api_client.post(
+        "/assemble",
+        data={
+            "clip_asset_ids": [clip_asset.id], "music_asset_ids": [music_asset.id],
+            "save_to_library": "false",
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    status = api_client.get(f"/jobs/{resp.json()['job_id']}").json()
+    assert status["status"] == "done", status
+
+    library_result = api_client.get("/library", params={"tag": "assembled"}).json()
+    assert library_result == []
+    assert {a["id"] for a in api_client.get("/library").json()} == {clip_asset.id, music_asset.id}

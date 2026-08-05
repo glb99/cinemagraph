@@ -22,6 +22,15 @@ live-streaming-only API with no natural clip boundary
 one-shot `prompt in, file out` API, unlike that one. StableAudioAdapter still
 has only one registered backend (no second sound-effect API has been found
 yet).
+
+`MusicGenerator.remix()` (added 2026-08-03) is source/reference-audio-
+conditioned generation (cover/repaint/style-transfer) -- a real second
+method, not new `generate()` kwargs, since ACE-Step and Lyria 3 aren't
+"genuine peers" for this capability the way they are for plain text2music
+(Lyria 3 has no source-audio-conditioning mode at all to gracefully degrade
+to). `supports_remix` (class attribute, `True` only on ACEStepAdapter) lets
+generation_registry.available_music_remix_generators() filter the registry
+without every caller needing to know which concrete adapter class it got.
 """
 import asyncio
 import json
@@ -138,6 +147,8 @@ class ACEStepAdapter:
     this internal substitution, for exactly that reason.
     """
 
+    supports_remix = True
+
     def __init__(self, settings: Settings, call_service=call_optional_service):
         self._settings = settings
         self._call_service = call_service
@@ -164,7 +175,61 @@ class ACEStepAdapter:
             },
         )
         task_id = create_resp.json()["data"]["task_id"]
+        return await self._poll_and_download(service, task_id)
 
+    async def remix(
+        self,
+        prompt: str,
+        *,
+        task_type: str,
+        src_audio_bytes: bytes | None = None,
+        reference_audio_bytes: bytes | None = None,
+        lyrics: str = "",
+        duration: float | None = None,
+        cover_strength: float = 1.0,
+        repainting_start: float = 0.0,
+        repainting_end: float = -1.0,
+        thinking: bool = False,
+    ) -> bytes:
+        """Source/reference-audio-conditioned generation -- `task_type`
+        "cover"/"repaint" (both need `src_audio_bytes`) or plain
+        "text2music" with `reference_audio_bytes` set (style transfer).
+        Sent as multipart/form-data, not JSON, the same reason
+        SDXLAdapter's img2img branch is: a plain JSON body can't carry a
+        file upload. ACE-Step's own field names are `src_audio`/
+        `reference_audio` (it also accepts `ctx_audio`/`ref_audio` aliases,
+        not used here) -- see docs/experiments/ for the real-API account.
+        """
+        service = self._settings.music_service
+        data = {
+            "task_type": task_type, "prompt": prompt, "lyrics": lyrics,
+            "thinking": thinking, "batch_size": 1,
+        }
+        if duration is not None:
+            data["audio_duration"] = duration
+        if task_type == "cover":
+            data["audio_cover_strength"] = cover_strength
+        if task_type == "repaint":
+            data["repainting_start"] = repainting_start
+            data["repainting_end"] = repainting_end
+
+        files = {}
+        if src_audio_bytes is not None:
+            files["src_audio"] = ("source.wav", src_audio_bytes)
+        if reference_audio_bytes is not None:
+            files["reference_audio"] = ("reference.wav", reference_audio_bytes)
+
+        create_resp = await self._call_service(
+            service, "POST", "/release_task", data=data, files=files,
+        )
+        task_id = create_resp.json()["data"]["task_id"]
+        return await self._poll_and_download(service, task_id)
+
+    async def _poll_and_download(self, service, task_id: str) -> bytes:
+        """Shared by generate()/remix() -- both create a task the same way
+        (a task_id back from /release_task) and finish the same way (poll
+        /query_result until status resolves, then download the result file).
+        """
         result = None
         for _ in range(MUSIC_POLL_MAX_ATTEMPTS):
             await asyncio.sleep(MUSIC_POLL_INTERVAL_SECONDS)
@@ -220,6 +285,8 @@ class Lyria3Adapter:
     being ignored) hasn't been ruled out by any real test yet either.
     """
 
+    supports_remix = False
+
     def __init__(self, settings: Settings):
         self._settings = settings
 
@@ -235,6 +302,19 @@ class Lyria3Adapter:
             duration=duration,
             instrumental=instrumental,
         )
+
+    async def remix(self, prompt: str, **kwargs) -> bytes:
+        """Lyria 3 has no source/reference-audio-conditioning mode at all
+        (confirmed against the public docs, see generation/__init__.py's
+        docstring) -- unlike `thinking`/`strength`, there's no graceful
+        degrade-to-plain-generate available here, so this raises rather than
+        silently returning an unrelated result. `supports_remix = False`
+        (above) is the real guard in practice -- generation_registry.
+        available_music_remix_generators() and the web UI's own model
+        picker both filter this adapter out before a remix request can ever
+        reach it; this exists as a defensive backstop, not the primary path.
+        """
+        raise NotImplementedError("Lyria 3 does not support cover/repaint/reference-audio remix.")
 
 
 class StableAudioAdapter:

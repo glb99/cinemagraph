@@ -161,6 +161,107 @@ async def test_music_job_reports_generator_error(tmp_path, acestep_settings):
 
 
 @pytest.mark.anyio
+async def test_music_job_routes_to_remix_for_cover_task_type(tmp_path, acestep_settings):
+    """task_type != text2music must call generator.remix(), not generate()
+    -- the two are meaningfully different capabilities (see
+    generation_ports.py's MusicGenerator.remix() docstring), not just an
+    extra kwarg on the same call."""
+    calls = []
+
+    class FakeGenerator:
+        async def generate(self, prompt, **kwargs):
+            calls.append(("generate", kwargs))
+            return b"should-not-be-called"
+
+        async def remix(self, prompt, **kwargs):
+            calls.append(("remix", kwargs))
+            return b"remixed-audio-bytes"
+
+    source = tmp_path / "source.mp3"
+    source.write_bytes(b"original-song-bytes")
+    output = tmp_path / "out.mp3"
+    job = jobs.create_job()
+    await service.run_music_job(
+        job.id, output, settings=acestep_settings, prompt="jazzier version", lyrics="",
+        duration=30.0, thinking=False, task_type="cover", src_audio_path=source,
+        cover_strength=0.5, library_kind="generated", music_generator=FakeGenerator(),
+    )
+
+    result = jobs.get_job(job.id)
+    assert result.status is jobs.JobStatus.DONE, result.error
+    assert output.read_bytes() == b"remixed-audio-bytes"
+
+    assert len(calls) == 1
+    method, kwargs = calls[0]
+    assert method == "remix"
+    assert kwargs["task_type"] == "cover"
+    assert kwargs["src_audio_bytes"] == b"original-song-bytes"
+    assert kwargs["cover_strength"] == 0.5
+
+    [asset] = asset_library.list_assets()
+    assert asset.provenance["task_type"] == "cover"
+    assert asset.provenance["source_asset_path"] == str(source)
+
+
+@pytest.mark.anyio
+async def test_music_job_routes_to_remix_for_text2music_with_reference_audio(tmp_path, acestep_settings):
+    """Style transfer is independent of task_type -- a plain text2music
+    request with a reference track attached must still route to remix(),
+    not generate()."""
+    calls = []
+
+    class FakeGenerator:
+        async def generate(self, prompt, **kwargs):
+            calls.append("generate")
+            return b"should-not-be-called"
+
+        async def remix(self, prompt, **kwargs):
+            calls.append("remix")
+            return b"styled-audio-bytes"
+
+    reference = tmp_path / "reference.mp3"
+    reference.write_bytes(b"reference-track-bytes")
+    output = tmp_path / "out.mp3"
+    job = jobs.create_job()
+    await service.run_music_job(
+        job.id, output, settings=acestep_settings, prompt="a dreamy synth piece", lyrics="",
+        duration=30.0, thinking=False, task_type="text2music", reference_audio_path=reference,
+        library_kind="generated", music_generator=FakeGenerator(),
+    )
+
+    assert calls == ["remix"]
+    [asset] = asset_library.list_assets()
+    assert asset.provenance["reference_asset_path"] == str(reference)
+
+
+@pytest.mark.anyio
+async def test_music_job_uses_generate_for_plain_text2music(tmp_path, acestep_settings):
+    """Regression check: no task_type override and no reference audio must
+    still use generate(), exactly as before remix() existed."""
+    calls = []
+
+    class FakeGenerator:
+        async def generate(self, prompt, **kwargs):
+            calls.append("generate")
+            return b"audio-bytes"
+
+        async def remix(self, prompt, **kwargs):
+            calls.append("remix")
+            return b"should-not-be-called"
+
+    output = tmp_path / "out.mp3"
+    job = jobs.create_job()
+    await service.run_music_job(
+        job.id, output, settings=acestep_settings, prompt="p", lyrics="", duration=10.0, thinking=False,
+        library_kind="generated", music_generator=FakeGenerator(),
+    )
+
+    assert calls == ["generate"]
+    [asset] = asset_library.list_assets()
+    assert "task_type" not in asset.provenance
+
+
+@pytest.mark.anyio
 async def test_sound_effect_job_downloads_audio_and_registers_in_library(tmp_path):
     class FakeGenerator:
         async def generate(self, prompt, **kwargs):

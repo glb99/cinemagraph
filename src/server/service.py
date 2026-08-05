@@ -198,6 +198,12 @@ async def run_music_job(
     thinking: bool,
     instrumental: bool = False,
     model: str = "acestep",
+    task_type: str = "text2music",
+    src_audio_path: Path | None = None,
+    reference_audio_path: Path | None = None,
+    cover_strength: float = 1.0,
+    repainting_start: float = 0.0,
+    repainting_end: float = -1.0,
     library_kind: str | None = None,
     music_generator: MusicGenerator | None = None,
 ) -> None:
@@ -213,26 +219,52 @@ async def run_music_job(
     thought step) -- Lyria3Adapter accepts and ignores it, the same
     "accept and ignore" precedent GeminiAdapter set for `strength`.
 
-    Provenance records the *lyrics actually submitted* and the `model` used,
-    not whatever backend-internal marker/instruction an adapter substitutes
-    for `instrumental=True` (each adapter's own docstring explains why that
+    Routes to `generator.remix()` instead of `generator.generate()` whenever
+    a remix was actually requested (`task_type != "text2music"`, or a
+    `reference_audio_path` was given for style transfer regardless of
+    task_type) -- plain text2music with neither still uses `generate()`
+    unchanged, so this stays a no-op for every caller that predates remix
+    support. Paths, not raw bytes, are threaded through this function's own
+    signature (matching `reference_image_path` on run_image_job) -- byte
+    reading happens right before the adapter call, keeping this function in
+    its existing path/library-orchestration role.
+
+    Provenance records the *lyrics actually submitted*, the `model` used,
+    and (for a remix) `task_type` plus the source asset's own path -- not
+    whatever backend-internal marker/instruction an adapter substitutes for
+    `instrumental=True` (each adapter's own docstring explains why that
     substitution is its concern, not this function's).
     """
     jobs.mark_running(job_id)
     try:
         generator = music_generator or get_music_generator(model)
-        audio_bytes = await generator.generate(
-            prompt, lyrics=lyrics, duration=duration, thinking=thinking, instrumental=instrumental,
-        )
+        is_remix = task_type != "text2music" or reference_audio_path is not None
+        if is_remix:
+            audio_bytes = await generator.remix(
+                prompt,
+                task_type=task_type,
+                src_audio_bytes=src_audio_path.read_bytes() if src_audio_path else None,
+                reference_audio_bytes=reference_audio_path.read_bytes() if reference_audio_path else None,
+                lyrics=lyrics, duration=duration, cover_strength=cover_strength,
+                repainting_start=repainting_start, repainting_end=repainting_end, thinking=thinking,
+            )
+        else:
+            audio_bytes = await generator.generate(
+                prompt, lyrics=lyrics, duration=duration, thinking=thinking, instrumental=instrumental,
+            )
         output_path.write_bytes(audio_bytes)
         jobs.mark_done(job_id, output_path)
-        _register_in_library(
-            output_path, library_kind, tags=["music"],
-            provenance={
-                "prompt": prompt, "lyrics": lyrics, "model": model,
-                "duration": duration, "thinking": thinking, "instrumental": instrumental,
-            },
-        )
+        provenance = {
+            "prompt": prompt, "lyrics": lyrics, "model": model,
+            "duration": duration, "thinking": thinking, "instrumental": instrumental,
+        }
+        if is_remix:
+            provenance["task_type"] = task_type
+            if src_audio_path is not None:
+                provenance["source_asset_path"] = str(src_audio_path)
+            if reference_audio_path is not None:
+                provenance["reference_asset_path"] = str(reference_audio_path)
+        _register_in_library(output_path, library_kind, tags=["music"], provenance=provenance)
     except HTTPException as e:
         jobs.mark_error(job_id, e.detail)
     except Exception as e:

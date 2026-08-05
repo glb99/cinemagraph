@@ -20,6 +20,7 @@ class CapabilitiesResponse(BaseModel):
     image_generation: bool
     image_generation_models: list[str] = []
     music_generation_models: list[str] = []
+    music_remix_models: list[str] = []
     # Purely additive: distinguishes "not configured at all" (nothing to
     # hint about -- the tab correctly stays hidden) from "configured but not
     # currently reachable" (the env var/key is set, but e.g. the container

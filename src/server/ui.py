@@ -140,6 +140,7 @@ the underlying routes don't already do themselves.</p>
     <p class="hint">Stretches the output to this length by repeating the --duration loop, instead of
     rendering unique frames the whole way (e.g. an hour-long ambient loop).</p>
   </fieldset>
+  <label><input type="checkbox" id="photo-save-to-library" checked> Save to library</label>
   <button type="submit">Render</button>
 </form>
 <div class="status" id="photo-status"></div>
@@ -172,6 +173,7 @@ the underlying routes don't already do themselves.</p>
     rendering unique frames the whole way (e.g. an hour-long ambient loop from a few seconds of
     source). Not compatible with .gif export.</p>
   </fieldset>
+  <label><input type="checkbox" id="video-save-to-library" checked> Save to library</label>
   <button type="submit">Render</button>
 </form>
 <div class="status" id="video-status"></div>
@@ -196,9 +198,36 @@ the underlying routes don't already do themselves.</p>
   <label>Duration (s) <input type="number" id="music-duration" value="30" min="5"></label>
   <label><input type="checkbox" id="music-thinking" checked> Thinking mode</label>
   <label><input type="checkbox" id="music-instrumental"> Instrumental (no vocals)</label>
+  <div class="row">
+    <label>Task type
+      <select id="music-task-type">
+        <option value="text2music">Text to music</option>
+        <option value="cover">Cover (remix an existing song)</option>
+        <option value="repaint">Repaint (regenerate a section)</option>
+      </select>
+    </label>
+  </div>
+  <div class="row" id="music-source-row" style="display:none">
+    <p class="hint">Song to remix, from the library:</p>
+    <div class="asset-picker" id="music-source-picker">(loading...)</div>
+    <div class="selected-chips" id="music-source-selected"></div>
+  </div>
+  <div class="row" id="music-cover-strength-row" style="display:none">
+    <label>Cover strength <input type="number" id="music-cover-strength" value="1.0" min="0" max="1" step="0.05"></label>
+  </div>
+  <div class="row" id="music-repaint-row" style="display:none">
+    <label>Repaint start (s) <input type="number" id="music-repaint-start" value="0" min="0" step="0.1"></label>
+    <label>Repaint end (s, -1 = to end) <input type="number" id="music-repaint-end" value="-1" step="0.1"></label>
+  </div>
+  <div class="row">
+    <p class="hint">Optional: reference audio for style transfer (independent of task type):</p>
+    <div class="asset-picker" id="music-reference-picker">(loading...)</div>
+    <div class="selected-chips" id="music-reference-selected"></div>
+  </div>
   <div class="row" id="music-model-row" style="display:none">
     <label>Model <select id="music-model"></select></label>
   </div>
+  <label><input type="checkbox" id="music-save-to-library" checked> Save to library</label>
   <div class="row"></div>
   <button type="submit">Generate</button>
 </form>
@@ -217,6 +246,7 @@ the underlying routes don't already do themselves.</p>
     </label>
   </div>
   <label>Duration (s) <input type="number" id="sfx-duration" value="10" min="1" max="47"></label>
+  <label><input type="checkbox" id="sfx-save-to-library" checked> Save to library</label>
   <div class="row"></div>
   <button type="submit">Generate</button>
 </form>
@@ -243,6 +273,7 @@ the underlying routes don't already do themselves.</p>
   <div class="row" id="image-model-row" style="display:none">
     <label>Model <select id="image-model"></select></label>
   </div>
+  <label><input type="checkbox" id="image-save-to-library" checked> Save to library</label>
   <div class="row"></div>
   <button type="submit">Generate</button>
 </form>
@@ -279,6 +310,7 @@ together continuously under the music, order doesn't matter for those.</p>
 </div>
 <p class="hint">Music gap: a silent pause between songs instead of crossfading them (0 = crossfade
 as usual). Sound effects keep playing continuously through the gap -- only the music pauses.</p>
+<label><input type="checkbox" id="assemble-save-to-library" checked> Save to library</label>
 <button type="button" id="assemble-refresh">Refresh assets</button>
 <button type="button" id="assemble-submit">Assemble</button>
 <div class="status" id="assemble-status"></div>
@@ -358,19 +390,13 @@ async function loadCapabilities() {
     row.style.display = "block";
   }
 
-  const musicModels = caps.music_generation_models || [];
-  if (musicModels.length > 1) {
-    const row = document.getElementById("music-model-row");
-    const select = document.getElementById("music-model");
-    select.innerHTML = "";
-    for (const name of musicModels) {
-      const opt = document.createElement("option");
-      opt.value = name;
-      opt.textContent = name;
-      select.appendChild(opt);
-    }
-    row.style.display = "block";
-  }
+  // Cached (not just populated inline like image's dropdown above) since
+  // the Music tab's model list has to be re-filtered later, whenever the
+  // task type or reference-audio selection changes -- see
+  // updateMusicFormForTaskType(), defined alongside the remix pickers.
+  musicGenerationModels = caps.music_generation_models || [];
+  musicRemixModels = caps.music_remix_models || [];
+  updateMusicFormForTaskType();
 
   const nav = document.getElementById("nav");
   let firstVisible = null;
@@ -500,6 +526,144 @@ document.getElementById("photo-input").addEventListener("change", () => {
     loadPhotoLibraryAssets();
   }
 });
+
+/** Music tab's remix inputs -- same "pick a library asset, removable chip"
+ * pattern as the Photo tab's picker above (loadPhotoLibraryAssets/
+ * renderPhotoLibrarySelection), filtered to audio instead of image, and
+ * duplicated (not factored into a shared helper) twice more: one picker for
+ * the song being remixed (cover/repaint), one for an optional reference
+ * track (style transfer, independent of task type). */
+let musicSourceLibraryAssetId = null;
+let musicReferenceLibraryAssetId = null;
+const AUDIO_EXTS = ["mp3", "wav", "flac", "ogg", "m4a"];
+
+async function loadMusicSourceLibraryAssets() {
+  const assets = await (await fetch("/library")).json();
+  const container = document.getElementById("music-source-picker");
+  container.innerHTML = "";
+  const audioAssets = assets.filter(
+    a => AUDIO_EXTS.includes((a.original_filename.split(".").pop() || "").toLowerCase())
+  );
+  if (audioAssets.length === 0) {
+    container.textContent = "(no songs in the library yet)";
+    return;
+  }
+  for (const asset of audioAssets) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    const selected = musicSourceLibraryAssetId === asset.id;
+    btn.textContent = (selected ? "✓ " : "+ ") + assetPickerLabel(asset);
+    btn.addEventListener("click", () => {
+      musicSourceLibraryAssetId = selected ? null : asset.id;
+      renderMusicSourceLibrarySelection(asset);
+      loadMusicSourceLibraryAssets();
+    });
+    container.appendChild(btn);
+  }
+}
+
+function renderMusicSourceLibrarySelection(asset) {
+  const container = document.getElementById("music-source-selected");
+  container.innerHTML = "";
+  if (!musicSourceLibraryAssetId) return;
+  const chip = document.createElement("span");
+  chip.className = "chip";
+  chip.appendChild(document.createTextNode(assetPickerLabel(asset)));
+  const removeBtn = document.createElement("button");
+  removeBtn.type = "button";
+  removeBtn.textContent = "×";
+  removeBtn.addEventListener("click", () => {
+    musicSourceLibraryAssetId = null;
+    loadMusicSourceLibraryAssets();
+    container.innerHTML = "";
+  });
+  chip.appendChild(removeBtn);
+  container.appendChild(chip);
+}
+
+async function loadMusicReferenceLibraryAssets() {
+  const assets = await (await fetch("/library")).json();
+  const container = document.getElementById("music-reference-picker");
+  container.innerHTML = "";
+  const audioAssets = assets.filter(
+    a => AUDIO_EXTS.includes((a.original_filename.split(".").pop() || "").toLowerCase())
+  );
+  if (audioAssets.length === 0) {
+    container.textContent = "(no songs in the library yet)";
+    return;
+  }
+  for (const asset of audioAssets) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    const selected = musicReferenceLibraryAssetId === asset.id;
+    btn.textContent = (selected ? "✓ " : "+ ") + assetPickerLabel(asset);
+    btn.addEventListener("click", () => {
+      musicReferenceLibraryAssetId = selected ? null : asset.id;
+      renderMusicReferenceLibrarySelection(asset);
+      loadMusicReferenceLibraryAssets();
+      updateMusicFormForTaskType();
+    });
+    container.appendChild(btn);
+  }
+}
+
+function renderMusicReferenceLibrarySelection(asset) {
+  const container = document.getElementById("music-reference-selected");
+  container.innerHTML = "";
+  if (!musicReferenceLibraryAssetId) return;
+  const chip = document.createElement("span");
+  chip.className = "chip";
+  chip.appendChild(document.createTextNode(assetPickerLabel(asset)));
+  const removeBtn = document.createElement("button");
+  removeBtn.type = "button";
+  removeBtn.textContent = "×";
+  removeBtn.addEventListener("click", () => {
+    musicReferenceLibraryAssetId = null;
+    loadMusicReferenceLibraryAssets();
+    container.innerHTML = "";
+    updateMusicFormForTaskType();
+  });
+  chip.appendChild(removeBtn);
+  container.appendChild(chip);
+}
+
+/** Toggles which remix-specific rows are visible for the selected task
+ * type, and re-filters the model dropdown to music_remix_models whenever a
+ * remix is actually in play (task_type != text2music, OR a reference track
+ * is picked regardless of task_type -- style transfer is independent of
+ * task_type, see /generate/music's own docstring) -- a non-remix-capable
+ * model (Lyria 3) can't be selected through the UI for either case, backed
+ * up by the same check server-side. */
+let musicGenerationModels = [];
+let musicRemixModels = [];
+
+function populateMusicModelOptions(models) {
+  const row = document.getElementById("music-model-row");
+  const select = document.getElementById("music-model");
+  if (models.length > 1) {
+    select.innerHTML = "";
+    for (const name of models) {
+      const opt = document.createElement("option");
+      opt.value = name;
+      opt.textContent = name;
+      select.appendChild(opt);
+    }
+    row.style.display = "block";
+  } else {
+    row.style.display = "none";
+  }
+}
+
+function updateMusicFormForTaskType() {
+  const taskType = document.getElementById("music-task-type").value;
+  document.getElementById("music-source-row").style.display = taskType === "text2music" ? "none" : "block";
+  document.getElementById("music-cover-strength-row").style.display = taskType === "cover" ? "block" : "none";
+  document.getElementById("music-repaint-row").style.display = taskType === "repaint" ? "block" : "none";
+  const isRemix = taskType !== "text2music" || !!musicReferenceLibraryAssetId;
+  populateMusicModelOptions(isRemix ? musicRemixModels : musicGenerationModels);
+}
+
+document.getElementById("music-task-type").addEventListener("change", updateMusicFormForTaskType);
 
 function selectedEffects() {
   return Array.from(document.querySelectorAll('input[name="effect"]:checked')).map(i => i.value);
@@ -698,6 +862,7 @@ wireForm("photo-form", {
     form.append("speed", document.getElementById("photo-speed").value);
     const loopDuration = document.getElementById("photo-loop-duration").value;
     if (loopDuration) form.append("loop_duration", loopDuration);
+    form.append("save_to_library", document.getElementById("photo-save-to-library").checked);
     return form;
   },
 });
@@ -722,6 +887,7 @@ wireForm("video-form", {
     form.append("auto_trim", document.getElementById("video-auto-trim").checked);
     form.append("also_gif", alsoGif);
     if (loopDuration) form.append("loop_duration", loopDuration);
+    form.append("save_to_library", document.getElementById("video-save-to-library").checked);
     return form;
   },
 });
@@ -735,16 +901,32 @@ wireForm("music-form", {
       document.getElementById("music-error").textContent = "Prompt is required.";
       return null;
     }
+    const taskType = document.getElementById("music-task-type").value;
+    if (taskType !== "text2music" && !musicSourceLibraryAssetId) {
+      document.getElementById("music-error").textContent = `task_type="${taskType}" needs a song picked to remix.`;
+      return null;
+    }
     const form = new FormData();
     form.append("prompt", prompt);
     form.append("lyrics", document.getElementById("music-lyrics").value);
     form.append("duration", document.getElementById("music-duration").value);
     form.append("thinking", document.getElementById("music-thinking").checked);
     form.append("instrumental", document.getElementById("music-instrumental").checked);
+    form.append("task_type", taskType);
+    if (musicSourceLibraryAssetId) form.append("src_audio_asset_id", musicSourceLibraryAssetId);
+    if (musicReferenceLibraryAssetId) form.append("reference_audio_asset_id", musicReferenceLibraryAssetId);
+    if (taskType === "cover") {
+      form.append("cover_strength", document.getElementById("music-cover-strength").value);
+    }
+    if (taskType === "repaint") {
+      form.append("repainting_start", document.getElementById("music-repaint-start").value);
+      form.append("repainting_end", document.getElementById("music-repaint-end").value);
+    }
     const modelSelect = document.getElementById("music-model");
     if (modelSelect.value) {
       form.append("model", modelSelect.value);
     }
+    form.append("save_to_library", document.getElementById("music-save-to-library").checked);
     return form;
   },
 });
@@ -761,6 +943,7 @@ wireForm("sfx-form", {
     const form = new FormData();
     form.append("prompt", prompt);
     form.append("duration", document.getElementById("sfx-duration").value);
+    form.append("save_to_library", document.getElementById("sfx-save-to-library").checked);
     return form;
   },
 });
@@ -785,6 +968,7 @@ wireForm("image-form", {
     if (modelSelect.value) {
       form.append("model", modelSelect.value);
     }
+    form.append("save_to_library", document.getElementById("image-save-to-library").checked);
     return form;
   },
 });
@@ -896,6 +1080,7 @@ document.getElementById("assemble-submit").addEventListener("click", async () =>
   params.append("music_crossfade_duration", document.getElementById("assemble-music-crossfade").value);
   params.append("music_edge_fade_duration", document.getElementById("assemble-music-edge-fade").value);
   params.append("music_gap_duration", document.getElementById("assemble-music-gap").value);
+  params.append("save_to_library", document.getElementById("assemble-save-to-library").checked);
 
   const submitBtn = document.getElementById("assemble-submit");
   submitBtn.disabled = true;
@@ -927,6 +1112,8 @@ document.getElementById("library-tag-filter").addEventListener("keydown", (e) =>
 loadCapabilities();
 loadEffects();
 loadPhotoLibraryAssets();
+loadMusicSourceLibraryAssets();
+loadMusicReferenceLibraryAssets();
 </script>
 </body>
 </html>

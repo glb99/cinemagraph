@@ -11,9 +11,10 @@ import pytest
 
 from server import generation_adapters, generation_registry
 from server.config import Settings
-from server.generation_adapters import ACEStepAdapter, SDXLAdapter, StableAudioAdapter
+from server.generation_adapters import ACEStepAdapter, Lyria3Adapter, SDXLAdapter, StableAudioAdapter
 from server.generation_registry import (
     available_image_generators,
+    available_music_remix_generators,
     get_image_generator,
     register_image_generator,
 )
@@ -204,6 +205,146 @@ async def test_stable_audio_adapter_sends_prompt_and_duration():
     assert captured["method"] == "POST"
     assert captured["path"] == "/generate"
     assert captured["json"] == {"prompt": "gentle wind chimes", "duration": 8.0}
+
+
+@pytest.mark.anyio
+async def test_acestep_adapter_remix_cover_sends_task_type_and_strength_via_multipart(monkeypatch):
+    """cover needs src_audio (multipart, not JSON -- same reason SDXLAdapter's
+    img2img branch is) plus audio_cover_strength; no repaint-only fields
+    should leak in."""
+    monkeypatch.setattr(generation_adapters, "MUSIC_POLL_INTERVAL_SECONDS", 0)
+    captured = {}
+
+    async def fake_call(svc, method, path, **kwargs):
+        if path == "/release_task":
+            captured["data"] = kwargs["data"]
+            captured["files"] = kwargs["files"]
+            return _ace_response({"data": {"task_id": "t1"}})
+        if path == "/query_result":
+            return _ace_response(
+                {"data": [{"status": 1, "result": json.dumps([{"file": "/v1/audio/t1.mp3"}])}]}
+            )
+        return _ace_response({})  # the audio download
+
+    adapter = ACEStepAdapter(Settings(acestep_url="http://acestep.invalid"), call_service=fake_call)
+    result = await adapter.remix(
+        "make it jazzier", task_type="cover", src_audio_bytes=b"source-bytes", cover_strength=0.4,
+    )
+
+    assert result == b"audio-bytes"
+    assert captured["data"]["task_type"] == "cover"
+    assert captured["data"]["audio_cover_strength"] == 0.4
+    assert "repainting_start" not in captured["data"]
+    assert captured["files"] == {"src_audio": ("source.wav", b"source-bytes")}
+    assert "reference_audio" not in captured["files"]
+
+
+@pytest.mark.anyio
+async def test_acestep_adapter_remix_repaint_sends_start_end_via_multipart(monkeypatch):
+    monkeypatch.setattr(generation_adapters, "MUSIC_POLL_INTERVAL_SECONDS", 0)
+    captured = {}
+
+    async def fake_call(svc, method, path, **kwargs):
+        if path == "/release_task":
+            captured["data"] = kwargs["data"]
+            return _ace_response({"data": {"task_id": "t1"}})
+        if path == "/query_result":
+            return _ace_response(
+                {"data": [{"status": 1, "result": json.dumps([{"file": "/v1/audio/t1.mp3"}])}]}
+            )
+        return _ace_response({})
+
+    adapter = ACEStepAdapter(Settings(acestep_url="http://acestep.invalid"), call_service=fake_call)
+    await adapter.remix(
+        "regenerate the bridge", task_type="repaint", src_audio_bytes=b"source-bytes",
+        repainting_start=10.0, repainting_end=20.0,
+    )
+
+    assert captured["data"]["task_type"] == "repaint"
+    assert captured["data"]["repainting_start"] == 10.0
+    assert captured["data"]["repainting_end"] == 20.0
+    assert "audio_cover_strength" not in captured["data"]
+
+
+@pytest.mark.anyio
+async def test_acestep_adapter_remix_text2music_with_reference_audio_only(monkeypatch):
+    """Style transfer: task_type stays text2music, only reference_audio is
+    sent (no src_audio), independent of task_type per the port's own
+    docstring."""
+    monkeypatch.setattr(generation_adapters, "MUSIC_POLL_INTERVAL_SECONDS", 0)
+    captured = {}
+
+    async def fake_call(svc, method, path, **kwargs):
+        if path == "/release_task":
+            captured["data"] = kwargs["data"]
+            captured["files"] = kwargs["files"]
+            return _ace_response({"data": {"task_id": "t1"}})
+        if path == "/query_result":
+            return _ace_response(
+                {"data": [{"status": 1, "result": json.dumps([{"file": "/v1/audio/t1.mp3"}])}]}
+            )
+        return _ace_response({})
+
+    adapter = ACEStepAdapter(Settings(acestep_url="http://acestep.invalid"), call_service=fake_call)
+    await adapter.remix("a dreamy synth piece", task_type="text2music", reference_audio_bytes=b"ref-bytes")
+
+    assert captured["data"]["task_type"] == "text2music"
+    assert captured["files"] == {"reference_audio": ("reference.wav", b"ref-bytes")}
+    assert "src_audio" not in captured["files"]
+
+
+@pytest.mark.anyio
+async def test_acestep_adapter_remix_reports_remote_failure(monkeypatch):
+    """remix() reuses generate()'s _poll_and_download -- the failure path
+    (status == 2) must still work after that refactor."""
+    monkeypatch.setattr(generation_adapters, "MUSIC_POLL_INTERVAL_SECONDS", 0)
+
+    async def fake_call(svc, method, path, **kwargs):
+        if path == "/release_task":
+            return _ace_response({"data": {"task_id": "t1"}})
+        return _ace_response({"data": [{"status": 2, "result": None}]})
+
+    adapter = ACEStepAdapter(Settings(acestep_url="http://acestep.invalid"), call_service=fake_call)
+    with pytest.raises(RuntimeError, match="failure"):
+        await adapter.remix("p", task_type="cover", src_audio_bytes=b"source-bytes")
+
+
+@pytest.mark.anyio
+async def test_lyria3_adapter_remix_raises_not_implemented():
+    """Lyria 3 has no source/reference-audio-conditioning mode at all --
+    remix() must raise rather than silently returning an unrelated
+    text2music result. The real guard in the UI/API is supports_remix
+    (below); this is the defensive backstop."""
+    adapter = Lyria3Adapter(Settings(gemini_api_key="fake-key"))
+    with pytest.raises(NotImplementedError):
+        await adapter.remix("p", task_type="cover", src_audio_bytes=b"x")
+
+
+def test_available_music_remix_generators_filters_by_supports_remix():
+    class RemixCapableFake:
+        supports_remix = True
+
+        async def generate(self, prompt, **kwargs):
+            return b""
+
+        async def remix(self, prompt, **kwargs):
+            return b""
+
+    class RemixIncapableFake:
+        supports_remix = False
+
+        async def generate(self, prompt, **kwargs):
+            return b""
+
+    generation_registry.register_music_generator("test-fake-remix-capable", RemixCapableFake())
+    generation_registry.register_music_generator("test-fake-remix-incapable", RemixIncapableFake())
+    try:
+        remixable = available_music_remix_generators()
+        assert "test-fake-remix-capable" in remixable
+        assert "test-fake-remix-incapable" not in remixable
+    finally:
+        del generation_registry._MUSIC_GENERATORS["test-fake-remix-capable"]
+        del generation_registry._MUSIC_GENERATORS["test-fake-remix-incapable"]
 
 
 def test_music_registry_register_get_and_list_roundtrip():

@@ -89,6 +89,7 @@ from .generation_adapters import ACEStepAdapter, GeminiAdapter, Lyria3Adapter, S
 from .generation_registry import (
     available_image_generators,
     available_music_generators,
+    available_music_remix_generators,
     register_image_generator,
     register_music_generator,
     register_sound_effect_generator,
@@ -135,6 +136,28 @@ async def _save_upload(upload: UploadFile, dest: Path) -> None:
         shutil.copyfileobj(upload.file, f)
 
 
+async def _resolve_optional_audio_input(
+    upload: UploadFile | None, asset_id: str | None, job_dir: Path, field_name: str,
+) -> Path | None:
+    """Generalizes /render/photo's input_file-xor-input_asset_id pattern to
+    an *optional* pair (neither given is valid here, unlike /render/photo's
+    input which requires exactly one) -- /generate/music needs this twice
+    (source audio, reference audio), both genuinely optional on their own.
+    """
+    if upload is not None and asset_id is not None:
+        raise HTTPException(422, f"Supply at most one of `{field_name}_file`/`{field_name}_asset_id`.")
+    if asset_id is not None:
+        asset = library.get(asset_id)
+        if asset is None:
+            raise HTTPException(422, f"No asset with id '{asset_id}'")
+        return asset.path
+    if upload is not None:
+        path = job_dir / (upload.filename or f"{field_name}.wav")
+        await _save_upload(upload, path)
+        return path
+    return None
+
+
 @app.get("/", response_class=HTMLResponse)
 async def index():
     """The thin web UI (photo rendering only for now -- see ui.py). Not a
@@ -173,6 +196,14 @@ async def capabilities(settings: SettingsDep):
     deliberately not narrowed to "SDXL/ACE-Step only", since a Gemini key
     alone is enough to make either capability genuinely configured even with
     no self-hosted URL at all.
+
+    `music_remix_models` is a subset of `music_generation_models` -- only
+    adapters whose `remix()` actually does something (ACEStepAdapter;
+    Lyria3Adapter's raises NotImplementedError, see its own docstring). The
+    web UI's model picker filters to this list whenever a remix is being
+    requested, so a caller can't pick a non-remix-capable model through the
+    UI -- POST /generate/music still rejects it server-side too, since the
+    UI filtering isn't the only way to hit this route.
     """
     return CapabilitiesResponse(
         semantic_mask=await service_available(settings.semantic_mask_service),
@@ -187,6 +218,7 @@ async def capabilities(settings: SettingsDep):
         ),
         image_generation_models=list(available_image_generators()),
         music_generation_models=list(available_music_generators()),
+        music_remix_models=list(available_music_remix_generators()),
         configured={
             "semantic_mask": bool(settings.ml_service_url),
             "music_generation": bool(settings.acestep_url) or bool(settings.gemini_api_key),
@@ -217,6 +249,7 @@ async def render_video(
     grain: float = Form(0.03),
     also_gif: bool = Form(False),
     loop_duration: float | None = Form(None),
+    save_to_library: bool = Form(True),
 ):
     if loop_duration and also_gif:
         raise HTTPException(422, pipeline._LOOP_DURATION_GIF_ERROR)
@@ -234,7 +267,7 @@ async def render_video(
 
     background_tasks.add_task(
         service.run_render_job, job.id, pipeline.save_cinemagraph_video, output_path,
-        library_kind="generated", library_tags=["video"],
+        library_kind="generated" if save_to_library else None, library_tags=["video"],
         input_path=str(input_path), mask_path=str(mask_path) if mask_path else None,
         still_frame_index=still_frame_index, blend_frames=blend_frames, auto_trim_loop=auto_trim,
         mask_threshold=mask_threshold, feather=feather,
@@ -277,6 +310,7 @@ async def render_photo(
     grain: float = Form(0.03),
     also_gif: bool = Form(False),
     loop_duration: float | None = Form(None),
+    save_to_library: bool = Form(True),
 ):
     """Render a photo cinemagraph.
 
@@ -341,7 +375,8 @@ async def render_photo(
         background_tasks.add_task(
             service.run_photo_semantic_mask_job, job.id, output_path,
             settings=settings, photo_path=input_path, mask_path=job_dir / "mask.png",
-            mask_prompt=mask_prompt, library_kind="generated", library_tags=["photo", *effect],
+            mask_prompt=mask_prompt, library_kind="generated" if save_to_library else None,
+            library_tags=["photo", *effect],
             **render_kwargs,
         )
     else:
@@ -351,7 +386,7 @@ async def render_photo(
             await _save_upload(mask, mask_path)
         background_tasks.add_task(
             service.run_render_job, job.id, pipeline.save_cinemagraph_from_photo, output_path,
-            library_kind="generated", library_tags=["photo", *effect],
+            library_kind="generated" if save_to_library else None, library_tags=["photo", *effect],
             photo_path=str(input_path), mask_path=str(mask_path) if mask_path else None,
             **render_kwargs,
         )
@@ -475,6 +510,9 @@ async def semantic_mask(settings: SettingsDep, image: UploadFile = File(...), pr
     return Response(content=resp.content, media_type="image/png")
 
 
+_MUSIC_TASK_TYPES = ("text2music", "cover", "repaint")
+
+
 @app.post("/generate/music", response_model=JobResponse)
 async def generate_music(
     background_tasks: BackgroundTasks,
@@ -485,6 +523,15 @@ async def generate_music(
     thinking: bool = Form(True),
     instrumental: bool = Form(False),
     model: str = Form("acestep"),
+    task_type: str = Form("text2music"),
+    src_audio_file: UploadFile | None = File(None),
+    src_audio_asset_id: str | None = Form(None),
+    reference_audio_file: UploadFile | None = File(None),
+    reference_audio_asset_id: str | None = Form(None),
+    cover_strength: float = Form(1.0),
+    repainting_start: float = Form(0.0),
+    repainting_end: float = Form(-1.0),
+    save_to_library: bool = Form(True),
 ):
     """Proxies to a registered MusicGenerator adapter (generation_ports.py) --
     `model` picks which one ("acestep" = local ACE-Step, self-hosted GPU
@@ -498,20 +545,49 @@ async def generate_music(
     adapter's own docstring (ACEStepAdapter substitutes a marker that
     reliably forces it; Lyria3Adapter only requests it via a prompt
     instruction, not a guaranteed override).
+
+    `task_type="cover"`/`"repaint"` remix an existing song -- `src_audio_file`
+    (a fresh upload) or `src_audio_asset_id` (an existing library asset),
+    exactly one, required for either. `lego`/`extract`/`complete` are real
+    ACE-Step task types but base-model-only -- rejected here since the
+    currently deployed model is acestep-v15-turbo, a deployment fact this
+    route can't work around. `reference_audio_file`/`reference_audio_asset_id`
+    (style transfer) is independent of `task_type` and always optional.
+    `cover_strength` only matters for `cover`; `repainting_start`/
+    `repainting_end` only for `repaint` (`repainting_end=-1` means to the end
+    of the source audio) -- see ACEStepAdapter.remix()'s own docstring.
     """
-    if model not in available_music_generators():
+    if task_type not in _MUSIC_TASK_TYPES:
         raise HTTPException(
-            422, f"Unknown model '{model}'. Choose from: {', '.join(available_music_generators())}"
+            422,
+            f"Unknown or unsupported task_type '{task_type}'. Choose from: {', '.join(_MUSIC_TASK_TYPES)} "
+            "(lego/extract/complete are base-model-only, not supported by the current deployment).",
         )
+    is_remix = task_type != "text2music" or reference_audio_file is not None or reference_audio_asset_id is not None
+    valid_models = available_music_remix_generators() if is_remix else available_music_generators()
+    if model not in valid_models:
+        raise HTTPException(
+            422, f"Unknown model '{model}' for this request. Choose from: {', '.join(valid_models)}"
+        )
+    if task_type in ("cover", "repaint") and src_audio_file is None and src_audio_asset_id is None:
+        raise HTTPException(422, f"task_type='{task_type}' needs `src_audio_file` or `src_audio_asset_id`.")
 
     job = jobs.create_job()
     job_dir = _job_dir(settings, job.id)
     output_path = job_dir / "output.mp3"
 
+    src_audio_path = await _resolve_optional_audio_input(src_audio_file, src_audio_asset_id, job_dir, "src_audio")
+    reference_audio_path = await _resolve_optional_audio_input(
+        reference_audio_file, reference_audio_asset_id, job_dir, "reference_audio"
+    )
+
     background_tasks.add_task(
         service.run_music_job, job.id, output_path,
         settings=settings, prompt=prompt, lyrics=lyrics, duration=duration, thinking=thinking,
-        instrumental=instrumental, model=model, library_kind="generated",
+        instrumental=instrumental, model=model, task_type=task_type,
+        src_audio_path=src_audio_path, reference_audio_path=reference_audio_path,
+        cover_strength=cover_strength, repainting_start=repainting_start, repainting_end=repainting_end,
+        library_kind="generated" if save_to_library else None,
     )
     return JobResponse(job_id=job.id)
 
@@ -522,6 +598,7 @@ async def generate_sound_effect(
     settings: SettingsDep,
     prompt: str = Form(...),
     duration: float = Form(10.0),
+    save_to_library: bool = Form(True),
 ):
     """Proxies to the sound-effects/ service (Stable Audio Open). Unlike
     ACE-Step, that service answers in one synchronous call -- still run as
@@ -534,7 +611,8 @@ async def generate_sound_effect(
 
     background_tasks.add_task(
         service.run_sound_effect_job, job.id, output_path,
-        settings=settings, prompt=prompt, duration=duration, library_kind="generated",
+        settings=settings, prompt=prompt, duration=duration,
+        library_kind="generated" if save_to_library else None,
     )
     return JobResponse(job_id=job.id)
 
@@ -547,6 +625,7 @@ async def generate_image(
     reference_image: UploadFile | None = File(None),
     strength: float = Form(0.6),
     model: str = Form("sdxl"),
+    save_to_library: bool = Form(True),
 ):
     """Proxies to a registered ImageGenerator adapter (generation_ports.py) --
     `model` picks which one ("sdxl" = local SDXL/image-generation/, "gemini"
@@ -577,7 +656,7 @@ async def generate_image(
         service.run_image_job, job.id, output_path,
         settings=settings, prompt=prompt,
         reference_image_path=reference_image_path, strength=strength, model=model,
-        library_kind="generated",
+        library_kind="generated" if save_to_library else None,
     )
     return JobResponse(job_id=job.id)
 
@@ -608,6 +687,7 @@ async def assemble(
     music_crossfade_duration: float = Form(5.0),
     music_edge_fade_duration: float = Form(2.0),
     music_gap_duration: float = Form(0.0),
+    save_to_library: bool = Form(True),
 ):
     """Combines already-generated library assets (clips, music, sound
     effects) into one finished video via assembly.pipeline.assemble --
@@ -643,7 +723,7 @@ async def assemble(
         music_crossfade_duration=music_crossfade_duration,
         music_edge_fade_duration=music_edge_fade_duration,
         music_gap_duration=music_gap_duration,
-        library_kind="generated",
+        library_kind="generated" if save_to_library else None,
         provenance={
             "clip_asset_ids": clip_asset_ids,
             "music_asset_ids": music_asset_ids,
