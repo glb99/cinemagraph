@@ -55,6 +55,41 @@ correctly excluded):
    `music-save-to-library`, `assemble-save-to-library`) -- not just that
    `ui.py`'s Python source has the right strings.
 
+## Follow-up: waveform editor for repaint start/end
+
+Replaced the plain typed-seconds `repainting_start`/`repainting_end` number inputs with a
+click-and-drag waveform selector (canvas + the browser's native `AudioContext.
+decodeAudioData()`, no new dependency -- `ui.py`'s own docstring is explicit about staying a
+single self-contained page, and this project already has one real documented incident of a
+build silently dropping non-`.py` static assets, per `docs/DESIGN.md:1075`). UI-only change,
+`src/server/ui.py`, no backend/protocol changes.
+
+Real browser verification (not just a visual check) via `mcp__Claude_Browser`, since this is
+a pure client-side interaction feature with no meaningful unit-test surface:
+
+- Picked a real library asset, confirmed the waveform actually decoded (`repaintAudioBuffer.
+  duration === 15`, matching the real source song) and rendered varying bar heights from real
+  computed peak data (not a flat/uniform fill -- an initial pixel-alpha heuristic falsely
+  suggested otherwise; re-checked with raw per-pixel RGBA dumps and confirmed the bars were
+  correct all along, the *test* heuristic was wrong, not the app).
+- **Found and fixed a real bug this way**: the canvas's CSS-rendered width (`.waveform {
+  width: 100% }` stretches it, measured 721.6px in practice) differs from its internal pixel
+  buffer width (the `width="680"` HTML attribute the drawing code and peak computation use).
+  The drag handler was converting `e.offsetX` (reported in *rendered* CSS pixel space) using
+  the *buffer* width, which would have misaligned every selection. Fixed by using
+  `canvas.getBoundingClientRect().width` for the pixel-to-seconds fraction in the drag
+  handler specifically -- drawing itself needed no change, since canvas 2D operations
+  (`fillRect` etc.) always address the internal buffer directly, unaffected by CSS scaling.
+- Re-verified after the fix by dispatching real `MouseEvent`s (mousedown/mousemove/mouseup,
+  not synthetic state-setting) through the actual listeners: a drag from 20% to 60% of a real
+  15s track produced `start=2.99s, end=8.98s` against an expected `3.00s/9.00s` -- accurate
+  to normal pixel-quantization rounding.
+- Confirmed manual edits to the start/end number fields also redraw the highlighted region
+  correctly (checked the overlay's actual pixel presence inside vs. outside the typed range,
+  not just that no error was thrown) -- both the drag path and the typed path stay in sync.
+- Confirmed the "preview selection" button (Web Audio `AudioBufferSourceNode.start(0, start,
+  duration)`, no new `<audio>` element) doesn't throw.
+
 ## Not independently live-tested this round
 
 `repaint` and plain-`text2music`-with-`reference_audio` weren't run against

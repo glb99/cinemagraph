@@ -34,6 +34,17 @@ def acestep_settings():
     return Settings(acestep_url="http://acestep.invalid")
 
 
+def _save(job_id):
+    """Every job function now only *stages* a save candidate on completion
+    (jobs.py's pending_library) -- nothing reaches asset_library.add() until
+    this, service.save_job_to_library()'s own real code path, is called.
+    Tests that want to assert on the resulting Asset (kind/tags/provenance)
+    go through this rather than reading asset_library.list_assets()
+    immediately after the job function returns, matching the real two-step
+    generate-then-save flow the web UI now uses."""
+    return service.save_job_to_library(job_id)
+
+
 def test_render_job_registers_generated_output_in_library(tmp_path):
     def fake_render(*, output_path, **kwargs):
         Path(output_path).write_bytes(b"fake-video-bytes")
@@ -45,15 +56,48 @@ def test_render_job_registers_generated_output_in_library(tmp_path):
     )
 
     assert jobs.get_job(job.id).status is jobs.JobStatus.DONE
+    assert asset_library.list_assets() == []  # staged, not yet saved
 
-    [asset] = asset_library.list_assets()
+    asset = _save(job.id)
     assert asset.kind == "generated"
     assert asset.tags == ["video"]
 
 
+def test_save_job_to_library_with_project_tags_the_asset(tmp_path):
+    """project= is folded into the tag list right before asset_library.add()
+    -- see save_job_to_library's own docstring for why project assignment
+    happens at this exact call site rather than a separate step."""
+    def fake_render(*, output_path, **kwargs):
+        Path(output_path).write_bytes(b"fake-video-bytes")
+
+    output = tmp_path / "out.mp4"
+    job = jobs.create_job()
+    service.run_render_job(job.id, fake_render, output, library_kind="generated", library_tags=["video"])
+
+    asset = service.save_job_to_library(job.id, project="sunset-loop")
+    assert f"{asset_library.PROJECT_TAG_PREFIX}sunset-loop" in asset.tags
+    assert "video" in asset.tags
+
+
+def test_save_job_to_library_without_project_adds_no_project_tag(tmp_path):
+    def fake_render(*, output_path, **kwargs):
+        Path(output_path).write_bytes(b"fake-video-bytes")
+
+    output = tmp_path / "out.mp4"
+    job = jobs.create_job()
+    service.run_render_job(job.id, fake_render, output, library_kind="generated")
+
+    asset = service.save_job_to_library(job.id)
+    assert not any(t.startswith(asset_library.PROJECT_TAG_PREFIX) for t in asset.tags)
+
+
 def test_render_job_skips_library_when_kind_not_given(tmp_path):
     """The /mask-preview route reuses run_render_job but never passes
-    library_kind -- a diagnostic mask preview isn't an asset worth cataloging."""
+    library_kind -- a diagnostic mask preview isn't an asset worth cataloging.
+    Nothing was ever staged for it, so there's genuinely nothing to save --
+    not just "library happens to be empty right now" (true of every job
+    immediately after completion under the new stage-then-save flow), which
+    is why this also confirms save_job_to_library() itself raises."""
     def fake_render(*, output_path, **kwargs):
         Path(output_path).write_bytes(b"fake-mask-bytes")
 
@@ -62,11 +106,16 @@ def test_render_job_skips_library_when_kind_not_given(tmp_path):
 
     assert jobs.get_job(job.id).status is jobs.JobStatus.DONE
     assert asset_library.list_assets() == []
+    with pytest.raises(ValueError, match="Nothing to save"):
+        _save(job.id)
 
 
-def test_render_job_library_failure_does_not_flip_job_to_error(monkeypatch, tmp_path):
-    """Cataloging is best-effort: the render already succeeded and its file
-    already exists, so a library-side problem must not hide that from the caller."""
+def test_render_job_staging_never_touches_asset_library(monkeypatch, tmp_path):
+    """Staging (jobs.stage_for_library) is a pure in-memory dict write --
+    it must never call asset_library.add() itself, since that call now only
+    happens later, explicitly, via save_job_to_library(). Confirmed by
+    making asset_library.add() raise: the render job must still complete
+    normally, proving it was never even attempted during staging."""
     def fake_render(*, output_path, **kwargs):
         Path(output_path).write_bytes(b"fake-video-bytes")
 
@@ -82,6 +131,14 @@ def test_render_job_library_failure_does_not_flip_job_to_error(monkeypatch, tmp_
     result = jobs.get_job(job.id)
     assert result.status is jobs.JobStatus.DONE
     assert output.read_bytes() == b"fake-video-bytes"
+
+    # Unlike the old immediate-registration design, a *real* save failure
+    # is no longer silently swallowed -- it's now a deliberate, explicit,
+    # user-initiated action (POST /jobs/{id}/save), so a genuine failure
+    # here should be reportable, not hidden. This is an intentional
+    # behavior change, not an oversight.
+    with pytest.raises(OSError, match="disk full"):
+        _save(job.id)
 
 
 @pytest.mark.anyio
@@ -106,7 +163,7 @@ async def test_music_job_downloads_audio_and_registers_in_library(tmp_path, aces
     assert result.status is jobs.JobStatus.DONE, result.error
     assert output.read_bytes() == b"audio-bytes"
 
-    [asset] = asset_library.list_assets()
+    asset = _save(job.id)
     assert asset.kind == "generated"
     assert asset.tags == ["music"]
     assert asset.provenance == {
@@ -137,7 +194,7 @@ async def test_music_job_provenance_records_submitted_lyrics_not_backend_marker(
     result = jobs.get_job(job.id)
     assert result.status is jobs.JobStatus.DONE, result.error
 
-    [asset] = asset_library.list_assets()
+    asset = _save(job.id)
     assert asset.provenance["lyrics"] == "some lyrics I typed"
     assert asset.provenance["instrumental"] is True
 
@@ -198,7 +255,7 @@ async def test_music_job_routes_to_remix_for_cover_task_type(tmp_path, acestep_s
     assert kwargs["src_audio_bytes"] == b"original-song-bytes"
     assert kwargs["cover_strength"] == 0.5
 
-    [asset] = asset_library.list_assets()
+    asset = _save(job.id)
     assert asset.provenance["task_type"] == "cover"
     assert asset.provenance["source_asset_path"] == str(source)
 
@@ -230,7 +287,7 @@ async def test_music_job_routes_to_remix_for_text2music_with_reference_audio(tmp
     )
 
     assert calls == ["remix"]
-    [asset] = asset_library.list_assets()
+    asset = _save(job.id)
     assert asset.provenance["reference_asset_path"] == str(reference)
 
 
@@ -257,7 +314,7 @@ async def test_music_job_uses_generate_for_plain_text2music(tmp_path, acestep_se
     )
 
     assert calls == ["generate"]
-    [asset] = asset_library.list_assets()
+    asset = _save(job.id)
     assert "task_type" not in asset.provenance
 
 
@@ -279,7 +336,7 @@ async def test_sound_effect_job_downloads_audio_and_registers_in_library(tmp_pat
     assert result.status is jobs.JobStatus.DONE, result.error
     assert output.read_bytes() == b"sfx-bytes"
 
-    [asset] = asset_library.list_assets()
+    asset = _save(job.id)
     assert asset.kind == "generated"
     assert asset.tags == ["sound-effect"]
     assert asset.provenance == {"prompt": "gentle wind chimes", "duration": 8.0}
@@ -302,7 +359,7 @@ async def test_image_job_downloads_image_and_registers_in_library(tmp_path):
     assert result.status is jobs.JobStatus.DONE, result.error
     assert output.read_bytes() == b"fake-png-bytes"
 
-    [asset] = asset_library.list_assets()
+    asset = _save(job.id)
     assert asset.kind == "generated"
     assert asset.tags == ["image"]
     assert asset.provenance == {"prompt": "a lofi bedroom at sunset", "model": "sdxl"}
@@ -341,7 +398,7 @@ async def test_image_job_with_reference_image_passes_bytes_and_strength_to_gener
         "strength": 0.4,
     }
 
-    [asset] = asset_library.list_assets()
+    asset = _save(job.id)
     assert asset.provenance == {"prompt": "a lofi bedroom at sunset", "model": "sdxl", "strength": 0.4}
 
 
@@ -372,7 +429,7 @@ async def test_image_job_resolves_generator_from_registry_by_model_when_none_inj
         assert result.status is jobs.JobStatus.DONE, result.error
         assert output.read_bytes() == b"fake-from-registry-bytes"
 
-        [asset] = asset_library.list_assets()
+        asset = _save(job.id)
         assert asset.provenance["model"] == "test-registry-fake"
     finally:
         del generation_registry._IMAGE_GENERATORS["test-registry-fake"]
@@ -434,7 +491,7 @@ async def test_semantic_mask_job_writes_mask_then_renders(tmp_path, test_photo):
     assert seen["mask_path"] == str(mask_path)
     assert seen["effect"] == ["dust"]
 
-    [asset] = asset_library.list_assets()
+    asset = _save(job.id)
     assert asset.kind == "generated"
     assert asset.tags == ["photo", "dust"]
     assert asset.provenance == {"mask_prompt": "sky", "effect": ["dust"]}

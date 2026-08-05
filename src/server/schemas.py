@@ -11,6 +11,13 @@ class JobStatusResponse(BaseModel):
     status: str
     output_path: str | None = None
     error: str | None = None
+    # can_save: true once the job has finished and staged a save candidate
+    # (server/jobs.py's Job.pending_library) that POST /jobs/{id}/save
+    # hasn't consumed yet -- the web UI shows a "Save to library" button
+    # exactly when this is true. saved_asset_id is set after a successful
+    # save, letting the UI show "already saved" instead of the button again.
+    can_save: bool = False
+    saved_asset_id: str | None = None
 
 
 class CapabilitiesResponse(BaseModel):
@@ -38,3 +45,7 @@ class AssetResponse(BaseModel):
     added_at: str
     tags: list[str]
     provenance: dict | None = None
+    # Derived from the asset's own project:* tag (see asset_library's module
+    # docstring) -- excluded from `tags` above once present here, so it
+    # isn't shown twice.
+    project: str | None = None

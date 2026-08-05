@@ -26,6 +26,12 @@ ephemeral per-job scratch space), since the library needs to be useful from
 the CLI alone, with no API involved. The env var/default path still say
 "cinemagraph" because that's the product's own data home (~/.cinemagraph/),
 not a reference to the Python package of the same name.
+
+Projects (2026-08-05) are a reserved-prefix tag (PROJECT_TAG_PREFIX,
+"project:") rather than a second table -- consistent with this module's own
+Hydrus-inspired "tags not folders" shape, and needs no schema migration.
+set_project()/list_projects()/rename_project()/delete_project() manage that
+tag; list_assets(project=...) filters by it the same way tag= already did.
 """
 from __future__ import annotations
 
@@ -39,6 +45,14 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 KINDS = ("reference", "source", "generated")
+
+# Projects are deliberately *not* a second table -- they're a reserved-prefix
+# tag (see docs/DESIGN.md sec 5.1's own "tags not folders" rationale). That
+# gets grouping/filtering essentially for free (list_assets(tag=...) already
+# existed) with zero schema migration, at the cost of enforcing "one project
+# per asset" ourselves (set_project below strips any other project:* tag
+# before adding the new one) rather than the database doing it via a column.
+PROJECT_TAG_PREFIX = "project:"
 
 
 @dataclass(frozen=True)
@@ -162,7 +176,7 @@ def get(asset_id: str) -> Asset | None:
         conn.close()
 
 
-def list_assets(kind: str | None = None, tag: str | None = None) -> list[Asset]:
+def list_assets(kind: str | None = None, tag: str | None = None, project: str | None = None) -> list[Asset]:
     root = library_root()
     conn = _connect(root)
     try:
@@ -174,6 +188,9 @@ def list_assets(kind: str | None = None, tag: str | None = None) -> list[Asset]:
         if tag is not None:
             clauses.append("(',' || tags || ',') LIKE ?")
             params.append(f"%,{tag},%")
+        if project is not None:
+            clauses.append("(',' || tags || ',') LIKE ?")
+            params.append(f"%,{PROJECT_TAG_PREFIX}{project},%")
         if clauses:
             query += " WHERE " + " AND ".join(clauses)
         query += " ORDER BY added_at DESC"
@@ -200,3 +217,79 @@ def remove(asset_id: str, delete_file: bool = True) -> bool:
         return True
     finally:
         conn.close()
+
+
+def set_project(asset_id: str, project: str | None) -> Asset:
+    """Assigns an asset to a project (or clears it, if project=None) by
+    replacing any existing project:* tag with the new one -- a direct UPDATE
+    on the tags column, not a re-add(), since no file content is changing.
+    Raises ValueError if asset_id isn't in the library."""
+    root = library_root()
+    conn = _connect(root)
+    try:
+        row = conn.execute("SELECT * FROM assets WHERE id = ?", (asset_id,)).fetchone()
+        if row is None:
+            raise ValueError(f"No asset with id '{asset_id}'")
+        tags = [t for t in row["tags"].split(",") if t and not t.startswith(PROJECT_TAG_PREFIX)]
+        if project:
+            tags.append(f"{PROJECT_TAG_PREFIX}{project}")
+        conn.execute("UPDATE assets SET tags = ? WHERE id = ?", (",".join(tags), asset_id))
+        conn.commit()
+        row = conn.execute("SELECT * FROM assets WHERE id = ?", (asset_id,)).fetchone()
+        return _row_to_asset(row, root)
+    finally:
+        conn.close()
+
+
+def list_projects() -> list[str]:
+    """Every distinct project name currently in use, sorted -- there's no
+    separate projects table to query (see PROJECT_TAG_PREFIX's own docstring),
+    so this scans tags for the reserved prefix instead."""
+    root = library_root()
+    conn = _connect(root)
+    try:
+        rows = conn.execute(
+            "SELECT DISTINCT tags FROM assets WHERE tags LIKE ?", (f"%{PROJECT_TAG_PREFIX}%",)
+        ).fetchall()
+        names = set()
+        for row in rows:
+            for t in row["tags"].split(","):
+                if t.startswith(PROJECT_TAG_PREFIX):
+                    names.add(t[len(PROJECT_TAG_PREFIX):])
+        return sorted(names)
+    finally:
+        conn.close()
+
+
+def _bulk_retag(old_tag: str, new_tag: str | None) -> int:
+    """Replaces one exact tag with another (or removes it, if new_tag=None)
+    across every asset that has it. Shared by rename_project/delete_project
+    -- both are really the same "swap this tag everywhere" operation."""
+    root = library_root()
+    conn = _connect(root)
+    try:
+        rows = conn.execute(
+            "SELECT id, tags FROM assets WHERE (',' || tags || ',') LIKE ?", (f"%,{old_tag},%",)
+        ).fetchall()
+        for row in rows:
+            tags = [t for t in row["tags"].split(",") if t and t != old_tag]
+            if new_tag:
+                tags.append(new_tag)
+            conn.execute("UPDATE assets SET tags = ? WHERE id = ?", (",".join(tags), row["id"]))
+        conn.commit()
+        return len(rows)
+    finally:
+        conn.close()
+
+
+def rename_project(old: str, new: str) -> int:
+    """Renames a project across every asset that has it. Returns the count
+    of assets updated (0 if no asset currently uses `old`)."""
+    return _bulk_retag(f"{PROJECT_TAG_PREFIX}{old}", f"{PROJECT_TAG_PREFIX}{new}")
+
+
+def delete_project(name: str) -> int:
+    """Un-assigns a project from every asset that has it -- the assets
+    themselves are untouched, only the project:* tag is removed. Returns the
+    count of assets updated."""
+    return _bulk_retag(f"{PROJECT_TAG_PREFIX}{name}", None)

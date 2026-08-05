@@ -70,6 +70,12 @@ every request:
   external service" routes above (no satellite container involved, no
   service_available() check) -- purely local ffmpeg subprocess work. See
   docs/DESIGN.md sec 5.6.
+- /projects (GET/rename/DELETE) and /library/{id}/project manage the
+  reserved-prefix "project:*" tag asset_library uses to group content
+  (see its own module docstring) -- no new table, just a friendlier surface
+  over tag filtering that already existed. POST /jobs/{id}/save also takes
+  an optional `project` field, the primary way an asset gets assigned to one
+  in the first place (at the moment it's actually kept, not before).
 """
 import shutil
 import tempfile
@@ -249,7 +255,6 @@ async def render_video(
     grain: float = Form(0.03),
     also_gif: bool = Form(False),
     loop_duration: float | None = Form(None),
-    save_to_library: bool = Form(True),
 ):
     if loop_duration and also_gif:
         raise HTTPException(422, pipeline._LOOP_DURATION_GIF_ERROR)
@@ -267,7 +272,7 @@ async def render_video(
 
     background_tasks.add_task(
         service.run_render_job, job.id, pipeline.save_cinemagraph_video, output_path,
-        library_kind="generated" if save_to_library else None, library_tags=["video"],
+        library_kind="generated", library_tags=["video"],
         input_path=str(input_path), mask_path=str(mask_path) if mask_path else None,
         still_frame_index=still_frame_index, blend_frames=blend_frames, auto_trim_loop=auto_trim,
         mask_threshold=mask_threshold, feather=feather,
@@ -310,7 +315,6 @@ async def render_photo(
     grain: float = Form(0.03),
     also_gif: bool = Form(False),
     loop_duration: float | None = Form(None),
-    save_to_library: bool = Form(True),
 ):
     """Render a photo cinemagraph.
 
@@ -375,7 +379,7 @@ async def render_photo(
         background_tasks.add_task(
             service.run_photo_semantic_mask_job, job.id, output_path,
             settings=settings, photo_path=input_path, mask_path=job_dir / "mask.png",
-            mask_prompt=mask_prompt, library_kind="generated" if save_to_library else None,
+            mask_prompt=mask_prompt, library_kind="generated",
             library_tags=["photo", *effect],
             **render_kwargs,
         )
@@ -386,7 +390,7 @@ async def render_photo(
             await _save_upload(mask, mask_path)
         background_tasks.add_task(
             service.run_render_job, job.id, pipeline.save_cinemagraph_from_photo, output_path,
-            library_kind="generated" if save_to_library else None, library_tags=["photo", *effect],
+            library_kind="generated", library_tags=["photo", *effect],
             photo_path=str(input_path), mask_path=str(mask_path) if mask_path else None,
             **render_kwargs,
         )
@@ -429,6 +433,8 @@ async def job_status(job_id: str):
         status=job.status.value,
         output_path=str(job.output_path) if job.output_path else None,
         error=job.error,
+        can_save=job.pending_library is not None,
+        saved_asset_id=job.saved_asset_id,
     )
 
 
@@ -440,10 +446,33 @@ async def job_file(job_id: str):
     return FileResponse(str(job.output_path))
 
 
+@app.post("/jobs/{job_id}/save", response_model=AssetResponse)
+async def save_job(job_id: str, project: str | None = Form(None)):
+    """Registers a completed job's output into the asset library on demand
+    -- the explicit, post-generation "keep this" action that replaced an
+    earlier pre-generation `save_to_library` toggle (deciding whether to
+    keep a generation before seeing/hearing it was the wrong shape). See
+    service.save_job_to_library's own docstring for the staging mechanism
+    this consumes.
+
+    `project` (optional) assigns the saved asset to a project right here --
+    the save moment doubles as the project-assignment moment, per the same
+    project owner decision that put saving itself after generation instead
+    of before.
+    """
+    try:
+        asset = service.save_job_to_library(job_id, project=project or None)
+    except ValueError as e:
+        raise HTTPException(404, str(e))
+    return _asset_to_response(asset)
+
+
 def _asset_to_response(asset) -> AssetResponse:
+    project = next((t[len(library.PROJECT_TAG_PREFIX):] for t in asset.tags if t.startswith(library.PROJECT_TAG_PREFIX)), None)
+    tags = [t for t in asset.tags if not t.startswith(library.PROJECT_TAG_PREFIX)]
     return AssetResponse(
         id=asset.id, kind=asset.kind, original_filename=asset.original_filename,
-        added_at=asset.added_at, tags=asset.tags, provenance=asset.provenance,
+        added_at=asset.added_at, tags=tags, provenance=asset.provenance, project=project,
     )
 
 
@@ -452,6 +481,7 @@ async def library_add(
     upload: UploadFile = File(...),
     kind: str = Form("reference"),
     tags: str = Form(""),
+    project: str | None = Form(None),
 ):
     if kind not in library.KINDS:
         raise HTTPException(422, f"Unknown kind '{kind}'. Choose from: {', '.join(library.KINDS)}")
@@ -461,6 +491,8 @@ async def library_add(
         tmp_path = Path(tmp.name)
     try:
         tag_list = [t.strip() for t in tags.split(",") if t.strip()]
+        if project:
+            tag_list.append(f"{library.PROJECT_TAG_PREFIX}{project}")
         asset = library.add(str(tmp_path), kind=kind, tags=tag_list, original_filename=upload.filename)
     finally:
         tmp_path.unlink(missing_ok=True)
@@ -468,8 +500,38 @@ async def library_add(
 
 
 @app.get("/library", response_model=list[AssetResponse])
-async def library_list(kind: str | None = None, tag: str | None = None):
-    return [_asset_to_response(a) for a in library.list_assets(kind=kind, tag=tag)]
+async def library_list(kind: str | None = None, tag: str | None = None, project: str | None = None):
+    return [_asset_to_response(a) for a in library.list_assets(kind=kind, tag=tag, project=project)]
+
+
+@app.post("/library/{asset_id}/project", response_model=AssetResponse)
+async def set_asset_project(asset_id: str, project: str | None = Form(None)):
+    """Assigns (or clears, if `project` is empty/omitted) the project an
+    existing library asset belongs to -- the Library tab's own way to
+    organize/reorganize content after the fact, independent of the
+    save-time assignment POST /jobs/{id}/save also offers."""
+    try:
+        asset = library.set_project(asset_id, project or None)
+    except ValueError as e:
+        raise HTTPException(404, str(e))
+    return _asset_to_response(asset)
+
+
+@app.get("/projects", response_model=list[str])
+async def list_projects():
+    return library.list_projects()
+
+
+@app.post("/projects/rename")
+async def rename_project(old: str = Form(...), new: str = Form(...)):
+    count = library.rename_project(old, new)
+    return {"renamed": old, "to": new, "count": count}
+
+
+@app.delete("/projects/{name}")
+async def delete_project(name: str):
+    count = library.delete_project(name)
+    return {"deleted": name, "count": count}
 
 
 @app.get("/library/{asset_id}", response_model=AssetResponse)
@@ -531,7 +593,6 @@ async def generate_music(
     cover_strength: float = Form(1.0),
     repainting_start: float = Form(0.0),
     repainting_end: float = Form(-1.0),
-    save_to_library: bool = Form(True),
 ):
     """Proxies to a registered MusicGenerator adapter (generation_ports.py) --
     `model` picks which one ("acestep" = local ACE-Step, self-hosted GPU
@@ -587,7 +648,7 @@ async def generate_music(
         instrumental=instrumental, model=model, task_type=task_type,
         src_audio_path=src_audio_path, reference_audio_path=reference_audio_path,
         cover_strength=cover_strength, repainting_start=repainting_start, repainting_end=repainting_end,
-        library_kind="generated" if save_to_library else None,
+        library_kind="generated",
     )
     return JobResponse(job_id=job.id)
 
@@ -598,7 +659,6 @@ async def generate_sound_effect(
     settings: SettingsDep,
     prompt: str = Form(...),
     duration: float = Form(10.0),
-    save_to_library: bool = Form(True),
 ):
     """Proxies to the sound-effects/ service (Stable Audio Open). Unlike
     ACE-Step, that service answers in one synchronous call -- still run as
@@ -612,7 +672,7 @@ async def generate_sound_effect(
     background_tasks.add_task(
         service.run_sound_effect_job, job.id, output_path,
         settings=settings, prompt=prompt, duration=duration,
-        library_kind="generated" if save_to_library else None,
+        library_kind="generated",
     )
     return JobResponse(job_id=job.id)
 
@@ -625,7 +685,6 @@ async def generate_image(
     reference_image: UploadFile | None = File(None),
     strength: float = Form(0.6),
     model: str = Form("sdxl"),
-    save_to_library: bool = Form(True),
 ):
     """Proxies to a registered ImageGenerator adapter (generation_ports.py) --
     `model` picks which one ("sdxl" = local SDXL/image-generation/, "gemini"
@@ -656,7 +715,7 @@ async def generate_image(
         service.run_image_job, job.id, output_path,
         settings=settings, prompt=prompt,
         reference_image_path=reference_image_path, strength=strength, model=model,
-        library_kind="generated" if save_to_library else None,
+        library_kind="generated",
     )
     return JobResponse(job_id=job.id)
 
@@ -687,7 +746,6 @@ async def assemble(
     music_crossfade_duration: float = Form(5.0),
     music_edge_fade_duration: float = Form(2.0),
     music_gap_duration: float = Form(0.0),
-    save_to_library: bool = Form(True),
 ):
     """Combines already-generated library assets (clips, music, sound
     effects) into one finished video via assembly.pipeline.assemble --
@@ -723,7 +781,7 @@ async def assemble(
         music_crossfade_duration=music_crossfade_duration,
         music_edge_fade_duration=music_edge_fade_duration,
         music_gap_duration=music_gap_duration,
-        library_kind="generated" if save_to_library else None,
+        library_kind="generated",
         provenance={
             "clip_asset_ids": clip_asset_ids,
             "music_asset_ids": music_asset_ids,

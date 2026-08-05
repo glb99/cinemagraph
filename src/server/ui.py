@@ -80,14 +80,20 @@ INDEX_HTML = """<!doctype html>
   .library-card img, .library-card video, .library-card audio { max-width: 100%; border-radius: 6px; margin-top: 0; }
   .library-meta { margin: 0.5rem 0; font-size: 0.85rem; }
   .library-card button { padding: 0.3rem 0.7rem; font-size: 0.85rem; background: #555; }
-  .asset-picker { border: 1px solid #333; border-radius: 8px; padding: 0.5rem 0.8rem; max-height: 10rem; overflow-y: auto; }
-  .asset-picker button {
-    display: block; width: 100%; text-align: left; background: none; color: #e8e8e8;
-    border: none; border-radius: 4px; padding: 0.35rem 0.4rem; font-size: 0.9rem; margin: 0.1rem 0;
+  .asset-picker { border: 1px solid #333; border-radius: 8px; padding: 0.5rem 0.8rem; max-height: 20rem; overflow-y: auto; }
+  .picker-row { display: flex; align-items: center; gap: 0.6rem; padding: 0.35rem 0.3rem; border-radius: 6px; }
+  .picker-row:hover { background: #24272e; }
+  .picker-row.selected { background: #1d2b1d; }
+  .picker-row img, .picker-row video { border-radius: 4px; margin: 0; flex-shrink: 0; object-fit: cover; }
+  .picker-row img { width: 56px; height: 56px; }
+  .picker-row video { width: 100px; height: 56px; }
+  .picker-row audio { flex: 1 1 auto; min-width: 0; height: 32px; margin: 0; }
+  .picker-row-label {
+    flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis;
+    white-space: nowrap; font-size: 0.9rem;
   }
-  .asset-picker button:hover { background: #24272e; }
-  .asset-picker button:disabled { color: #555; cursor: default; }
-  .asset-picker button:disabled:hover { background: none; }
+  .picker-row button { flex-shrink: 0; padding: 0.3rem 0.7rem; font-size: 0.85rem; width: auto; }
+  .picker-row button:disabled { background: #555; cursor: default; }
   .selected-chips { margin: 0.5rem 0; display: flex; flex-wrap: wrap; gap: 0.4rem; }
   .chip {
     display: inline-flex; align-items: center; gap: 0.4rem; background: #24272e;
@@ -96,6 +102,20 @@ INDEX_HTML = """<!doctype html>
   .chip button {
     background: none; color: #aaa; border: none; padding: 0 0.2rem; font-size: 0.9rem; cursor: pointer;
   }
+  .waveform {
+    display: block; width: 100%; height: 80px; background: #1a1c20;
+    border: 1px solid #333; border-radius: 6px; cursor: crosshair; margin-bottom: 0.5rem;
+  }
+  .save-to-library-btn { background: #2d8a4e; }
+  .project-picker { display: flex; align-items: center; gap: 0.4rem; margin-top: 0.5rem; flex-wrap: wrap; }
+  .project-picker select { width: auto; }
+  .project-picker input[type="text"] { width: 10rem; display: none; }
+  .library-project-row { display: flex; align-items: center; gap: 0.4rem; margin-bottom: 1rem; flex-wrap: wrap; }
+  .library-project-row select { width: auto; }
+  .library-project-row input[type="text"] { width: 10rem; }
+  .library-project-row button { padding: 0.4rem 0.8rem; font-size: 0.85rem; }
+  .asset-project-row { display: flex; align-items: center; gap: 0.4rem; margin-top: 0.4rem; }
+  .asset-project-row select { width: auto; font-size: 0.8rem; }
 </style>
 </head>
 <body>
@@ -140,7 +160,6 @@ the underlying routes don't already do themselves.</p>
     <p class="hint">Stretches the output to this length by repeating the --duration loop, instead of
     rendering unique frames the whole way (e.g. an hour-long ambient loop).</p>
   </fieldset>
-  <label><input type="checkbox" id="photo-save-to-library" checked> Save to library</label>
   <button type="submit">Render</button>
 </form>
 <div class="status" id="photo-status"></div>
@@ -173,7 +192,6 @@ the underlying routes don't already do themselves.</p>
     rendering unique frames the whole way (e.g. an hour-long ambient loop from a few seconds of
     source). Not compatible with .gif export.</p>
   </fieldset>
-  <label><input type="checkbox" id="video-save-to-library" checked> Save to library</label>
   <button type="submit">Render</button>
 </form>
 <div class="status" id="video-status"></div>
@@ -216,8 +234,11 @@ the underlying routes don't already do themselves.</p>
     <label>Cover strength <input type="number" id="music-cover-strength" value="1.0" min="0" max="1" step="0.05"></label>
   </div>
   <div class="row" id="music-repaint-row" style="display:none">
-    <label>Repaint start (s) <input type="number" id="music-repaint-start" value="0" min="0" step="0.1"></label>
-    <label>Repaint end (s, -1 = to end) <input type="number" id="music-repaint-end" value="-1" step="0.1"></label>
+    <p class="hint">Drag on the waveform to select the section to repaint (or type the times below):</p>
+    <canvas id="music-repaint-waveform" width="680" height="80" class="waveform"></canvas>
+    <label>Start (s) <input type="number" id="music-repaint-start" value="0" min="0" step="0.1"></label>
+    <label>End (s, -1 = to end) <input type="number" id="music-repaint-end" value="-1" step="0.1"></label>
+    <button type="button" id="music-repaint-preview">▶ Preview selection</button>
   </div>
   <div class="row">
     <p class="hint">Optional: reference audio for style transfer (independent of task type):</p>
@@ -227,7 +248,6 @@ the underlying routes don't already do themselves.</p>
   <div class="row" id="music-model-row" style="display:none">
     <label>Model <select id="music-model"></select></label>
   </div>
-  <label><input type="checkbox" id="music-save-to-library" checked> Save to library</label>
   <div class="row"></div>
   <button type="submit">Generate</button>
 </form>
@@ -246,7 +266,6 @@ the underlying routes don't already do themselves.</p>
     </label>
   </div>
   <label>Duration (s) <input type="number" id="sfx-duration" value="10" min="1" max="47"></label>
-  <label><input type="checkbox" id="sfx-save-to-library" checked> Save to library</label>
   <div class="row"></div>
   <button type="submit">Generate</button>
 </form>
@@ -273,7 +292,6 @@ the underlying routes don't already do themselves.</p>
   <div class="row" id="image-model-row" style="display:none">
     <label>Model <select id="image-model"></select></label>
   </div>
-  <label><input type="checkbox" id="image-save-to-library" checked> Save to library</label>
   <div class="row"></div>
   <button type="submit">Generate</button>
 </form>
@@ -287,6 +305,10 @@ the underlying routes don't already do themselves.</p>
 <p class="hint">Combines already-generated library assets into one video -- click to add each in
 playback order, click again from the selected list to remove. Sound effects (optional) mix
 together continuously under the music, order doesn't matter for those.</p>
+<div class="row">
+  <label>Project <select id="assemble-project-filter"><option value="">all</option></select></label>
+  <span class="hint">Narrows the pickers below to one project's assets.</span>
+</div>
 <div class="row">
   <strong>Video clips (in order)</strong>
   <div class="asset-picker" id="assemble-clip-picker"></div>
@@ -310,7 +332,6 @@ together continuously under the music, order doesn't matter for those.</p>
 </div>
 <p class="hint">Music gap: a silent pause between songs instead of crossfading them (0 = crossfade
 as usual). Sound effects keep playing continuously through the gap -- only the music pauses.</p>
-<label><input type="checkbox" id="assemble-save-to-library" checked> Save to library</label>
 <button type="button" id="assemble-refresh">Refresh assets</button>
 <button type="button" id="assemble-submit">Assemble</button>
 <div class="status" id="assemble-status"></div>
@@ -330,7 +351,16 @@ as usual). Sound effects keep playing continuously through the gap -- only the m
     </select>
   </label>
   <label>Tag <input type="text" id="library-tag-filter" placeholder="e.g. photo"></label>
+  <label>Project <select id="library-project-filter"><option value="">all</option></select></label>
   <button type="button" id="library-refresh">Refresh</button>
+</div>
+<div class="library-project-row">
+  <strong>Manage projects:</strong>
+  <select id="library-project-manage"><option value="">(pick a project)</option></select>
+  <span class="hint">rename to</span>
+  <input type="text" id="library-project-rename-to" placeholder="new name">
+  <button type="button" id="library-project-rename">Rename</button>
+  <button type="button" id="library-project-delete">Delete</button>
 </div>
 <div class="error" id="library-error"></div>
 <div class="library-grid" id="library-list">(loading...)</div>
@@ -466,6 +496,53 @@ function assetPickerLabel(asset) {
   return `${asset.original_filename} — ${when} (${shortId})`;
 }
 
+async function fetchProjects() {
+  return (await fetch("/projects")).json();
+}
+
+const NEW_PROJECT_VALUE = "__new__";
+
+/** Populates a <select> with "No project", every existing project name, and
+ * a trailing "+ New project..." option -- shared by every project picker
+ * (Library card, Library/Assemble toolbar, the save-flow's own picker)
+ * instead of duplicating this per instance. Pair with wireNewProjectInput
+ * (shows/hides a text <input> when "+ New project..." is picked) and
+ * selectedProject (reads the effective choice back out at submit time). */
+function populateProjectSelect(selectEl, projects, currentValue) {
+  selectEl.innerHTML = "";
+  const noneOpt = document.createElement("option");
+  noneOpt.value = "";
+  noneOpt.textContent = "No project";
+  selectEl.appendChild(noneOpt);
+  for (const name of projects) {
+    const opt = document.createElement("option");
+    opt.value = name;
+    opt.textContent = name;
+    selectEl.appendChild(opt);
+  }
+  const newOpt = document.createElement("option");
+  newOpt.value = NEW_PROJECT_VALUE;
+  newOpt.textContent = "+ New project…";
+  selectEl.appendChild(newOpt);
+  selectEl.value = currentValue || "";
+}
+
+function wireNewProjectInput(selectEl, inputEl) {
+  const sync = () => {
+    inputEl.style.display = selectEl.value === NEW_PROJECT_VALUE ? "inline-block" : "none";
+  };
+  selectEl.addEventListener("change", sync);
+  sync();
+}
+
+/** "" (no project) unless "+ New project..." is selected, in which case the
+ * paired input's trimmed value is used (still "" if left blank -- callers
+ * treat "" as "no project" either way, so a blank new-project name is a
+ * harmless no-op rather than a validation error). */
+function selectedProject(selectEl, inputEl) {
+  return selectEl.value === NEW_PROJECT_VALUE ? inputEl.value.trim() : selectEl.value;
+}
+
 /** Photo tab's input is either a fresh upload or a library asset -- exactly
  * one, same "pick one or the other" pattern already used for mask vs
  * mask_prompt on this tab. Selecting a library asset clears any chosen
@@ -486,17 +563,16 @@ async function loadPhotoLibraryAssets() {
     return;
   }
   for (const asset of imageAssets) {
-    const btn = document.createElement("button");
-    btn.type = "button";
     const selected = photoLibraryAssetId === asset.id;
-    btn.textContent = (selected ? "✓ " : "+ ") + assetPickerLabel(asset);
-    btn.addEventListener("click", () => {
-      photoLibraryAssetId = selected ? null : asset.id;
-      document.getElementById("photo-input").value = "";
-      renderPhotoLibrarySelection(asset);
-      loadPhotoLibraryAssets();
-    });
-    container.appendChild(btn);
+    container.appendChild(assetPickerRow(asset, {
+      selected,
+      onToggle: () => {
+        photoLibraryAssetId = selected ? null : asset.id;
+        document.getElementById("photo-input").value = "";
+        renderPhotoLibrarySelection(asset);
+        loadPhotoLibraryAssets();
+      },
+    }));
   }
 }
 
@@ -549,16 +625,16 @@ async function loadMusicSourceLibraryAssets() {
     return;
   }
   for (const asset of audioAssets) {
-    const btn = document.createElement("button");
-    btn.type = "button";
     const selected = musicSourceLibraryAssetId === asset.id;
-    btn.textContent = (selected ? "✓ " : "+ ") + assetPickerLabel(asset);
-    btn.addEventListener("click", () => {
-      musicSourceLibraryAssetId = selected ? null : asset.id;
-      renderMusicSourceLibrarySelection(asset);
-      loadMusicSourceLibraryAssets();
-    });
-    container.appendChild(btn);
+    container.appendChild(assetPickerRow(asset, {
+      selected,
+      onToggle: () => {
+        musicSourceLibraryAssetId = selected ? null : asset.id;
+        renderMusicSourceLibrarySelection(asset);
+        loadMusicSourceLibraryAssets();
+        updateMusicFormForTaskType();
+      },
+    }));
   }
 }
 
@@ -581,6 +657,137 @@ function renderMusicSourceLibrarySelection(asset) {
   container.appendChild(chip);
 }
 
+/** Repaint's start/end fields are drag-selectable on a waveform instead of
+ * typed blind -- canvas + the browser's native Web Audio API
+ * (AudioContext.decodeAudioData), no charting library, matching this file's
+ * own "single self-contained page, no build step" constraint (see module
+ * docstring -- non-.py assets already caused one real packaging bug in this
+ * project's history, documented in docs/DESIGN.md's decision log). Peaks
+ * (min/max per pixel column, the standard lightweight waveform technique)
+ * are computed once per loaded asset and cached, so every redraw triggered
+ * by a drag frame or a manual number-input edit is just cheap canvas
+ * fillRect calls, not a re-scan of the raw PCM data. */
+let repaintWaveformAssetId = null;  // which asset's buffer/peaks are currently loaded
+let repaintAudioBuffer = null;      // decoded Web Audio buffer -- source for both peaks and preview playback
+let repaintAudioCtx = null;         // created lazily on first use, standard practice for AudioContext
+let repaintPeaks = null;            // cached [min, max] pairs, one per canvas pixel column
+
+async function loadRepaintWaveform(assetId) {
+  if (!assetId || assetId === repaintWaveformAssetId) return;
+  try {
+    const resp = await fetch(`/library/${assetId}/file`);
+    const arrayBuffer = await resp.arrayBuffer();
+    repaintAudioCtx = repaintAudioCtx || new (window.AudioContext || window.webkitAudioContext)();
+    repaintAudioBuffer = await repaintAudioCtx.decodeAudioData(arrayBuffer);
+    repaintWaveformAssetId = assetId;
+    computeRepaintPeaks();
+    drawRepaintWaveform();
+  } catch (err) {
+    document.getElementById("music-error").textContent = `Couldn't load waveform: ${err.message}`;
+  }
+}
+
+function computeRepaintPeaks() {
+  const canvas = document.getElementById("music-repaint-waveform");
+  const data = repaintAudioBuffer.getChannelData(0);
+  const samplesPerPixel = Math.max(1, Math.floor(data.length / canvas.width));
+  repaintPeaks = [];
+  for (let x = 0; x < canvas.width; x++) {
+    let min = 0, max = 0;
+    const start = x * samplesPerPixel;
+    for (let i = 0; i < samplesPerPixel; i++) {
+      const v = data[start + i] || 0;
+      if (v < min) min = v;
+      if (v > max) max = v;
+    }
+    repaintPeaks.push([min, max]);
+  }
+}
+
+/** Full redraw (bars from the cached peaks, then the selection highlight) --
+ * cheap enough (canvas has no persistent "layers" to update incrementally)
+ * to call on every drag-move frame and every manual start/end field edit,
+ * since it never touches the raw PCM data after computeRepaintPeaks()'s own
+ * one-time pass. */
+function drawRepaintWaveform() {
+  const canvas = document.getElementById("music-repaint-waveform");
+  const ctx = canvas.getContext("2d");
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  if (!repaintPeaks || !repaintAudioBuffer) return;
+
+  const mid = canvas.height / 2;
+  ctx.fillStyle = "#3a6ff0";
+  for (let x = 0; x < repaintPeaks.length; x++) {
+    const [min, max] = repaintPeaks[x];
+    ctx.fillRect(x, mid + min * mid, 1, Math.max(1, (max - min) * mid));
+  }
+
+  const duration = repaintAudioBuffer.duration;
+  const startSec = parseFloat(document.getElementById("music-repaint-start").value) || 0;
+  const endRaw = parseFloat(document.getElementById("music-repaint-end").value);
+  const endSec = (endRaw < 0 || isNaN(endRaw)) ? duration : endRaw;
+  const x1 = Math.max(0, Math.min(canvas.width, (startSec / duration) * canvas.width));
+  const x2 = Math.max(0, Math.min(canvas.width, (endSec / duration) * canvas.width));
+  ctx.fillStyle = "rgba(58, 111, 240, 0.35)";
+  ctx.fillRect(x1, 0, x2 - x1, canvas.height);
+}
+
+let repaintDragStartX = null;
+
+function updateRepaintSelectionFromPixels(pixelX1, pixelX2) {
+  const canvas = document.getElementById("music-repaint-waveform");
+  // e.offsetX (the caller's pixelX1/pixelX2) is reported relative to the
+  // canvas's *rendered* CSS box (stretched to 100% width by .waveform),
+  // which is NOT the same as canvas.width (the fixed 680 internal pixel
+  // buffer the drawing code and computeRepaintPeaks() use) -- confirmed as
+  // a real mismatch during manual verification (rendered ~722px vs. a 680px
+  // buffer at typical widths). Using getBoundingClientRect().width here
+  // keeps the fraction-of-track math correct regardless of how wide the
+  // canvas actually renders; drawRepaintWaveform()'s own fillRect calls
+  // stay in buffer-pixel space, which canvas 2D drawing always uses
+  // natively, so no equivalent fix is needed there.
+  const renderedWidth = canvas.getBoundingClientRect().width;
+  const duration = repaintAudioBuffer.duration;
+  const lo = Math.max(0, Math.min(pixelX1, pixelX2));
+  const hi = Math.min(renderedWidth, Math.max(pixelX1, pixelX2));
+  const startSec = (lo / renderedWidth) * duration;
+  // Snapping to the "-1 / to end" sentinel when the drag reaches near the
+  // right edge matches natural drag intent -- dragging to the visible end
+  // of the track should mean "to the end", not an oddly-precise
+  // duration-minus-epsilon value that happens to depend on canvas width.
+  const endSec = hi > renderedWidth * 0.99 ? -1 : (hi / renderedWidth) * duration;
+  document.getElementById("music-repaint-start").value = startSec.toFixed(2);
+  document.getElementById("music-repaint-end").value = endSec === -1 ? -1 : endSec.toFixed(2);
+  drawRepaintWaveform();
+}
+
+const repaintWaveformCanvas = document.getElementById("music-repaint-waveform");
+repaintWaveformCanvas.addEventListener("mousedown", (e) => {
+  if (!repaintAudioBuffer) return;
+  repaintDragStartX = e.offsetX;
+});
+repaintWaveformCanvas.addEventListener("mousemove", (e) => {
+  if (repaintDragStartX === null) return;
+  updateRepaintSelectionFromPixels(repaintDragStartX, e.offsetX);
+});
+window.addEventListener("mouseup", () => { repaintDragStartX = null; });
+
+// Manual edits to the number fields also keep the highlighted region in
+// sync -- dragging and typing are both first-class, neither is a dead end.
+document.getElementById("music-repaint-start").addEventListener("input", drawRepaintWaveform);
+document.getElementById("music-repaint-end").addEventListener("input", drawRepaintWaveform);
+
+document.getElementById("music-repaint-preview").addEventListener("click", () => {
+  if (!repaintAudioBuffer) return;
+  const startSec = parseFloat(document.getElementById("music-repaint-start").value) || 0;
+  const endRaw = parseFloat(document.getElementById("music-repaint-end").value);
+  const endSec = (endRaw < 0 || isNaN(endRaw)) ? repaintAudioBuffer.duration : endRaw;
+  const source = repaintAudioCtx.createBufferSource();
+  source.buffer = repaintAudioBuffer;
+  source.connect(repaintAudioCtx.destination);
+  source.start(0, startSec, Math.max(0.01, endSec - startSec));
+});
+
 async function loadMusicReferenceLibraryAssets() {
   const assets = await (await fetch("/library")).json();
   const container = document.getElementById("music-reference-picker");
@@ -593,17 +800,16 @@ async function loadMusicReferenceLibraryAssets() {
     return;
   }
   for (const asset of audioAssets) {
-    const btn = document.createElement("button");
-    btn.type = "button";
     const selected = musicReferenceLibraryAssetId === asset.id;
-    btn.textContent = (selected ? "✓ " : "+ ") + assetPickerLabel(asset);
-    btn.addEventListener("click", () => {
-      musicReferenceLibraryAssetId = selected ? null : asset.id;
-      renderMusicReferenceLibrarySelection(asset);
-      loadMusicReferenceLibraryAssets();
-      updateMusicFormForTaskType();
-    });
-    container.appendChild(btn);
+    container.appendChild(assetPickerRow(asset, {
+      selected,
+      onToggle: () => {
+        musicReferenceLibraryAssetId = selected ? null : asset.id;
+        renderMusicReferenceLibrarySelection(asset);
+        loadMusicReferenceLibraryAssets();
+        updateMusicFormForTaskType();
+      },
+    }));
   }
 }
 
@@ -661,6 +867,9 @@ function updateMusicFormForTaskType() {
   document.getElementById("music-repaint-row").style.display = taskType === "repaint" ? "block" : "none";
   const isRemix = taskType !== "text2music" || !!musicReferenceLibraryAssetId;
   populateMusicModelOptions(isRemix ? musicRemixModels : musicGenerationModels);
+  if (taskType === "repaint" && musicSourceLibraryAssetId) {
+    loadRepaintWaveform(musicSourceLibraryAssetId);
+  }
 }
 
 document.getElementById("music-task-type").addEventListener("change", updateMusicFormForTaskType);
@@ -700,11 +909,56 @@ function assetPreviewElement(asset) {
   return link;
 }
 
+/** Shared row renderer for every asset picker (Photo, Music source/
+ * reference, Assemble clip/music/sfx) -- replaces what used to be a plain
+ * text <button> with a real inline preview (assetPreviewElement itself,
+ * sized down via .picker-row's own CSS) next to the label, so a candidate
+ * can actually be seen or heard before picking it, not just read as a
+ * (often-truncated) prompt/filename string. `selected`/`disabled` drive the
+ * trailing button's default label/state; `buttonLabel` overrides that
+ * default for callers with a third state (Assemble's "Added, remove via the
+ * chip instead" case). `onToggle` is called with no arguments on click --
+ * every caller already closes over whatever state it needs to update. */
+function assetPickerRow(asset, { selected = false, disabled = false, buttonLabel, onToggle } = {}) {
+  const row = document.createElement("div");
+  row.className = "picker-row" + (selected ? " selected" : "");
+
+  const preview = assetPreviewElement(asset);
+  if (preview.tagName === "VIDEO") {
+    // A picker row is for identifying a candidate, not full playback --
+    // native controls at this thumbnail size are too cramped to be useful.
+    // Silent autoplay-loop instead: for a *cinemagraph* tool specifically,
+    // the motion itself is the useful signal, more so than a static frame.
+    preview.removeAttribute("controls");
+    preview.muted = true;
+    preview.loop = true;
+    preview.autoplay = true;
+    preview.playsInline = true;
+  }
+  row.appendChild(preview);
+
+  const label = document.createElement("span");
+  label.className = "picker-row-label";
+  label.textContent = assetPickerLabel(asset);
+  row.appendChild(label);
+
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.textContent = buttonLabel || (selected ? "Remove" : "Add");
+  btn.disabled = disabled;
+  btn.addEventListener("click", onToggle);
+  row.appendChild(btn);
+
+  return row;
+}
+
 /** original_filename/tags are user-supplied (an upload's own name, or
  * free-text tags from a manual `library add`), so every dynamic value here
  * goes through textContent/createElement, never innerHTML -- see this
- * module's docstring. */
-function assetCard(asset) {
+ * module's docstring. `projects` (already-fetched by loadLibrary, shared
+ * across every card in one render pass rather than one GET /projects per
+ * card) populates this card's own project <select>. */
+function assetCard(asset, projects) {
   const card = document.createElement("div");
   card.className = "library-card";
   card.appendChild(assetPreviewElement(asset));
@@ -730,7 +984,46 @@ function assetCard(asset) {
     tagLine.textContent = "tags: " + asset.tags.join(", ");
     meta.appendChild(tagLine);
   }
+
+  // Full prompt text, not the truncated version assetPickerLabel uses for
+  // compact picker rows -- this is the one place it's worth reading in
+  // full. mask_prompt covers the one job type (semantic-mask renders) whose
+  // "prompt" describes what to animate rather than what to generate.
+  const prompt = asset.provenance && (asset.provenance.prompt || asset.provenance.mask_prompt);
+  if (prompt) {
+    const promptLine = document.createElement("div");
+    promptLine.className = "hint";
+    promptLine.textContent = "Prompt: " + prompt;
+    meta.appendChild(promptLine);
+  }
   card.appendChild(meta);
+
+  const projectRow = document.createElement("div");
+  projectRow.className = "asset-project-row";
+  const projectSelect = document.createElement("select");
+  populateProjectSelect(projectSelect, projects, asset.project || "");
+  const projectInput = document.createElement("input");
+  projectInput.type = "text";
+  projectInput.placeholder = "new project name";
+  wireNewProjectInput(projectSelect, projectInput);
+  projectSelect.addEventListener("change", async () => {
+    if (projectSelect.value === NEW_PROJECT_VALUE) return;  // wait for a real choice
+    await fetch(`/library/${asset.id}/project`, {
+      method: "POST", body: new URLSearchParams({ project: projectSelect.value }),
+    });
+    loadLibrary();
+  });
+  projectInput.addEventListener("keydown", async (e) => {
+    if (e.key !== "Enter") return;
+    e.preventDefault();
+    const project = selectedProject(projectSelect, projectInput);
+    if (!project) return;
+    await fetch(`/library/${asset.id}/project`, { method: "POST", body: new URLSearchParams({ project }) });
+    loadLibrary();
+  });
+  projectRow.appendChild(projectSelect);
+  projectRow.appendChild(projectInput);
+  card.appendChild(projectRow);
 
   const delBtn = document.createElement("button");
   delBtn.type = "button";
@@ -745,6 +1038,31 @@ function assetCard(asset) {
   return card;
 }
 
+/** Refreshes one or more <select>s that list project names as plain filters
+ * (Library's own filter + manage dropdowns, Assemble's filter) -- "all"/
+ * "(pick a project)"-style placeholders, not populateProjectSelect's "No
+ * project"/"+ New project..." shape, since these pick among *existing*
+ * projects rather than assigning one. `selectSpecs` is a list of
+ * [elementId, placeholderText] pairs. */
+function refreshProjectFilterSelects(projects, selectSpecs) {
+  for (const [id, placeholder] of selectSpecs) {
+    const select = document.getElementById(id);
+    const current = select.value;
+    select.innerHTML = "";
+    const placeholderOpt = document.createElement("option");
+    placeholderOpt.value = "";
+    placeholderOpt.textContent = placeholder;
+    select.appendChild(placeholderOpt);
+    for (const name of projects) {
+      const opt = document.createElement("option");
+      opt.value = name;
+      opt.textContent = name;
+      select.appendChild(opt);
+    }
+    select.value = projects.includes(current) ? current : "";
+  }
+}
+
 async function loadLibrary() {
   const listEl = document.getElementById("library-list");
   const errorEl = document.getElementById("library-error");
@@ -753,38 +1071,75 @@ async function loadLibrary() {
 
   const kind = document.getElementById("library-kind-filter").value;
   const tag = document.getElementById("library-tag-filter").value.trim();
+  const project = document.getElementById("library-project-filter").value;
   const params = new URLSearchParams();
   if (kind) params.set("kind", kind);
   if (tag) params.set("tag", tag);
+  if (project) params.set("project", project);
 
   try {
-    const res = await fetch(`/library?${params}`);
+    const [res, projects] = await Promise.all([fetch(`/library?${params}`), fetchProjects()]);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const assets = await res.json();
+    refreshProjectFilterSelects(projects, [
+      ["library-project-filter", "all"],
+      ["library-project-manage", "(pick a project)"],
+    ]);
 
     listEl.innerHTML = "";
     if (assets.length === 0) {
       listEl.textContent = "No assets yet.";
       return;
     }
-    for (const asset of assets) listEl.appendChild(assetCard(asset));
+    for (const asset of assets) listEl.appendChild(assetCard(asset, projects));
   } catch (err) {
     listEl.textContent = "";
     errorEl.textContent = err.message;
   }
 }
 
+document.getElementById("library-project-filter").addEventListener("change", loadLibrary);
+
+document.getElementById("library-project-rename").addEventListener("click", async () => {
+  const errorEl = document.getElementById("library-error");
+  const old = document.getElementById("library-project-manage").value;
+  const to = document.getElementById("library-project-rename-to").value.trim();
+  if (!old || !to) { errorEl.textContent = "Pick a project and type a new name."; return; }
+  errorEl.textContent = "";
+  await fetch("/projects/rename", { method: "POST", body: new URLSearchParams({ old, new: to }) });
+  document.getElementById("library-project-rename-to").value = "";
+  // If the active filter was pointed at the name that just got renamed,
+  // repoint it too -- otherwise loadLibrary() below would fetch with the
+  // now-nonexistent old name and show "No assets yet" until the next
+  // manual refresh, even though the renamed project's assets are right there.
+  const filterSelect = document.getElementById("library-project-filter");
+  if (filterSelect.value === old) filterSelect.value = to;
+  loadLibrary();
+});
+
+document.getElementById("library-project-delete").addEventListener("click", async () => {
+  const errorEl = document.getElementById("library-error");
+  const name = document.getElementById("library-project-manage").value;
+  if (!name) { errorEl.textContent = "Pick a project to delete."; return; }
+  if (!confirm(`Remove project "${name}" from all its assets? The assets themselves are kept.`)) return;
+  errorEl.textContent = "";
+  await fetch(`/projects/${encodeURIComponent(name)}`, { method: "DELETE" });
+  loadLibrary();
+});
+
 /** Shared polling loop -- every /generate/* and /render/* route returns the
  * same {job_id} shape and is checked via the same GET /jobs/{id} contract,
- * so one implementation covers all four tabs. `onDone` wires the result
- * into whichever <video>/<audio> element belongs to that tab. */
+ * so one implementation covers all six tabs. `onDone` wires the result
+ * into whichever <video>/<audio> element belongs to that tab, and now also
+ * receives the full job object (job.can_save) so callers can decide
+ * whether to offer saving. */
 async function pollJob(jobId, { statusEl, errorEl, onDone }) {
   for (;;) {
     const res = await fetch(`/jobs/${jobId}`);
     const job = await res.json();
     statusEl.textContent = `Job ${jobId}: ${job.status}`;
     if (job.status === "done") {
-      onDone(`/jobs/${jobId}/file`);
+      onDone(`/jobs/${jobId}/file`, job);
       return;
     }
     if (job.status === "error") {
@@ -793,6 +1148,67 @@ async function pollJob(jobId, { statusEl, errorEl, onDone }) {
     }
     await new Promise(r => setTimeout(r, 1500));
   }
+}
+
+/** Nothing is auto-saved to the library anymore -- generation/render jobs
+ * stage a save candidate at completion (server/jobs.py's pending_library)
+ * but only POST /jobs/{id}/save actually registers it, once the caller has
+ * seen/heard the result and decided to keep it. One shared button/handler
+ * (not six copies) since the behavior is identical everywhere it's used:
+ * inserted right after the preview element, disabled + relabeled while the
+ * request is in flight, "✓ Saved" on success, an error via the same
+ * errorEl every form already has on failure.
+ *
+ * The project picker next to it (2026-08-05) is this feature's own
+ * "decide at save time" moment for project assignment too -- see
+ * service.save_job_to_library's docstring. Defaulting to "No project"
+ * keeps the common case (just save it) a single click, same as before. */
+async function showSaveButton(jobId, afterEl, errorEl) {
+  const existing = afterEl.nextElementSibling;
+  if (existing && existing.classList.contains("project-picker")) existing.remove();
+
+  const wrap = document.createElement("div");
+  wrap.className = "project-picker";
+
+  const projectSelect = document.createElement("select");
+  const projectInput = document.createElement("input");
+  projectInput.type = "text";
+  projectInput.placeholder = "new project name";
+  wireNewProjectInput(projectSelect, projectInput);
+
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "save-to-library-btn";
+  btn.textContent = "Save to library";
+  btn.addEventListener("click", async () => {
+    errorEl.textContent = "";
+    btn.disabled = true;
+    btn.textContent = "Saving...";
+    try {
+      const project = selectedProject(projectSelect, projectInput);
+      const res = await fetch(`/jobs/${jobId}/save`, {
+        method: "POST", body: new URLSearchParams(project ? { project } : {}),
+      });
+      if (!res.ok) {
+        const detail = await res.json().catch(() => ({}));
+        throw new Error(detail.detail || `HTTP ${res.status}`);
+      }
+      btn.textContent = "✓ Saved";
+      projectSelect.disabled = true;
+      projectInput.disabled = true;
+    } catch (err) {
+      errorEl.textContent = err.message;
+      btn.textContent = "Save to library";
+      btn.disabled = false;
+    }
+  });
+
+  wrap.appendChild(projectSelect);
+  wrap.appendChild(projectInput);
+  wrap.appendChild(btn);
+  afterEl.insertAdjacentElement("afterend", wrap);
+
+  populateProjectSelect(projectSelect, await fetchProjects(), "");
 }
 
 function wireForm(formId, { buildForm, endpoint, statusId, errorId, previewId }) {
@@ -821,7 +1237,11 @@ function wireForm(formId, { buildForm, endpoint, statusId, errorId, previewId })
       statusEl.textContent = `Job ${job_id}: submitted`;
       await pollJob(job_id, {
         statusEl, errorEl,
-        onDone: (url) => { previewEl.src = url; previewEl.style.display = "block"; },
+        onDone: (url, job) => {
+          previewEl.src = url;
+          previewEl.style.display = "block";
+          if (job.can_save) showSaveButton(job.job_id, previewEl, errorEl);
+        },
       });
     } catch (err) {
       errorEl.textContent = err.message;
@@ -862,7 +1282,6 @@ wireForm("photo-form", {
     form.append("speed", document.getElementById("photo-speed").value);
     const loopDuration = document.getElementById("photo-loop-duration").value;
     if (loopDuration) form.append("loop_duration", loopDuration);
-    form.append("save_to_library", document.getElementById("photo-save-to-library").checked);
     return form;
   },
 });
@@ -887,7 +1306,6 @@ wireForm("video-form", {
     form.append("auto_trim", document.getElementById("video-auto-trim").checked);
     form.append("also_gif", alsoGif);
     if (loopDuration) form.append("loop_duration", loopDuration);
-    form.append("save_to_library", document.getElementById("video-save-to-library").checked);
     return form;
   },
 });
@@ -926,7 +1344,6 @@ wireForm("music-form", {
     if (modelSelect.value) {
       form.append("model", modelSelect.value);
     }
-    form.append("save_to_library", document.getElementById("music-save-to-library").checked);
     return form;
   },
 });
@@ -943,7 +1360,6 @@ wireForm("sfx-form", {
     const form = new FormData();
     form.append("prompt", prompt);
     form.append("duration", document.getElementById("sfx-duration").value);
-    form.append("save_to_library", document.getElementById("sfx-save-to-library").checked);
     return form;
   },
 });
@@ -968,7 +1384,6 @@ wireForm("image-form", {
     if (modelSelect.value) {
       form.append("model", modelSelect.value);
     }
-    form.append("save_to_library", document.getElementById("image-save-to-library").checked);
     return form;
   },
 });
@@ -987,7 +1402,16 @@ const assembleState = { clips: [], music: [], sfx: [], assetsById: {} };
  * candidates instead. A generated asset with neither extension (e.g. a
  * mask PNG someone tagged "generated") is simply not offered anywhere. */
 async function loadAssembleAssets() {
-  const assets = await (await fetch("/library?kind=generated")).json();
+  const projectSelect = document.getElementById("assemble-project-filter");
+  const params = new URLSearchParams({ kind: "generated" });
+  if (projectSelect.value) params.set("project", projectSelect.value);
+
+  const [assets, projects] = await Promise.all([
+    (async () => (await fetch(`/library?${params}`)).json())(),
+    fetchProjects(),
+  ]);
+  refreshProjectFilterSelects(projects, [["assemble-project-filter", "all"]]);
+
   const videoExts = ["mp4", "webm", "mov"];
   const audioExts = ["mp3", "wav", "ogg"];
   const clipAssets = [], musicAssets = [], sfxAssets = [];
@@ -1013,26 +1437,27 @@ function renderAssemblePicker(containerId, assets, bucket, allowMultiple) {
     return;
   }
   for (const asset of assets) {
-    const btn = document.createElement("button");
-    btn.type = "button";
     const selected = assembleState[bucket].includes(asset.id);
     // allowMultiple (sound effects): every click toggles this one asset in
-    // or out. Ordered buckets (clips/music): once selected, the button
+    // or out. Ordered buckets (clips/music): once selected, the row
     // disables -- removing happens via the chip's own × below, since
     // clicking here again wouldn't disambiguate *which* occurrence to drop
     // if the same asset were ever added twice.
-    btn.textContent = (selected ? "✓ " : "+ ") + assetPickerLabel(asset);
-    btn.disabled = selected && !allowMultiple;
-    btn.addEventListener("click", () => {
-      if (allowMultiple && selected) {
-        assembleState[bucket].splice(assembleState[bucket].indexOf(asset.id), 1);
-      } else {
-        assembleState[bucket].push(asset.id);
-      }
-      renderAssemblePicker(containerId, assets, bucket, allowMultiple);
-      renderAssembleChips();
-    });
-    container.appendChild(btn);
+    const disabled = selected && !allowMultiple;
+    container.appendChild(assetPickerRow(asset, {
+      selected,
+      disabled,
+      buttonLabel: disabled ? "Added" : (selected ? "Remove" : "Add"),
+      onToggle: () => {
+        if (allowMultiple && selected) {
+          assembleState[bucket].splice(assembleState[bucket].indexOf(asset.id), 1);
+        } else {
+          assembleState[bucket].push(asset.id);
+        }
+        renderAssemblePicker(containerId, assets, bucket, allowMultiple);
+        renderAssembleChips();
+      },
+    }));
   }
 }
 
@@ -1060,6 +1485,7 @@ function renderAssembleChips() {
 }
 
 document.getElementById("assemble-refresh").addEventListener("click", loadAssembleAssets);
+document.getElementById("assemble-project-filter").addEventListener("change", loadAssembleAssets);
 document.getElementById("assemble-submit").addEventListener("click", async () => {
   const statusEl = document.getElementById("assemble-status");
   const errorEl = document.getElementById("assemble-error");
@@ -1080,7 +1506,6 @@ document.getElementById("assemble-submit").addEventListener("click", async () =>
   params.append("music_crossfade_duration", document.getElementById("assemble-music-crossfade").value);
   params.append("music_edge_fade_duration", document.getElementById("assemble-music-edge-fade").value);
   params.append("music_gap_duration", document.getElementById("assemble-music-gap").value);
-  params.append("save_to_library", document.getElementById("assemble-save-to-library").checked);
 
   const submitBtn = document.getElementById("assemble-submit");
   submitBtn.disabled = true;
@@ -1094,7 +1519,11 @@ document.getElementById("assemble-submit").addEventListener("click", async () =>
     statusEl.textContent = `Job ${job_id}: submitted`;
     await pollJob(job_id, {
       statusEl, errorEl,
-      onDone: (url) => { previewEl.src = url; previewEl.style.display = "block"; },
+      onDone: (url, job) => {
+        previewEl.src = url;
+        previewEl.style.display = "block";
+        if (job.can_save) showSaveButton(job.job_id, previewEl, errorEl);
+      },
     });
   } catch (err) {
     errorEl.textContent = err.message;

@@ -78,18 +78,24 @@ of that seam exist here now:
   docs/DESIGN.md sec 3.6 for the full rationale and history.
 
 Library registration: every job function below takes an optional
-`library_kind` -- when given (the four /render and /generate routes all
-pass "generated"; /mask-preview does not, since a diagnostic mask preview
-isn't an asset worth cataloging), the finished output is registered via
-asset_library.add() right after jobs.mark_done. That call is best-effort
-and deliberately never allowed to flip a job to "error": the render/generate
-itself already succeeded and its file already exists, so a cataloging
-hiccup (e.g. the library's own storage location being unwritable) is a
-real but separate failure that shouldn't hide a working result from the
-caller. Only source files (the render/generate output) are auto-registered,
-not uploaded inputs -- unlike a deliberate `cinemagraph library add`, every
-upload passing through this API is not necessarily something the user
-wants kept forever.
+`library_kind` -- when given (all six /render, /generate, and /assemble
+routes pass "generated"; /mask-preview does not, since a diagnostic mask
+preview isn't an asset worth cataloging), the finished output is *staged*
+as a save candidate (`_stage_for_library`, right after `jobs.mark_done`),
+not registered immediately. The actual `asset_library.add()` call only
+happens later, on demand, via `save_job_to_library()` -- triggered by
+`POST /jobs/{id}/save` once the caller has actually seen/heard the result
+and decided to keep it. This replaced an earlier immediate-registration
+design deliberately: deciding whether to keep a generation *before* seeing
+it was the wrong shape for what this API is actually used for. Only source
+files (the render/generate output) are ever staged, not uploaded inputs --
+unlike a deliberate `cinemagraph library add`, every upload passing through
+this API is not necessarily something the user wants kept forever.
+
+Project assignment (2026-08-05) piggybacks on this same save-time decision
+point -- save_job_to_library()'s optional `project` argument, not a
+separate step -- see asset_library's own module docstring for why a
+"project" is a reserved-prefix tag rather than a new table.
 """
 import asyncio
 from pathlib import Path
@@ -109,13 +115,44 @@ from .generation_ports import ImageGenerator, MusicGenerator, SoundEffectGenerat
 from .generation_registry import get_image_generator, get_music_generator
 
 
-def _register_in_library(output_path: Path, kind: str | None, tags: list[str] | None, provenance: dict | None) -> None:
-    if kind is None:
-        return
-    try:
-        asset_library.add(str(output_path), kind=kind, tags=tags or [], provenance=provenance)
-    except Exception:
-        pass  # cataloging is best-effort; the render/generate already succeeded
+def _stage_for_library(job_id: str, kind: str | None, tags: list[str] | None, provenance: dict | None) -> None:
+    """Stages this job's output as a save candidate (jobs.stage_for_library)
+    rather than registering it immediately -- the actual asset_library.add()
+    call now only happens on demand, via save_job_to_library() below,
+    triggered by POST /jobs/{id}/save once the caller has actually seen/
+    heard the result. `kind=None` still means "never offer saving" (e.g.
+    /mask-preview), same as it did when this function registered directly.
+    """
+    jobs.stage_for_library(job_id, kind, tags, provenance)
+
+
+def save_job_to_library(job_id: str, project: str | None = None) -> asset_library.Asset:
+    """POST /jobs/{id}/save's workflow -- registers a completed job's
+    staged output into the library on demand. Raises ValueError (mapped to
+    a 404 at the route) when there's nothing to save: unknown job, this job
+    type never offers saving, or it was already saved once (pending_library
+    is cleared after a successful save, so a second call is a real,
+    reportable no-op rather than silently creating a duplicate asset).
+
+    `project` (2026-08-05), when given, is folded into the tag list as
+    asset_library.PROJECT_TAG_PREFIX + project before the asset is added --
+    this is the one moment a generation is actually kept, which per the
+    project owner is also the natural moment to decide which project it
+    belongs to (rather than picking one before generating).
+    """
+    job = jobs.get_job(job_id)
+    if job is None:
+        raise ValueError(f"No job with id '{job_id}'")
+    if job.pending_library is None:
+        raise ValueError("Nothing to save for this job (already saved, or this job type doesn't support saving).")
+    meta = job.pending_library
+    tags = [*meta["tags"], f"{asset_library.PROJECT_TAG_PREFIX}{project}"] if project else meta["tags"]
+    asset = asset_library.add(
+        str(job.output_path), kind=meta["kind"], tags=tags, provenance=meta["provenance"],
+    )
+    job.saved_asset_id = asset.id
+    job.pending_library = None
+    return asset
 
 
 def run_render_job(
@@ -130,7 +167,7 @@ def run_render_job(
         jobs.mark_error(job_id, str(e))
         return
     jobs.mark_done(job_id, output_path)
-    _register_in_library(output_path, library_kind, library_tags, provenance=None)
+    _stage_for_library(job_id, library_kind, library_tags, provenance=None)
 
 
 async def run_photo_semantic_mask_job(
@@ -177,8 +214,8 @@ async def run_photo_semantic_mask_job(
             **render_kwargs,
         )
         jobs.mark_done(job_id, output_path)
-        _register_in_library(
-            output_path, library_kind, library_tags,
+        _stage_for_library(
+            job_id, library_kind, library_tags,
             provenance={"mask_prompt": mask_prompt, **render_kwargs},
         )
     except HTTPException as e:
@@ -264,7 +301,7 @@ async def run_music_job(
                 provenance["source_asset_path"] = str(src_audio_path)
             if reference_audio_path is not None:
                 provenance["reference_asset_path"] = str(reference_audio_path)
-        _register_in_library(output_path, library_kind, tags=["music"], provenance=provenance)
+        _stage_for_library(job_id, library_kind, tags=["music"], provenance=provenance)
     except HTTPException as e:
         jobs.mark_error(job_id, e.detail)
     except Exception as e:
@@ -286,8 +323,8 @@ async def run_sound_effect_job(
         audio_bytes = await generator.generate(prompt, duration=duration)
         output_path.write_bytes(audio_bytes)
         jobs.mark_done(job_id, output_path)
-        _register_in_library(
-            output_path, library_kind, tags=["sound-effect"],
+        _stage_for_library(
+            job_id, library_kind, tags=["sound-effect"],
             provenance={"prompt": prompt, "duration": duration},
         )
     except HTTPException as e:
@@ -338,8 +375,8 @@ async def run_image_job(
         provenance = {"prompt": prompt, "model": model}
         if reference_image_path is not None:
             provenance["strength"] = strength
-        _register_in_library(
-            output_path, library_kind, tags=["image"],
+        _stage_for_library(
+            job_id, library_kind, tags=["image"],
             provenance=provenance,
         )
     except HTTPException as e:
@@ -388,4 +425,4 @@ def run_assembly_job(
         jobs.mark_error(job_id, str(e))
         return
     jobs.mark_done(job_id, output_path)
-    _register_in_library(output_path, library_kind, ["assembled"], provenance=provenance)
+    _stage_for_library(job_id, library_kind, ["assembled"], provenance=provenance)

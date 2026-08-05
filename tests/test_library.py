@@ -132,3 +132,96 @@ def test_provenance_round_trips(sample_file):
     asset = library.add(str(sample_file), kind="generated", provenance=provenance)
     assert asset.provenance == provenance
     assert library.get(asset.id).provenance == provenance
+
+
+def test_set_project_adds_reserved_tag(sample_file):
+    asset = library.add(str(sample_file), tags=["photo"])
+    updated = library.set_project(asset.id, "sunset-loop")
+    assert f"{library.PROJECT_TAG_PREFIX}sunset-loop" in updated.tags
+    assert "photo" in updated.tags  # existing tags untouched
+
+
+def test_set_project_replaces_previous_project(sample_file):
+    asset = library.add(str(sample_file))
+    library.set_project(asset.id, "old-project")
+    updated = library.set_project(asset.id, "new-project")
+    project_tags = [t for t in updated.tags if t.startswith(library.PROJECT_TAG_PREFIX)]
+    assert project_tags == [f"{library.PROJECT_TAG_PREFIX}new-project"]
+
+
+def test_set_project_none_clears_it(sample_file):
+    asset = library.add(str(sample_file))
+    library.set_project(asset.id, "some-project")
+    updated = library.set_project(asset.id, None)
+    assert not any(t.startswith(library.PROJECT_TAG_PREFIX) for t in updated.tags)
+
+
+def test_set_project_rejects_unknown_asset():
+    with pytest.raises(ValueError):
+        library.set_project("deadbeef", "some-project")
+
+
+def test_list_projects_returns_distinct_sorted_names(tmp_path):
+    f1 = tmp_path / "a.jpg"
+    f1.write_bytes(b"content a")
+    f2 = tmp_path / "b.jpg"
+    f2.write_bytes(b"content b")
+
+    asset1 = library.add(str(f1))
+    asset2 = library.add(str(f2))
+    library.set_project(asset1.id, "zebra")
+    library.set_project(asset2.id, "apple")
+
+    assert library.list_projects() == ["apple", "zebra"]
+
+
+def test_list_projects_empty_when_none_assigned(sample_file):
+    library.add(str(sample_file))
+    assert library.list_projects() == []
+
+
+def test_list_assets_filters_by_project(tmp_path):
+    f1 = tmp_path / "a.jpg"
+    f1.write_bytes(b"content a")
+    f2 = tmp_path / "b.jpg"
+    f2.write_bytes(b"content b")
+
+    asset1 = library.add(str(f1))
+    library.add(str(f2))
+    library.set_project(asset1.id, "sunset-loop")
+
+    result = library.list_assets(project="sunset-loop")
+    assert [a.id for a in result] == [asset1.id]
+
+
+def test_rename_project_updates_every_matching_asset(tmp_path):
+    f1 = tmp_path / "a.jpg"
+    f1.write_bytes(b"content a")
+    f2 = tmp_path / "b.jpg"
+    f2.write_bytes(b"content b")
+
+    asset1 = library.add(str(f1))
+    asset2 = library.add(str(f2))
+    library.set_project(asset1.id, "old-name")
+    library.set_project(asset2.id, "old-name")
+
+    count = library.rename_project("old-name", "new-name")
+    assert count == 2
+    assert library.list_projects() == ["new-name"]
+    assert f"{library.PROJECT_TAG_PREFIX}new-name" in library.get(asset1.id).tags
+    assert f"{library.PROJECT_TAG_PREFIX}new-name" in library.get(asset2.id).tags
+
+
+def test_rename_project_no_matches_is_a_noop(sample_file):
+    library.add(str(sample_file))
+    assert library.rename_project("nonexistent", "whatever") == 0
+
+
+def test_delete_project_untags_but_keeps_assets(sample_file):
+    asset = library.add(str(sample_file))
+    library.set_project(asset.id, "throwaway")
+
+    count = library.delete_project("throwaway")
+    assert count == 1
+    assert library.list_projects() == []
+    assert library.get(asset.id) is not None  # asset itself survives

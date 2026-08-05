@@ -27,6 +27,16 @@ def api_client(tmp_path, monkeypatch):
     app.dependency_overrides.clear()
 
 
+def _save(api_client, job_id, project=None):
+    """POST /jobs/{id}/save -- the explicit, post-generation "keep this"
+    action that replaced the old immediate-registration-at-completion
+    design. Every generation/render route now leaves the library untouched
+    until this is called. `project`, when given, is also the primary way an
+    asset gets assigned to one -- see save_job_to_library's own docstring."""
+    data = {"project": project} if project else None
+    return api_client.post(f"/jobs/{job_id}/save", data=data)
+
+
 def test_health(api_client):
     resp = api_client.get("/health")
     assert resp.status_code == 200
@@ -99,37 +109,56 @@ def test_render_photo_then_job_status_and_download(api_client, test_photo):
     status = api_client.get(f"/jobs/{job_id}").json()
     assert status["status"] == "done", status
     assert status["output_path"]
+    # Nothing is auto-catalogued anymore -- completion only *stages* a save
+    # candidate (can_save=true); the library stays empty until an explicit
+    # POST /jobs/{id}/save, tested below.
+    assert status["can_save"] is True
+    assert api_client.get("/library").json() == []
 
     file_resp = api_client.get(f"/jobs/{job_id}/file")
     assert file_resp.status_code == 200
     assert len(file_resp.content) > 0
 
-    # The render's output is auto-catalogued in the asset library (kind="generated"),
-    # tagged by media type and requested effect(s) -- this is what makes a finished
-    # render findable again later instead of only existing as a job-scoped file.
+    save_resp = _save(api_client, job_id)
+    assert save_resp.status_code == 200, save_resp.text
     library = api_client.get("/library").json()
     assert len(library) == 1
     assert library[0]["kind"] == "generated"
     assert set(library[0]["tags"]) == {"photo", "dust", "ripple"}
 
+    # A second save attempt has nothing left to consume (pending_library was
+    # cleared by the first one) -- must fail loudly, not silently duplicate.
+    assert _save(api_client, job_id).status_code == 404
 
-def test_render_photo_save_to_library_false_skips_registration(api_client, test_photo):
-    """save_to_library=False must still finish the render successfully --
-    only the library-cataloging step is skipped, same as omitting
-    library_kind entirely at the service.py layer (which already treated
-    None as "skip", unchanged by this feature -- see service.py)."""
+
+def test_render_photo_save_to_library_flow(api_client, test_photo):
+    """Same generate-then-save flow as the test above, phrased around the
+    explicit-save mechanism itself rather than the render's own output --
+    this is what replaced the old pre-generation `save_to_library` toggle
+    (removed entirely; deciding whether to keep a result before seeing it
+    was the wrong shape)."""
     with open(test_photo, "rb") as f:
         resp = api_client.post(
             "/render/photo",
             files={"input_file": ("photo.jpg", f, "image/jpeg")},
-            data={"effect": ["dust"], "duration": "1.0", "fps": "10", "save_to_library": "false"},
+            data={"effect": ["dust"], "duration": "1.0", "fps": "10"},
         )
     assert resp.status_code == 200, resp.text
-    status = api_client.get(f"/jobs/{resp.json()['job_id']}").json()
+    job_id = resp.json()["job_id"]
+    status = api_client.get(f"/jobs/{job_id}").json()
     assert status["status"] == "done", status
-    assert status["output_path"]
-
+    assert status["can_save"] is True
+    assert status["saved_asset_id"] is None
     assert api_client.get("/library").json() == []
+
+    save_resp = _save(api_client, job_id)
+    assert save_resp.status_code == 200, save_resp.text
+    asset_id = save_resp.json()["id"]
+
+    status_after_save = api_client.get(f"/jobs/{job_id}").json()
+    assert status_after_save["can_save"] is False
+    assert status_after_save["saved_asset_id"] == asset_id
+    assert len(api_client.get("/library").json()) == 1
 
 
 def test_render_photo_accepts_input_asset_id_from_library(api_client, test_photo):
@@ -185,25 +214,14 @@ def test_render_video_then_job_status(api_client, test_video):
 
     status = api_client.get(f"/jobs/{job_id}").json()
     assert status["status"] == "done", status
+    assert status["can_save"] is True
+    assert api_client.get("/library").json() == []
 
+    assert _save(api_client, job_id).status_code == 200
     library = api_client.get("/library").json()
     assert len(library) == 1
     assert library[0]["kind"] == "generated"
     assert library[0]["tags"] == ["video"]
-
-
-def test_render_video_save_to_library_false_skips_registration(api_client, test_video):
-    with open(test_video, "rb") as f:
-        resp = api_client.post(
-            "/render/video",
-            files={"input_file": ("input.mp4", f, "video/mp4")},
-            data={"save_to_library": "false"},
-        )
-    assert resp.status_code == 200, resp.text
-    status = api_client.get(f"/jobs/{resp.json()['job_id']}").json()
-    assert status["status"] == "done", status
-
-    assert api_client.get("/library").json() == []
 
 
 def _hand_painted_mask_bytes(w=160, h=100):
@@ -315,8 +333,12 @@ def test_mask_preview_then_job_status_and_download(api_client, test_video):
     assert file_resp.status_code == 200
 
     # A mask preview is a diagnostic aid, not an asset worth cataloging --
-    # unlike /render/photo and /render/video, it must NOT show up in the library.
+    # unlike /render/photo and /render/video, it must NOT show up in the
+    # library, and (unlike every other route) never even offers saving --
+    # can_save is false and POST /jobs/{id}/save has nothing to consume.
     assert api_client.get("/library").json() == []
+    assert status["can_save"] is False
+    assert _save(api_client, job_id).status_code == 404
     assert file_resp.content[:8] == b"\x89PNG\r\n\x1a\n"  # PNG magic bytes
 
 
@@ -445,7 +467,7 @@ def test_generate_music_cover_with_remix_capable_model_succeeds(api_client, tmp_
         del generation_registry._MUSIC_GENERATORS["test-remix-fake"]
 
 
-def test_generate_music_save_to_library_false_skips_registration(api_client):
+def test_generate_music_save_flow(api_client):
     from server import generation_registry
 
     class FakeGenerator:
@@ -456,12 +478,17 @@ def test_generate_music_save_to_library_false_skips_registration(api_client):
     try:
         resp = api_client.post(
             "/generate/music",
-            data={"prompt": "p", "model": "test-save-toggle-fake", "save_to_library": "false"},
+            data={"prompt": "p", "model": "test-save-toggle-fake"},
         )
         assert resp.status_code == 200, resp.text
-        status = api_client.get(f"/jobs/{resp.json()['job_id']}").json()
+        job_id = resp.json()["job_id"]
+        status = api_client.get(f"/jobs/{job_id}").json()
         assert status["status"] == "done", status
+        assert status["can_save"] is True
         assert api_client.get("/library").json() == []
+
+        assert _save(api_client, job_id).status_code == 200
+        assert len(api_client.get("/library").json()) == 1
     finally:
         del generation_registry._MUSIC_GENERATORS["test-save-toggle-fake"]
 
@@ -529,7 +556,7 @@ def test_generate_image_uses_requested_model(api_client):
         del generation_registry._IMAGE_GENERATORS["test-route-fake"]
 
 
-def test_generate_image_save_to_library_false_skips_registration(api_client):
+def test_generate_image_save_flow(api_client):
     from server import generation_registry
 
     class FakeGenerator:
@@ -540,12 +567,17 @@ def test_generate_image_save_to_library_false_skips_registration(api_client):
     try:
         resp = api_client.post(
             "/generate/image",
-            data={"prompt": "p", "model": "test-save-toggle-fake", "save_to_library": "false"},
+            data={"prompt": "p", "model": "test-save-toggle-fake"},
         )
         assert resp.status_code == 200, resp.text
-        status = api_client.get(f"/jobs/{resp.json()['job_id']}").json()
+        job_id = resp.json()["job_id"]
+        status = api_client.get(f"/jobs/{job_id}").json()
         assert status["status"] == "done", status
+        assert status["can_save"] is True
         assert api_client.get("/library").json() == []
+
+        assert _save(api_client, job_id).status_code == 200
+        assert len(api_client.get("/library").json()) == 1
     finally:
         del generation_registry._IMAGE_GENERATORS["test-save-toggle-fake"]
 
@@ -650,47 +682,95 @@ def test_assemble_combines_real_assets_into_one_valid_file(api_client, test_vide
 
     status = api_client.get(f"/jobs/{job_id}").json()
     assert status["status"] == "done", status
+    # Nothing is auto-catalogued anymore -- only the two *input* assets
+    # (added directly above, not through this route) exist in the library
+    # until an explicit POST /jobs/{id}/save.
+    assert status["can_save"] is True
+    assert {a["id"] for a in api_client.get("/library").json()} == {clip_asset.id, music_asset.id}
 
     file_resp = api_client.get(f"/jobs/{job_id}/file")
     assert file_resp.status_code == 200
     assert len(file_resp.content) > 0
 
+    assert _save(api_client, job_id).status_code == 200
     library_result = api_client.get("/library", params={"tag": "assembled"}).json()
     assert len(library_result) == 1
     assert library_result[0]["provenance"]["clip_asset_ids"] == [clip_asset.id]
     assert library_result[0]["provenance"]["music_asset_ids"] == [music_asset.id]
 
 
-def test_assemble_save_to_library_false_skips_registration(api_client, test_video, tmp_path):
-    """save_to_library=False only skips the *output's* own registration --
-    the clip/music assets already in the library as inputs are unaffected."""
-    import subprocess
+def test_save_job_with_project_assigns_it(api_client, test_photo):
+    """POST /jobs/{id}/save's own `project` field -- the primary way an
+    asset gets assigned to a project (at the moment it's actually kept)."""
+    with open(test_photo, "rb") as f:
+        resp = api_client.post(
+            "/render/photo",
+            files={"input_file": ("photo.jpg", f, "image/jpeg")},
+            data={"effect": ["dust"], "duration": "1.0", "fps": "10"},
+        )
+    job_id = resp.json()["job_id"]
 
-    import imageio_ffmpeg
+    save_resp = _save(api_client, job_id, project="sunset-loop")
+    assert save_resp.status_code == 200, save_resp.text
+    assert save_resp.json()["project"] == "sunset-loop"
 
-    import asset_library
+    library = api_client.get("/library").json()
+    assert library[0]["project"] == "sunset-loop"
+    # The reserved project:* tag backs this, but isn't also shown as a
+    # plain tag -- it has its own field now (see app.py's _asset_to_response).
+    assert not any(t.startswith("project:") for t in library[0]["tags"])
 
-    audio_path = tmp_path / "tone.mp3"
-    exe = imageio_ffmpeg.get_ffmpeg_exe()
-    subprocess.run(
-        [exe, "-y", "-f", "lavfi", "-i", "sine=frequency=440:duration=1", str(audio_path)],
-        capture_output=True,
-    )
 
-    clip_asset = asset_library.add(test_video, kind="generated", tags=["photo"])
-    music_asset = asset_library.add(str(audio_path), kind="generated", tags=["music"])
+def test_save_job_without_project_leaves_it_unset(api_client, test_photo):
+    with open(test_photo, "rb") as f:
+        resp = api_client.post(
+            "/render/photo",
+            files={"input_file": ("photo.jpg", f, "image/jpeg")},
+            data={"effect": ["dust"], "duration": "1.0", "fps": "10"},
+        )
+    job_id = resp.json()["job_id"]
 
-    resp = api_client.post(
-        "/assemble",
-        data={
-            "clip_asset_ids": [clip_asset.id], "music_asset_ids": [music_asset.id],
-            "save_to_library": "false",
-        },
-    )
-    assert resp.status_code == 200, resp.text
-    status = api_client.get(f"/jobs/{resp.json()['job_id']}").json()
-    assert status["status"] == "done", status
+    save_resp = _save(api_client, job_id)
+    assert save_resp.json()["project"] is None
 
-    library_result = api_client.get("/library", params={"tag": "assembled"}).json()
-    assert library_result == []
-    assert {a["id"] for a in api_client.get("/library").json()} == {clip_asset.id, music_asset.id}
+
+def test_projects_crud_flow(api_client, test_photo):
+    assert api_client.get("/projects").json() == []
+
+    with open(test_photo, "rb") as f:
+        resp = api_client.post(
+            "/render/photo",
+            files={"input_file": ("photo.jpg", f, "image/jpeg")},
+            data={"effect": ["dust"], "duration": "1.0", "fps": "10"},
+        )
+    job_id = resp.json()["job_id"]
+    asset_id = _save(api_client, job_id, project="sunset-loop").json()["id"]
+    assert api_client.get("/projects").json() == ["sunset-loop"]
+
+    # GET /library?project= filters to just that project's assets.
+    filtered = api_client.get("/library", params={"project": "sunset-loop"}).json()
+    assert [a["id"] for a in filtered] == [asset_id]
+    assert api_client.get("/library", params={"project": "no-such-project"}).json() == []
+
+    # POST /library/{id}/project reassigns an already-saved asset.
+    reassign = api_client.post(f"/library/{asset_id}/project", data={"project": "new-name"})
+    assert reassign.status_code == 200
+    assert reassign.json()["project"] == "new-name"
+
+    # POST /projects/rename bulk-renames it back.
+    rename_resp = api_client.post("/projects/rename", data={"old": "new-name", "new": "sunset-loop"})
+    assert rename_resp.status_code == 200
+    assert rename_resp.json() == {"renamed": "new-name", "to": "sunset-loop", "count": 1}
+    assert api_client.get(f"/library/{asset_id}").json()["project"] == "sunset-loop"
+
+    # DELETE /projects/{name} untags without deleting the asset.
+    delete_resp = api_client.delete("/projects/sunset-loop")
+    assert delete_resp.status_code == 200
+    assert delete_resp.json() == {"deleted": "sunset-loop", "count": 1}
+    assert api_client.get("/projects").json() == []
+    assert api_client.get(f"/library/{asset_id}").json()["project"] is None
+
+
+def test_set_asset_project_rejects_unknown_asset(api_client):
+    resp = api_client.post("/library/does-not-exist/project", data={"project": "whatever"})
+    assert resp.status_code == 404
