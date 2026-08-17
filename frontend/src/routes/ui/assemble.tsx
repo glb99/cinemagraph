@@ -37,12 +37,15 @@ interface SelectedAsset {
 function AssembleTab() {
   const runner = useJobRunner();
   const [projectFilter, setProjectFilter] = useState("");
+  // No `kind` filter: POST /assemble resolves any asset id via
+  // asset_library.get() regardless of kind, so a hand-uploaded reference
+  // track (or source clip) is just as usable here as a generated one --
+  // restricting to kind="generated" would silently hide it.
   const {
     data: assets,
     isPending,
     refetch,
   } = useLibraryAssets({
-    kind: "generated",
     project: projectFilter,
   });
 
@@ -64,10 +67,10 @@ function AssembleTab() {
     for (const asset of assets ?? []) seenAssets.current[asset.id] = asset;
   }, [assets]);
 
-  /** Buckets kind=generated assets by the same extension classification the
-   * previews use: video extensions are clip candidates, audio extensions are
-   * music candidates unless tagged "sound-effect". Anything else (a mask PNG
-   * someone tagged generated, say) is simply not offered. */
+  /** Buckets every library asset (any kind) by the same extension
+   * classification the previews use: video extensions are clip candidates,
+   * audio extensions are music candidates unless tagged "sound-effect".
+   * Anything else (a mask PNG, say) is simply not offered. */
   const buckets = useMemo(() => {
     const result: Record<Bucket, AssetResponse[]> = { clips: [], music: [], sfx: [] };
     for (const asset of assets ?? []) {
@@ -166,9 +169,9 @@ function AssembleTab() {
   return (
     <div className="space-y-5">
       <Hint>
-        Combines already-generated library assets into one video — click to add each in playback
-        order, remove from the selected list below. Sound effects (optional) mix together
-        continuously under the music, order doesn't matter for those.
+        Combines library assets (generated here or uploaded yourself) into one video — click to add
+        each in playback order, remove from the selected list below. Sound effects (optional) mix
+        together continuously under the music, order doesn't matter for those.
       </Hint>
 
       <div className="flex flex-wrap items-center gap-2">
