@@ -161,7 +161,7 @@ services:
       - HF_TOKEN=${HF_TOKEN}
       - MODEL_TTL=${MODEL_TTL:-900}
     volumes:
-      - ./data/sound-effects-cache:/cache/huggingface
+      - sound-effects-hf-cache:/cache/huggingface
     deploy:
       resources:
         reservations:
@@ -211,7 +211,7 @@ services:
     environment:
       - MODEL_TTL=${MODEL_TTL:-900}
     volumes:
-      - ./data/image-generation-cache:/cache/huggingface
+      - image-generation-hf-cache:/cache/huggingface
     deploy:
       resources:
         reservations:
@@ -227,3 +227,23 @@ volumes:
   # comment above and docs/experiments/.
   acestep-checkpoints:
   acestep-hf-cache:
+  # Same reasoning, extended to the two satellites that were still on bind
+  # mounts under ./data. The lesson had been learned for acestep and written
+  # down, but never applied here -- and the symptom was milder, so it went
+  # unnoticed: not the outright hang acestep suffered, just a cold SDXL load
+  # taking ~6 minutes (`Loading pipeline components...: 7/7 [06:08,
+  # 52.64s/it]`) where the generation it precedes takes ~30s. That only
+  # became a problem worth fixing once models started unloading on an idle
+  # TTL, since a slow *first* load is easy to ignore when it happens once at
+  # startup and impossible to ignore when it happens every time the model
+  # comes back.
+  #
+  # Migrating rather than re-downloading: ./data/image-generation-cache and
+  # ./data/sound-effects-cache already hold ~14GB and ~5.4GB of weights, so
+  # the existing directories are copied into these volumes once (see the
+  # matching note in docs/experiments/) instead of pulling them from the HF
+  # Hub again. The old ./data directories are left in place afterwards --
+  # deleting ~19GB of working weights is not something a compose edit should
+  # do implicitly.
+  image-generation-hf-cache:
+  sound-effects-hf-cache:

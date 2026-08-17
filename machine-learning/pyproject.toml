@@ -10,6 +10,14 @@ dependencies = [
     "numpy>=1.26.0,<3",
     "fastapi>=0.110.0,<1",
     "uvicorn[standard]>=0.29.0,<1",
+    # Required by /segment's multipart form (Form/UploadFile), not optional:
+    # FastAPI raises at *import* time, not request time, if it's missing, so
+    # without this the whole service crashes on startup with "Form data
+    # requires python-multipart to be installed" and never serves anything.
+    # image-generation/ and sound-effects/ already declared it; this one used
+    # the same Form/UploadFile API and didn't, so it had never started
+    # successfully from a clean build.
+    "python-multipart>=0.0.9,<1",
 ]
 
 [dependency-groups]
