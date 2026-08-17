@@ -4,6 +4,7 @@ Raises plain ValueError, not click.UsageError -- this is a library concern,
 not a CLI concern. Callers translate: the CLI catches ValueError and
 re-raises as click.UsageError; a future API would catch it and return a 422.
 """
+
 from typing import Any
 
 from . import effects as effects_pkg
@@ -28,9 +29,26 @@ def resolve_effect_kwargs(
             if value is None:
                 continue
             if owning_effect not in effect_names:
-                raise ValueError(f"--{owning_effect}-{key} only applies when --effect {owning_effect} is included.")
+                raise ValueError(
+                    f"--{owning_effect}-{key} only applies when --effect {owning_effect} is included."
+                )
             effect = effects_pkg.base.get(owning_effect)
             if effect.allowed_kwargs and key not in effect.allowed_kwargs:
-                raise ValueError(f"'{key}' is not a valid override for effect '{owning_effect}'.")
+                raise ValueError(
+                    f"'{key}' is not a valid override for effect '{owning_effect}'."
+                )
             resolved.setdefault(owning_effect, {})[key] = value
     return resolved
+
+
+def resolve_unmasked_effects(
+    effect_names: list[str], unmasked_effects: list[str]
+) -> set[str]:
+    """Validate that every effect named in `unmasked_effects` (opting that
+    effect out of the mask -- see animate_photo()) was actually requested."""
+    unknown = [e for e in unmasked_effects if e not in effect_names]
+    if unknown:
+        raise ValueError(
+            f"unmasked effect(s) {unknown} must also be included via --effect."
+        )
+    return set(unmasked_effects)

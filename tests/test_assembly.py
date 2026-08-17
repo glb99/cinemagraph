@@ -7,6 +7,7 @@ per sec 3.5; whether ffmpeg's own xfade/acrossfade/amix output is correct
 was verified manually against the real binary (see docs/experiments/), not
 here.
 """
+
 import pytest
 
 from assembly import audio_track, ffmpeg_runner, pipeline, video_track
@@ -25,10 +26,12 @@ class _FakeRun:
 def _fake_probe(durations: dict[str, float]):
     def probe(path):
         return durations[path]
+
     return probe
 
 
 # ---- ffmpeg_runner ----
+
 
 def test_run_ffmpeg_raises_with_stderr_on_failure(monkeypatch):
     class _Result:
@@ -61,6 +64,7 @@ def test_probe_duration_raises_clearly_when_not_found(monkeypatch):
 
 # ---- video_track ----
 
+
 def test_build_video_track_single_clip_copies_through():
     run = _FakeRun()
     video_track.build_video_track(["clip.mp4"], "out.mp4", run_ffmpeg=run)
@@ -74,15 +78,20 @@ def test_build_video_track_chains_xfade_with_correct_offsets():
     probe = _fake_probe({"a.mp4": 3.0, "b.mp4": 4.0, "c.mp4": 5.0})
 
     video_track.build_video_track(
-        ["a.mp4", "b.mp4", "c.mp4"], "out.mp4",
-        crossfade_duration=1.0, run_ffmpeg=run, probe_duration=probe,
+        ["a.mp4", "b.mp4", "c.mp4"],
+        "out.mp4",
+        crossfade_duration=1.0,
+        run_ffmpeg=run,
+        probe_duration=probe,
     )
 
     assert len(run.calls) == 1
     filter_complex = run.calls[0][run.calls[0].index("-filter_complex") + 1]
     # offset 1 = dur(a) - crossfade = 3 - 1 = 2
     # offset 2 = (dur(a) + dur(b) - crossfade) - crossfade = (3+4-1) - 1 = 5
-    assert "[0:v][1:v]xfade=transition=fade:duration=1.0:offset=2.0[v1]" in filter_complex
+    assert (
+        "[0:v][1:v]xfade=transition=fade:duration=1.0:offset=2.0[v1]" in filter_complex
+    )
     assert "[v1][2:v]xfade=transition=fade:duration=1.0:offset=5.0[v]" in filter_complex
     assert "-map" in run.calls[0]
     assert "[v]" in run.calls[0]
@@ -111,7 +120,9 @@ def _trim_stage(index: int) -> str:
 
 def test_build_music_track_single_track_gets_trimmed_and_edge_faded():
     run = _FakeRun()
-    audio_track.build_music_track(["song.mp3"], "out.mp3", edge_fade_duration=2.0, run_ffmpeg=run)
+    audio_track.build_music_track(
+        ["song.mp3"], "out.mp3", edge_fade_duration=2.0, run_ffmpeg=run
+    )
 
     assert len(run.calls) == 1
     filter_complex = run.calls[0][run.calls[0].index("-filter_complex") + 1]
@@ -138,34 +149,49 @@ def test_build_music_track_multiple_tracks_trims_every_track_then_crossfades_the
     run = _FakeRun()
 
     audio_track.build_music_track(
-        ["a.mp3", "b.mp3"], "out.mp3",
-        crossfade_duration=2.0, edge_fade_duration=1.0, run_ffmpeg=run,
+        ["a.mp3", "b.mp3"],
+        "out.mp3",
+        crossfade_duration=2.0,
+        edge_fade_duration=1.0,
+        run_ffmpeg=run,
     )
 
     filter_complex = run.calls[0][run.calls[0].index("-filter_complex") + 1]
     stages = filter_complex.split(";")
     assert stages[0] == _trim_stage(0)
     assert stages[1] == _trim_stage(1)
-    assert stages[2] == "[trimmed0][trimmed1]acrossfade=d=2.0:curve1=qsin:curve2=qsin[a1]"
-    assert stages[3] == "[a1]afade=t=in:st=0:d=1.0,areverse,afade=t=in:st=0:d=1.0,areverse[out]"
+    assert (
+        stages[2] == "[trimmed0][trimmed1]acrossfade=d=2.0:curve1=qsin:curve2=qsin[a1]"
+    )
+    assert (
+        stages[3]
+        == "[a1]afade=t=in:st=0:d=1.0,areverse,afade=t=in:st=0:d=1.0,areverse[out]"
+    )
 
 
 def test_build_music_track_gap_duration_inserts_silence_instead_of_crossfade():
     run = _FakeRun()
 
     audio_track.build_music_track(
-        ["a.mp3", "b.mp3", "c.mp3"], "out.mp3",
-        gap_duration=1.5, edge_fade_duration=0, run_ffmpeg=run,
+        ["a.mp3", "b.mp3", "c.mp3"],
+        "out.mp3",
+        gap_duration=1.5,
+        edge_fade_duration=0,
+        run_ffmpeg=run,
     )
 
     assert len(run.calls) == 1
     args = run.calls[0]
     filter_complex = args[args.index("-filter_complex") + 1]
     assert "acrossfade" not in filter_complex
-    assert "[trimmed0][trimmed1][trimmed2]" not in filter_complex  # gap segments must sit between them
+    assert (
+        "[trimmed0][trimmed1][trimmed2]" not in filter_complex
+    )  # gap segments must sit between them
     assert "concat=n=5:v=0:a=1" in filter_complex  # 3 tracks + 2 silence segments
     assert args.count("anullsrc=channel_layout=stereo:sample_rate=44100") == 2
-    assert args.count("-stream_loop") == 0  # not to be confused with layer_sound_effects' own looping
+    assert (
+        args.count("-stream_loop") == 0
+    )  # not to be confused with layer_sound_effects' own looping
 
 
 def test_build_music_track_gap_duration_fades_into_and_out_of_each_gap():
@@ -179,8 +205,11 @@ def test_build_music_track_gap_duration_fades_into_and_out_of_each_gap():
     run = _FakeRun()
 
     audio_track.build_music_track(
-        ["a.mp3", "b.mp3", "c.mp3"], "out.mp3",
-        gap_duration=3.0, edge_fade_duration=2.0, run_ffmpeg=run,
+        ["a.mp3", "b.mp3", "c.mp3"],
+        "out.mp3",
+        gap_duration=3.0,
+        edge_fade_duration=2.0,
+        run_ffmpeg=run,
     )
 
     filter_complex = run.calls[0][run.calls[0].index("-filter_complex") + 1]
@@ -194,7 +223,10 @@ def test_build_music_track_gap_duration_fades_into_and_out_of_each_gap():
 
     # track 0 (first): trim, then only a fade-*out* (precedes a gap) -- no
     # fade-in, that's the whole piece's own leading edge_fade_duration fade.
-    assert stages[0] == f"[0:a]{trim_filters(0)},areverse,afade=t=in:st=0:d=2.0,areverse[trimmed0]"
+    assert (
+        stages[0]
+        == f"[0:a]{trim_filters(0)},areverse,afade=t=in:st=0:d=2.0,areverse[trimmed0]"
+    )
     # track 1 (middle): trim, then both a fade-in (follows a gap) and a
     # fade-out (precedes the next gap).
     assert stages[1] == (
@@ -212,8 +244,11 @@ def test_build_music_track_gap_duration_no_edge_fade_stays_a_hard_cut():
     run = _FakeRun()
 
     audio_track.build_music_track(
-        ["a.mp3", "b.mp3"], "out.mp3",
-        gap_duration=3.0, edge_fade_duration=0, run_ffmpeg=run,
+        ["a.mp3", "b.mp3"],
+        "out.mp3",
+        gap_duration=3.0,
+        edge_fade_duration=0,
+        run_ffmpeg=run,
     )
 
     filter_complex = run.calls[0][run.calls[0].index("-filter_complex") + 1]
@@ -227,19 +262,27 @@ def test_build_music_track_gap_duration_still_gets_duration_independent_edge_fad
     run = _FakeRun()
 
     audio_track.build_music_track(
-        ["a.mp3", "b.mp3"], "out.mp3",
-        gap_duration=2.0, edge_fade_duration=1.0, run_ffmpeg=run,
+        ["a.mp3", "b.mp3"],
+        "out.mp3",
+        gap_duration=2.0,
+        edge_fade_duration=1.0,
+        run_ffmpeg=run,
     )
 
     filter_complex = run.calls[0][run.calls[0].index("-filter_complex") + 1]
-    assert "[joined]afade=t=in:st=0:d=1.0,areverse,afade=t=in:st=0:d=1.0,areverse[out]" in filter_complex
+    assert (
+        "[joined]afade=t=in:st=0:d=1.0,areverse,afade=t=in:st=0:d=1.0,areverse[out]"
+        in filter_complex
+    )
 
 
 def test_build_music_track_gap_duration_ignored_for_a_single_track():
     """Nothing to insert a gap between with only one track -- falls back to
     the plain single-track path (still trimmed, edge-faded if requested)."""
     run = _FakeRun()
-    audio_track.build_music_track(["song.mp3"], "out.mp3", gap_duration=2.0, edge_fade_duration=0, run_ffmpeg=run)
+    audio_track.build_music_track(
+        ["song.mp3"], "out.mp3", gap_duration=2.0, edge_fade_duration=0, run_ffmpeg=run
+    )
 
     filter_complex = run.calls[0][run.calls[0].index("-filter_complex") + 1]
     assert filter_complex == _trim_stage(0)
@@ -250,8 +293,11 @@ def test_build_music_track_zero_edge_fade_skips_afade_entirely():
     run = _FakeRun()
 
     audio_track.build_music_track(
-        ["a.mp3", "b.mp3"], "out.mp3",
-        crossfade_duration=2.0, edge_fade_duration=0, run_ffmpeg=run,
+        ["a.mp3", "b.mp3"],
+        "out.mp3",
+        crossfade_duration=2.0,
+        edge_fade_duration=0,
+        run_ffmpeg=run,
     )
 
     filter_complex = run.calls[0][run.calls[0].index("-filter_complex") + 1]
@@ -272,7 +318,11 @@ def test_layer_sound_effects_loops_effects_to_base_duration_and_mixes():
     probe = _fake_probe({"music.mp3": 12.0})
 
     audio_track.layer_sound_effects(
-        "music.mp3", ["rain.mp3", "wind.mp3"], "out.mp3", run_ffmpeg=run, probe_duration=probe,
+        "music.mp3",
+        ["rain.mp3", "wind.mp3"],
+        "out.mp3",
+        run_ffmpeg=run,
+        probe_duration=probe,
     )
 
     args = run.calls[0]
@@ -284,6 +334,7 @@ def test_layer_sound_effects_loops_effects_to_base_duration_and_mixes():
 
 # ---- pipeline.assemble ----
 
+
 def test_assemble_runs_video_then_audio_then_final_mux_with_shortest():
     run = _FakeRun()
     probe = _fake_probe({"clip.mp4": 5.0, "song.mp3": 8.0})
@@ -292,7 +343,8 @@ def test_assemble_runs_video_then_audio_then_final_mux_with_shortest():
         video_clip_paths=["clip.mp4"],
         music_track_paths=["song.mp3"],
         output_path="final.mp4",
-        run_ffmpeg=run, probe_duration=probe,
+        run_ffmpeg=run,
+        probe_duration=probe,
     )
 
     # video track (copy), music track (edge-fade filter), sfx layer (copy,

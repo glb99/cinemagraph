@@ -77,21 +77,37 @@ every request:
   an optional `project` field, the primary way an asset gets assigned to one
   in the first place (at the moment it's actually kept, not before).
 """
+
 import shutil
 import tempfile
 from pathlib import Path
 from typing import Annotated
 
-import asset_library as library
-from fastapi import BackgroundTasks, Depends, FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import (
+    BackgroundTasks,
+    Depends,
+    FastAPI,
+    File,
+    Form,
+    HTTPException,
+    UploadFile,
+)
 from fastapi.responses import FileResponse, HTMLResponse, Response
 
-from cinemagraph import effects as effects_pkg, pipeline, validation
+import asset_library as library
+from cinemagraph import effects as effects_pkg
+from cinemagraph import pipeline, validation
 
-from . import jobs, service, ui
+from . import jobs, service
 from ._external_service import call_optional_service, service_available
 from .config import Settings, get_settings
-from .generation_adapters import ACEStepAdapter, GeminiAdapter, Lyria3Adapter, SDXLAdapter, StableAudioAdapter
+from .generation_adapters import (
+    ACEStepAdapter,
+    GeminiAdapter,
+    Lyria3Adapter,
+    SDXLAdapter,
+    StableAudioAdapter,
+)
 from .generation_registry import (
     available_image_generators,
     available_music_generators,
@@ -143,7 +159,10 @@ async def _save_upload(upload: UploadFile, dest: Path) -> None:
 
 
 async def _resolve_optional_audio_input(
-    upload: UploadFile | None, asset_id: str | None, job_dir: Path, field_name: str,
+    upload: UploadFile | None,
+    asset_id: str | None,
+    job_dir: Path,
+    field_name: str,
 ) -> Path | None:
     """Generalizes /render/photo's input_file-xor-input_asset_id pattern to
     an *optional* pair (neither given is valid here, unlike /render/photo's
@@ -151,7 +170,9 @@ async def _resolve_optional_audio_input(
     (source audio, reference audio), both genuinely optional on their own.
     """
     if upload is not None and asset_id is not None:
-        raise HTTPException(422, f"Supply at most one of `{field_name}_file`/`{field_name}_asset_id`.")
+        raise HTTPException(
+            422, f"Supply at most one of `{field_name}_file`/`{field_name}_asset_id`."
+        )
     if asset_id is not None:
         asset = library.get(asset_id)
         if asset is None:
@@ -164,13 +185,91 @@ async def _resolve_optional_audio_input(
     return None
 
 
-@app.get("/", response_class=HTMLResponse)
-async def index():
-    """The thin web UI (photo rendering only for now -- see ui.py). Not a
-    packaging concern like static files would be: this is plain Python
-    source, included in every build the same as any other module.
+_FRONTEND_NOT_BUILT_HTML = """<!doctype html>
+<title>cinemagraph-tool</title>
+<h1>The web UI hasn't been built yet</h1>
+<p>The API itself is running fine -- every other route works. This page is the
+built <code>frontend/</code> bundle, which isn't where the server expects it:</p>
+<pre>{dist_dir}</pre>
+<p>Build it with <code>cd frontend &amp;&amp; bun install &amp;&amp; bun run build</code>, or point
+<code>CINEMAGRAPH_FRONTEND_DIR</code> at an existing build. For frontend development
+run <code>bun run dev</code> instead and use its own server (port 5173), which
+proxies API calls back here.</p>
+"""
+
+
+def _frontend_index(settings: Settings) -> Response:
+    """The SPA's entry document, or a page explaining how to build it.
+
+    Deliberately not a hard failure: an API-only deployment (or a source
+    checkout where nobody has run `bun run build`) still starts and serves
+    every other route, exactly like an unconfigured optional service degrades
+    to a clear message rather than a 500. The old single-page UI couldn't have
+    this problem -- it was a Python string -- so this is the cost of moving to
+    a real bundle, paid once, here.
     """
-    return ui.INDEX_HTML
+    index_file = settings.frontend_dist_dir / "index.html"
+    if not index_file.is_file():
+        return HTMLResponse(
+            _FRONTEND_NOT_BUILT_HTML.format(dist_dir=settings.frontend_dist_dir),
+            status_code=503,
+        )
+    # no-store: index.html names hash-suffixed asset files, so a cached copy
+    # of it keeps pointing at bundles that no longer exist after a rebuild.
+    # The assets themselves are content-hashed and cached hard (see below).
+    return FileResponse(index_file, headers={"cache-control": "no-store"})
+
+
+@app.get("/", response_class=HTMLResponse, include_in_schema=False)
+async def index(settings: SettingsDep):
+    """The web UI: `frontend/`'s built SPA (see that directory's README and
+    docs/DESIGN.md sec 5.5). Replaced server/ui.py's inline HTML string in
+    2026-08-14 once the UI outgrew a single page.
+    """
+    return _frontend_index(settings)
+
+
+@app.get("/ui", response_class=HTMLResponse, include_in_schema=False)
+async def frontend_spa_root(settings: SettingsDep):
+    """The SPA's own entry point. `/` redirects here client-side."""
+    return _frontend_index(settings)
+
+
+@app.get("/ui/{spa_path:path}", response_class=HTMLResponse, include_in_schema=False)
+async def frontend_spa(spa_path: str, settings: SettingsDep):
+    """Every client-side route (/ui/library, /ui/music, ...) serves the same
+    document -- the router picks the view once it's running -- so a hard
+    reload or a shared link works rather than 404ing.
+
+    The catch-all is scoped to /ui rather than mounted at the root precisely
+    because this API owns unprefixed top-level paths (/library, /assemble,
+    /jobs, ...): a root-level SPA fallback would shadow them, the same
+    collision the frontend's own /ui namespace exists to avoid.
+    """
+    del spa_path  # every path under /ui resolves to the same entry document
+    return _frontend_index(settings)
+
+
+@app.get("/assets/{asset_path:path}", include_in_schema=False)
+async def frontend_asset(asset_path: str, settings: SettingsDep):
+    """Vite emits every bundle under dist/assets with a content hash in its
+    name, so these are immutable and cached accordingly.
+
+    Served through a route rather than `app.mount(StaticFiles(...))` because a
+    mount resolves its directory once at import time, which would put the
+    frontend path back into the "config frozen at import" category config.py
+    exists to get out of -- and would make it un-overridable in tests.
+    """
+    root = settings.frontend_dist_dir / "assets"
+    requested = (root / asset_path).resolve()
+    # `..` in the URL path must not escape the bundle directory. FastAPI
+    # already normalises most of it away, but this is the check that makes
+    # that a guarantee rather than a trust in the framework's parsing.
+    if not requested.is_relative_to(root) or not requested.is_file():
+        raise HTTPException(status_code=404, detail="Not found")
+    return FileResponse(
+        requested, headers={"cache-control": "public, max-age=31536000, immutable"}
+    )
 
 
 @app.get("/health")
@@ -196,7 +295,8 @@ async def capabilities(settings: SettingsDep):
     likely just forgot to start a container": a satellite whose env var is
     set but whose health check currently fails is `configured=True,
     <bool>=False` -- the web UI uses that combination to show a hint instead
-    of hiding the tab outright (see ui.py). image_generation's/
+    of hiding the tab outright (see frontend/src/lib/tabs.ts).
+    image_generation's/
     music_generation's own `configured` is true if either backend has *any*
     config present (URL or key), independent of live reachability --
     deliberately not narrowed to "SDXL/ACE-Step only", since a Gemini key
@@ -227,9 +327,11 @@ async def capabilities(settings: SettingsDep):
         music_remix_models=list(available_music_remix_generators()),
         configured={
             "semantic_mask": bool(settings.ml_service_url),
-            "music_generation": bool(settings.acestep_url) or bool(settings.gemini_api_key),
+            "music_generation": bool(settings.acestep_url)
+            or bool(settings.gemini_api_key),
             "sound_effect_generation": bool(settings.sound_effects_url),
-            "image_generation": bool(settings.image_generation_url) or bool(settings.gemini_api_key),
+            "image_generation": bool(settings.image_generation_url)
+            or bool(settings.gemini_api_key),
         },
     )
 
@@ -271,12 +373,23 @@ async def render_video(
         await _save_upload(mask, mask_path)
 
     background_tasks.add_task(
-        service.run_render_job, job.id, pipeline.save_cinemagraph_video, output_path,
-        library_kind="generated", library_tags=["video"],
-        input_path=str(input_path), mask_path=str(mask_path) if mask_path else None,
-        still_frame_index=still_frame_index, blend_frames=blend_frames, auto_trim_loop=auto_trim,
-        mask_threshold=mask_threshold, feather=feather,
-        apply_grade=apply_grade, grade_strength=grade_strength, grain=grain, also_gif=also_gif,
+        service.run_render_job,
+        job.id,
+        pipeline.save_cinemagraph_video,
+        output_path,
+        library_kind="generated",
+        library_tags=["video"],
+        input_path=str(input_path),
+        mask_path=str(mask_path) if mask_path else None,
+        still_frame_index=still_frame_index,
+        blend_frames=blend_frames,
+        auto_trim_loop=auto_trim,
+        mask_threshold=mask_threshold,
+        feather=feather,
+        apply_grade=apply_grade,
+        grade_strength=grade_strength,
+        grain=grain,
+        also_gif=also_gif,
         loop_duration=loop_duration,
     )
     return JobResponse(job_id=job.id)
@@ -291,6 +404,7 @@ async def render_photo(
     effect: list[str] = Form(...),
     mask: UploadFile | None = File(None),
     mask_prompt: str | None = Form(None),
+    unmasked_effects: list[str] = Form([]),
     duration: float = Form(4.0),
     fps: int = Form(30),
     speed: float = Form(1.0),
@@ -325,21 +439,30 @@ async def render_photo(
     --mask) or `mask_prompt` (e.g. "clouds", "sun" -- segments the photo via
     the machine-learning service first and renders with that mask; the job
     errors with a 503-style message if that service isn't
-    configured/reachable, rather than silently rendering unmasked). Per-effect
-    overrides (rain_count, ripple_amplitude, etc.) mirror the CLI's per-effect
-    flags one-for-one and go through the same validation.resolve_effect_kwargs
-    check, so an override for an effect that wasn't requested is a 422 here
-    exactly as it's a click.UsageError on the CLI.
+    configured/reachable, rather than silently rendering unmasked).
+    `unmasked_effects` opts specific requested effects out of the mask
+    entirely, so e.g. snow can animate over the whole photo while flicker
+    stays confined to `mask`/`mask_prompt` -- see animate_photo()'s own
+    docstring. Per-effect overrides (rain_count, ripple_amplitude, etc.)
+    mirror the CLI's per-effect flags one-for-one and go through the same
+    validation.resolve_effect_kwargs check, so an override for an effect
+    that wasn't requested is a 422 here exactly as it's a click.UsageError
+    on the CLI.
     """
     unknown = [e for e in effect if e not in effects_pkg.EFFECTS]
     if unknown:
-        raise HTTPException(422, f"Unknown effect(s) {unknown}. Choose from: {', '.join(effects_pkg.EFFECTS)}")
+        raise HTTPException(
+            422,
+            f"Unknown effect(s) {unknown}. Choose from: {', '.join(effects_pkg.EFFECTS)}",
+        )
     if mask is not None and mask_prompt:
         raise HTTPException(422, "Supply either `mask` or `mask_prompt`, not both.")
     if loop_duration and also_gif:
         raise HTTPException(422, pipeline._LOOP_DURATION_GIF_ERROR)
     if (input_file is None) == (input_asset_id is None):
-        raise HTTPException(422, "Supply exactly one of `input_file` or `input_asset_id`.")
+        raise HTTPException(
+            422, "Supply exactly one of `input_file` or `input_asset_id`."
+        )
 
     per_effect_options = {
         "rain": {"count": rain_count, "opacity": rain_opacity},
@@ -354,6 +477,9 @@ async def render_photo(
     }
     try:
         effect_kwargs = validation.resolve_effect_kwargs(effect, per_effect_options)
+        resolved_unmasked = validation.resolve_unmasked_effects(
+            effect, unmasked_effects
+        )
     except ValueError as e:
         raise HTTPException(422, str(e))
 
@@ -370,16 +496,30 @@ async def render_photo(
     output_path = job_dir / "output.mp4"
 
     render_kwargs = dict(
-        effect=effect, duration=duration, fps=fps, speed=speed, feather=feather,
-        apply_grade=apply_grade, grade_strength=grade_strength, grain=grain, also_gif=also_gif,
-        effect_kwargs=effect_kwargs, loop_duration=loop_duration,
+        effect=effect,
+        duration=duration,
+        fps=fps,
+        speed=speed,
+        feather=feather,
+        apply_grade=apply_grade,
+        grade_strength=grade_strength,
+        grain=grain,
+        also_gif=also_gif,
+        effect_kwargs=effect_kwargs,
+        unmasked_effects=resolved_unmasked,
+        loop_duration=loop_duration,
     )
 
     if mask_prompt:
         background_tasks.add_task(
-            service.run_photo_semantic_mask_job, job.id, output_path,
-            settings=settings, photo_path=input_path, mask_path=job_dir / "mask.png",
-            mask_prompt=mask_prompt, library_kind="generated",
+            service.run_photo_semantic_mask_job,
+            job.id,
+            output_path,
+            settings=settings,
+            photo_path=input_path,
+            mask_path=job_dir / "mask.png",
+            mask_prompt=mask_prompt,
+            library_kind="generated",
             library_tags=["photo", *effect],
             **render_kwargs,
         )
@@ -389,9 +529,14 @@ async def render_photo(
             mask_path = job_dir / (mask.filename or "mask.png")
             await _save_upload(mask, mask_path)
         background_tasks.add_task(
-            service.run_render_job, job.id, pipeline.save_cinemagraph_from_photo, output_path,
-            library_kind="generated", library_tags=["photo", *effect],
-            photo_path=str(input_path), mask_path=str(mask_path) if mask_path else None,
+            service.run_render_job,
+            job.id,
+            pipeline.save_cinemagraph_from_photo,
+            output_path,
+            library_kind="generated",
+            library_tags=["photo", *effect],
+            photo_path=str(input_path),
+            mask_path=str(mask_path) if mask_path else None,
             **render_kwargs,
         )
     return JobResponse(job_id=job.id)
@@ -417,8 +562,13 @@ async def mask_preview(
     output_path = job_dir / "mask.png"
 
     background_tasks.add_task(
-        service.run_render_job, job.id, pipeline.save_mask_preview, output_path,
-        input_path=str(input_path), mask_threshold=mask_threshold, feather=feather,
+        service.run_render_job,
+        job.id,
+        pipeline.save_mask_preview,
+        output_path,
+        input_path=str(input_path),
+        mask_threshold=mask_threshold,
+        feather=feather,
     )
     return JobResponse(job_id=job.id)
 
@@ -468,11 +618,23 @@ async def save_job(job_id: str, project: str | None = Form(None)):
 
 
 def _asset_to_response(asset) -> AssetResponse:
-    project = next((t[len(library.PROJECT_TAG_PREFIX):] for t in asset.tags if t.startswith(library.PROJECT_TAG_PREFIX)), None)
+    project = next(
+        (
+            t[len(library.PROJECT_TAG_PREFIX) :]
+            for t in asset.tags
+            if t.startswith(library.PROJECT_TAG_PREFIX)
+        ),
+        None,
+    )
     tags = [t for t in asset.tags if not t.startswith(library.PROJECT_TAG_PREFIX)]
     return AssetResponse(
-        id=asset.id, kind=asset.kind, original_filename=asset.original_filename,
-        added_at=asset.added_at, tags=tags, provenance=asset.provenance, project=project,
+        id=asset.id,
+        kind=asset.kind,
+        original_filename=asset.original_filename,
+        added_at=asset.added_at,
+        tags=tags,
+        provenance=asset.provenance,
+        project=project,
     )
 
 
@@ -484,24 +646,35 @@ async def library_add(
     project: str | None = Form(None),
 ):
     if kind not in library.KINDS:
-        raise HTTPException(422, f"Unknown kind '{kind}'. Choose from: {', '.join(library.KINDS)}")
+        raise HTTPException(
+            422, f"Unknown kind '{kind}'. Choose from: {', '.join(library.KINDS)}"
+        )
 
-    with tempfile.NamedTemporaryFile(suffix=Path(upload.filename or "").suffix, delete=False) as tmp:
+    with tempfile.NamedTemporaryFile(
+        suffix=Path(upload.filename or "").suffix, delete=False
+    ) as tmp:
         tmp.write(await upload.read())
         tmp_path = Path(tmp.name)
     try:
         tag_list = [t.strip() for t in tags.split(",") if t.strip()]
         if project:
             tag_list.append(f"{library.PROJECT_TAG_PREFIX}{project}")
-        asset = library.add(str(tmp_path), kind=kind, tags=tag_list, original_filename=upload.filename)
+        asset = library.add(
+            str(tmp_path), kind=kind, tags=tag_list, original_filename=upload.filename
+        )
     finally:
         tmp_path.unlink(missing_ok=True)
     return _asset_to_response(asset)
 
 
 @app.get("/library", response_model=list[AssetResponse])
-async def library_list(kind: str | None = None, tag: str | None = None, project: str | None = None):
-    return [_asset_to_response(a) for a in library.list_assets(kind=kind, tag=tag, project=project)]
+async def library_list(
+    kind: str | None = None, tag: str | None = None, project: str | None = None
+):
+    return [
+        _asset_to_response(a)
+        for a in library.list_assets(kind=kind, tag=tag, project=project)
+    ]
 
 
 @app.post("/library/{asset_id}/project", response_model=AssetResponse)
@@ -559,15 +732,21 @@ async def library_remove(asset_id: str):
 
 
 @app.post("/mask/semantic")
-async def semantic_mask(settings: SettingsDep, image: UploadFile = File(...), prompt: str = Form(...)):
+async def semantic_mask(
+    settings: SettingsDep, image: UploadFile = File(...), prompt: str = Form(...)
+):
     """Proxies to the machine-learning (CLIPSeg) service. Returns a clean 503,
     not a 500, whenever that service isn't configured or isn't reachable --
     see machine-learning/README.md for the /segment contract this proxies.
     """
     files = {"image": (image.filename, await image.read(), image.content_type)}
     resp = await call_optional_service(
-        settings.semantic_mask_service, "POST", "/segment",
-        data={"prompt": prompt}, files=files, timeout=60.0,
+        settings.semantic_mask_service,
+        "POST",
+        "/segment",
+        data={"prompt": prompt},
+        files=files,
+        timeout=60.0,
     )
     return Response(content=resp.content, media_type="image/png")
 
@@ -624,30 +803,57 @@ async def generate_music(
             f"Unknown or unsupported task_type '{task_type}'. Choose from: {', '.join(_MUSIC_TASK_TYPES)} "
             "(lego/extract/complete are base-model-only, not supported by the current deployment).",
         )
-    is_remix = task_type != "text2music" or reference_audio_file is not None or reference_audio_asset_id is not None
-    valid_models = available_music_remix_generators() if is_remix else available_music_generators()
+    is_remix = (
+        task_type != "text2music"
+        or reference_audio_file is not None
+        or reference_audio_asset_id is not None
+    )
+    valid_models = (
+        available_music_remix_generators() if is_remix else available_music_generators()
+    )
     if model not in valid_models:
         raise HTTPException(
-            422, f"Unknown model '{model}' for this request. Choose from: {', '.join(valid_models)}"
+            422,
+            f"Unknown model '{model}' for this request. Choose from: {', '.join(valid_models)}",
         )
-    if task_type in ("cover", "repaint") and src_audio_file is None and src_audio_asset_id is None:
-        raise HTTPException(422, f"task_type='{task_type}' needs `src_audio_file` or `src_audio_asset_id`.")
+    if (
+        task_type in ("cover", "repaint")
+        and src_audio_file is None
+        and src_audio_asset_id is None
+    ):
+        raise HTTPException(
+            422,
+            f"task_type='{task_type}' needs `src_audio_file` or `src_audio_asset_id`.",
+        )
 
     job = jobs.create_job()
     job_dir = _job_dir(settings, job.id)
     output_path = job_dir / "output.mp3"
 
-    src_audio_path = await _resolve_optional_audio_input(src_audio_file, src_audio_asset_id, job_dir, "src_audio")
+    src_audio_path = await _resolve_optional_audio_input(
+        src_audio_file, src_audio_asset_id, job_dir, "src_audio"
+    )
     reference_audio_path = await _resolve_optional_audio_input(
         reference_audio_file, reference_audio_asset_id, job_dir, "reference_audio"
     )
 
     background_tasks.add_task(
-        service.run_music_job, job.id, output_path,
-        settings=settings, prompt=prompt, lyrics=lyrics, duration=duration, thinking=thinking,
-        instrumental=instrumental, model=model, task_type=task_type,
-        src_audio_path=src_audio_path, reference_audio_path=reference_audio_path,
-        cover_strength=cover_strength, repainting_start=repainting_start, repainting_end=repainting_end,
+        service.run_music_job,
+        job.id,
+        output_path,
+        settings=settings,
+        prompt=prompt,
+        lyrics=lyrics,
+        duration=duration,
+        thinking=thinking,
+        instrumental=instrumental,
+        model=model,
+        task_type=task_type,
+        src_audio_path=src_audio_path,
+        reference_audio_path=reference_audio_path,
+        cover_strength=cover_strength,
+        repainting_start=repainting_start,
+        repainting_end=repainting_end,
         library_kind="generated",
     )
     return JobResponse(job_id=job.id)
@@ -670,8 +876,12 @@ async def generate_sound_effect(
     output_path = job_dir / "output.wav"
 
     background_tasks.add_task(
-        service.run_sound_effect_job, job.id, output_path,
-        settings=settings, prompt=prompt, duration=duration,
+        service.run_sound_effect_job,
+        job.id,
+        output_path,
+        settings=settings,
+        prompt=prompt,
+        duration=duration,
         library_kind="generated",
     )
     return JobResponse(job_id=job.id)
@@ -699,7 +909,8 @@ async def generate_image(
     """
     if model not in available_image_generators():
         raise HTTPException(
-            422, f"Unknown model '{model}'. Choose from: {', '.join(available_image_generators())}"
+            422,
+            f"Unknown model '{model}'. Choose from: {', '.join(available_image_generators())}",
         )
 
     job = jobs.create_job()
@@ -712,9 +923,14 @@ async def generate_image(
         await _save_upload(reference_image, reference_image_path)
 
     background_tasks.add_task(
-        service.run_image_job, job.id, output_path,
-        settings=settings, prompt=prompt,
-        reference_image_path=reference_image_path, strength=strength, model=model,
+        service.run_image_job,
+        job.id,
+        output_path,
+        settings=settings,
+        prompt=prompt,
+        reference_image_path=reference_image_path,
+        strength=strength,
+        model=model,
         library_kind="generated",
     )
     return JobResponse(job_id=job.id)
@@ -767,15 +983,20 @@ async def assemble(
     """
     video_clip_paths = _resolve_asset_paths(clip_asset_ids)
     music_track_paths = _resolve_asset_paths(music_asset_ids)
-    sound_effect_paths = _resolve_asset_paths(sound_effect_asset_ids) if sound_effect_asset_ids else None
+    sound_effect_paths = (
+        _resolve_asset_paths(sound_effect_asset_ids) if sound_effect_asset_ids else None
+    )
 
     job = jobs.create_job()
     job_dir = _job_dir(settings, job.id)
     output_path = job_dir / "output.mp4"
 
     background_tasks.add_task(
-        service.run_assembly_job, job.id, output_path,
-        video_clip_paths=video_clip_paths, music_track_paths=music_track_paths,
+        service.run_assembly_job,
+        job.id,
+        output_path,
+        video_clip_paths=video_clip_paths,
+        music_track_paths=music_track_paths,
         sound_effect_paths=sound_effect_paths,
         video_crossfade_duration=video_crossfade_duration,
         music_crossfade_duration=music_crossfade_duration,

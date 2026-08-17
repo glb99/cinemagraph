@@ -1,4 +1,5 @@
 """Video reading/writing helpers."""
+
 from pathlib import Path
 
 import click
@@ -6,7 +7,9 @@ import cv2
 import numpy as np
 
 
-def read_frames(video_path: str, max_frames: int | None = None) -> tuple[list[np.ndarray], float]:
+def read_frames(
+    video_path: str, max_frames: int | None = None
+) -> tuple[list[np.ndarray], float]:
     """Read all frames of a video into memory. Returns (frames, fps).
 
     Keeping everything in memory is fine for the short clips (a few seconds)
@@ -40,7 +43,12 @@ def read_image(image_path: str) -> np.ndarray:
     return image
 
 
-def write_video(frames: list[np.ndarray], out_path: str, fps: float, loop_duration: float | None = None) -> None:
+def write_video(
+    frames: list[np.ndarray],
+    out_path: str,
+    fps: float,
+    loop_duration: float | None = None,
+) -> None:
     """Write `frames` as a video. If `loop_duration` (seconds) is longer than the
     natural length of `frames`, the loop is repeated to fill it -- frames are
     written directly to the encoder as they're cycled through, so memory use
@@ -59,13 +67,20 @@ def write_video(frames: list[np.ndarray], out_path: str, fps: float, loop_durati
     """
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    total_frames = max(int(round(loop_duration * fps)), len(frames)) if loop_duration else len(frames)
+    total_frames = (
+        max(int(round(loop_duration * fps)), len(frames))
+        if loop_duration
+        else len(frames)
+    )
 
     if out_path.suffix == ".mp4":
         import imageio.v2 as imageio
 
         writer = imageio.get_writer(
-            str(out_path), fps=fps, codec="libx264", pixelformat="yuv420p",
+            str(out_path),
+            fps=fps,
+            codec="libx264",
+            pixelformat="yuv420p",
             # yuv420p halves each dimension via chroma subsampling, so libx264
             # requires both width and height to be even -- macro_block_size=2 is
             # the minimum that satisfies that (rounds up by at most 1px on an
@@ -78,7 +93,9 @@ def write_video(frames: list[np.ndarray], out_path: str, fps: float, loop_durati
         try:
             with click.progressbar(range(total_frames), label="Writing video") as bar:
                 for i in bar:
-                    writer.append_data(cv2.cvtColor(frames[i % len(frames)], cv2.COLOR_BGR2RGB))
+                    writer.append_data(
+                        cv2.cvtColor(frames[i % len(frames)], cv2.COLOR_BGR2RGB)
+                    )
         finally:
             writer.close()
     else:

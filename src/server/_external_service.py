@@ -16,6 +16,7 @@ environment at all -- it takes an already-resolved config.OptionalService
 and is pure transport, so *reachability* is still checked on every call
 while *configuration* is resolved once by config.get_settings().
 """
+
 import httpx
 from fastapi import HTTPException
 

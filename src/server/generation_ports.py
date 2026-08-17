@@ -5,6 +5,7 @@ generation_adapters.py implements it -- Dependency Inversion applied to
 generation backends, the same "genuine peers behind one shared call shape"
 idea effects/base.py's registry (sec 3.3) already applies to motion effects.
 """
+
 from typing import Literal, Protocol
 
 
@@ -14,7 +15,13 @@ class ImageGenerator(Protocol):
 
 class MusicGenerator(Protocol):
     async def generate(
-        self, prompt: str, *, lyrics: str, duration: float, thinking: bool, instrumental: bool = False
+        self,
+        prompt: str,
+        *,
+        lyrics: str,
+        duration: float,
+        thinking: bool,
+        instrumental: bool = False,
     ) -> bytes: ...
 
     async def remix(

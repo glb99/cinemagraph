@@ -14,18 +14,26 @@ gap -- brightness modulation alone reads as a shimmering overlay with no
 real motion; this adds the motion `ripple.py`'s own `cv2.remap` warp already
 proved out for water.
 """
+
 import cv2
 import numpy as np
 
 from .. import mask as mask_mod
-from .base import Effect, EffectContext, EffectFamily, register
 from ._util import cycles_for, rng
+from .base import Effect, EffectContext, EffectFamily, register
 
 # Denser, higher-frequency turbulence than the original smoke (4 layers,
 # narrower band) for a more organic, less wallpapery drift.
 _PRESETS = {
-    "smoke": dict(n_layers=6, freq_range=(0.6, 2.6), hz_range=(0.25, 0.55),
-                  opacity=0.35, blur_sigma=0.0, rise_hz=0.0, flow_amplitude=4.0),
+    "smoke": dict(
+        n_layers=6,
+        freq_range=(0.6, 2.6),
+        hz_range=(0.25, 0.55),
+        opacity=0.35,
+        blur_sigma=0.0,
+        rise_hz=0.0,
+        flow_amplitude=4.0,
+    ),
     # Water vapor/steam: more, lower-frequency layers (broader/softer blobs),
     # blurred further for diffuseness, lower opacity (subtler than smoke),
     # plus a deterministic upward-traveling carrier wave (`rise_hz`) so it
@@ -33,13 +41,33 @@ _PRESETS = {
     # amplitude than smoke -- vapor is meant to read as delicate/subtle, not
     # turbulent; the existing rise_hz brightness carrier already covers most
     # of its upward-motion cue, so the warp field only needs to add texture.
-    "vapor": dict(n_layers=6, freq_range=(0.25, 1.0), hz_range=(0.12, 0.3),
-                  opacity=0.22, blur_sigma=3.0, rise_hz=0.2, flow_amplitude=2.5),
+    "vapor": dict(
+        n_layers=6,
+        freq_range=(0.25, 1.0),
+        hz_range=(0.12, 0.3),
+        opacity=0.22,
+        blur_sigma=3.0,
+        rise_hz=0.2,
+        flow_amplitude=2.5,
+    ),
 }
 
 
-def _precompute_raw(h, w, mask, duration, opacity, seed, speed, n_layers, freq_range, hz_range,
-                     blur_sigma=0.0, rise_hz=0.0, flow_amplitude=0.0):
+def _precompute_raw(
+    h,
+    w,
+    mask,
+    duration,
+    opacity,
+    seed,
+    speed,
+    n_layers,
+    freq_range,
+    hz_range,
+    blur_sigma=0.0,
+    rise_hz=0.0,
+    flow_amplitude=0.0,
+):
     """`rise_hz` (vapor only) adds one more deterministic layer with a fixed,
     positive vertical spatial frequency and a whole-cycle temporal rate. A
     wave sin(fy*yy + 2*pi*cyc*t) with fy, cyc > 0 has its crests move toward
@@ -59,7 +87,9 @@ def _precompute_raw(h, w, mask, duration, opacity, seed, speed, n_layers, freq_r
     y = np.linspace(0, 2 * np.pi, h)
     x = np.linspace(0, 2 * np.pi, w)
     yy, xx = np.meshgrid(y, x, indexing="ij")
-    py, px = np.meshgrid(np.arange(h), np.arange(w), indexing="ij")  # pixel coords for remap
+    py, px = np.meshgrid(
+        np.arange(h), np.arange(w), indexing="ij"
+    )  # pixel coords for remap
 
     freqs_x = r.uniform(*freq_range, n_layers)
     freqs_y = r.uniform(*freq_range, n_layers)
@@ -75,15 +105,27 @@ def _precompute_raw(h, w, mask, duration, opacity, seed, speed, n_layers, freq_r
     flow_phase_x, flow_phase_y = r.uniform(0, 2 * np.pi, 2)
 
     return {
-        "yy": yy, "xx": xx, "py": py, "px": px,
-        "freqs_x": freqs_x, "freqs_y": freqs_y, "phases": phases,
-        "cycles": cycles, "weights": weights, "mask3": mask_mod.to_3ch(mask), "opacity": opacity,
-        "n_layers": n_layers, "blur_sigma": blur_sigma, "rise_cycles": rise_cycles,
+        "yy": yy,
+        "xx": xx,
+        "py": py,
+        "px": px,
+        "freqs_x": freqs_x,
+        "freqs_y": freqs_y,
+        "phases": phases,
+        "cycles": cycles,
+        "weights": weights,
+        "mask3": mask_mod.to_3ch(mask),
+        "opacity": opacity,
+        "n_layers": n_layers,
+        "blur_sigma": blur_sigma,
+        "rise_cycles": rise_cycles,
         "flow_amplitude": flow_amplitude,
         "flow_cycles_x": cycles_for(flow_hz_x, duration, speed),
         "flow_cycles_y": cycles_for(flow_hz_y, duration, speed),
-        "flow_freq_x": flow_freq_x, "flow_freq_y": flow_freq_y,
-        "flow_phase_x": flow_phase_x, "flow_phase_y": flow_phase_y,
+        "flow_freq_x": flow_freq_x,
+        "flow_freq_y": flow_freq_y,
+        "flow_phase_x": flow_phase_x,
+        "flow_phase_y": flow_phase_y,
     }
 
 
@@ -96,17 +138,29 @@ def _apply(base, pc, t):
     # motion). Same cv2.remap technique ripple.py already uses for water.
     if pc["flow_amplitude"] > 0:
         dx = pc["flow_amplitude"] * np.sin(
-            pc["flow_freq_x"] * pc["xx"] + pc["flow_phase_x"] + 2 * np.pi * pc["flow_cycles_x"] * t
+            pc["flow_freq_x"] * pc["xx"]
+            + pc["flow_phase_x"]
+            + 2 * np.pi * pc["flow_cycles_x"] * t
         )
         dy = pc["flow_amplitude"] * np.sin(
-            pc["flow_freq_y"] * pc["yy"] + pc["flow_phase_y"] + 2 * np.pi * pc["flow_cycles_y"] * t
+            pc["flow_freq_y"] * pc["yy"]
+            + pc["flow_phase_y"]
+            + 2 * np.pi * pc["flow_cycles_y"] * t
         )
         map_x = (pc["px"] + dx).astype(np.float32)
         map_y = (pc["py"] + dy).astype(np.float32)
-        base = cv2.remap(base, map_x, map_y, interpolation=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REFLECT)
+        base = cv2.remap(
+            base,
+            map_x,
+            map_y,
+            interpolation=cv2.INTER_LINEAR,
+            borderMode=cv2.BORDER_REFLECT,
+        )
 
     field = np.zeros_like(pc["yy"])
-    for fx, fy, ph, cyc, wgt in zip(pc["freqs_x"], pc["freqs_y"], pc["phases"], pc["cycles"], pc["weights"]):
+    for fx, fy, ph, cyc, wgt in zip(
+        pc["freqs_x"], pc["freqs_y"], pc["phases"], pc["cycles"], pc["weights"]
+    ):
         field += wgt * np.sin(fx * pc["xx"] + fy * pc["yy"] + ph + 2 * np.pi * cyc * t)
     n_terms = pc["n_layers"]
     if pc["rise_cycles"]:
@@ -114,7 +168,9 @@ def _apply(base, pc, t):
         n_terms += 1
     field = field / n_terms  # roughly in [-1, 1]
     if pc["blur_sigma"] > 0:
-        field = cv2.GaussianBlur(field.astype(np.float32), (0, 0), sigmaX=pc["blur_sigma"])
+        field = cv2.GaussianBlur(
+            field.astype(np.float32), (0, 0), sigmaX=pc["blur_sigma"]
+        )
     cloud_layer = np.stack([field] * 3, axis=-1) * 128.0
     return base + cloud_layer * pc["opacity"] * pc["mask3"]
 
@@ -126,12 +182,22 @@ def _make_cloud_effect(name: str) -> Effect:
         preset = dict(preset_template)
         default_opacity = preset.pop("opacity")
         opacity = ctx.kwargs.get("opacity", default_opacity)
-        return _precompute_raw(ctx.h, ctx.w, ctx.mask, ctx.duration, opacity,
-                                ctx.kwargs.get("seed", 0), ctx.speed, **preset)
+        return _precompute_raw(
+            ctx.h,
+            ctx.w,
+            ctx.mask,
+            ctx.duration,
+            opacity,
+            ctx.kwargs.get("seed", 0),
+            ctx.speed,
+            **preset,
+        )
 
     return Effect(
-        name=name, family=EffectFamily.TONE,
-        precompute=_precompute, apply=_apply,
+        name=name,
+        family=EffectFamily.TONE,
+        precompute=_precompute,
+        apply=_apply,
         defaults={"opacity": preset_template["opacity"]},
         allowed_kwargs=frozenset({"opacity", "seed"}),
     )

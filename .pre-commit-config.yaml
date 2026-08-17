@@ -1,0 +1,77 @@
+# machine-learning/, sound-effects/, image-generation/ are independent projects
+# (own pyproject.toml, own Python version constraints -- see CLAUDE.md) living
+# inside this repo; none of these hooks should reformat/lint their code.
+exclude: ^(machine-learning|sound-effects|image-generation)/
+
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: check-added-large-files
+      - id: check-toml
+      - id: check-yaml
+        args: ["--unsafe"]
+      - id: end-of-file-fixer
+      - id: trailing-whitespace
+
+  - repo: https://github.com/crate-ci/typos
+    rev: v1.28.4
+    hooks:
+      - id: typos
+        args: ["--force-exclude"]
+
+  - repo: local
+    hooks:
+      - id: ruff-check
+        name: ruff check
+        entry: uv run ruff check --fix
+        language: unsupported
+        types: [python]
+        files: ^(src|tests|scripts)/
+
+      - id: ruff-format
+        name: ruff format
+        entry: uv run ruff format
+        language: unsupported
+        types: [python]
+        files: ^(src|tests|scripts)/
+
+      - id: mypy
+        name: mypy
+        entry: uv run mypy src
+        language: unsupported
+        pass_filenames: false
+        files: ^src/
+
+      - id: ty
+        name: ty check
+        entry: uv run ty check src
+        language: unsupported
+        pass_filenames: false
+        files: ^src/
+
+      - id: biome-check
+        name: biome check (frontend)
+        entry: bun run --cwd frontend lint
+        language: unsupported
+        pass_filenames: false
+        files: ^frontend/
+        exclude: ^frontend/src/(client|routeTree\.gen\.ts)
+
+      # Regenerates frontend/src/client whenever the backend's API surface (or
+      # the codegen config itself) changes, so the generated SDK never drifts
+      # out of sync with server.app's actual OpenAPI schema. Needs
+      # `--extra server --extra generation` synced -- see scripts/generate-client.sh.
+      - id: generate-frontend-sdk
+        name: generate frontend OpenAPI client
+        entry: bash ./scripts/generate-client.sh
+        language: unsupported
+        pass_filenames: false
+        files: ^(src/server/.*\.py|pyproject\.toml|uv\.lock|frontend/openapi-ts\.config\.ts)$
+
+      - id: zizmor
+        name: zizmor (GitHub Actions security linter)
+        entry: uv run zizmor
+        language: unsupported
+        pass_filenames: true
+        files: ^\.github/workflows/.*\.ya?ml$

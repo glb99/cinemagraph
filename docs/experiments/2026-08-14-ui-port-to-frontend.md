@@ -1,0 +1,128 @@
+# Porting the single-page UI into `frontend/`
+
+**Date:** 2026-08-14
+**Question:** can the whole of `server/ui.py`'s seven-tab page be rebuilt in the `frontend/`
+scaffold (React + Vite + TanStack Router/Query + Tailwind, generated OpenAPI SDK) without losing
+behaviour — and what does the scaffold's stack actually commit us to?
+
+## What was tried
+
+The scaffold already pinned the stack (`frontend/package.json`, `components.json`,
+`vite.config.ts`): React 19, Vite 6, TanStack Router (file-based routes, `autoCodeSplitting`),
+TanStack Query 5, Tailwind v4 via `@tailwindcss/vite`, shadcn conventions (new-york/neutral,
+`@/components/ui`, Radix `Slot` + CVA + `tailwind-merge`), a `@hey-api/openapi-ts` axios client
+generated from the live app's own OpenAPI schema, Biome, Playwright, bun. Nothing about the stack
+was re-litigated here; the only thing missing was an actual UI.
+
+Every tab was ported 1:1 — Photo, Video, Music (including cover/repaint/reference-audio and the
+drag-selectable repaint waveform), Sound effects, Image, Assemble, Library — plus the pieces they
+share: the job submit-then-poll loop, save-to-library with its project picker, the asset pickers
+with inline previews, project assign/filter selects, and the capability gating (hidden / ⚠ +
+"start the container" hint / normal).
+
+Structural decisions that came out of the port:
+
+- **The SDK does every call.** `DefaultService.*` with the generated request/response types, not
+  hand-written `fetch`. Media URLs (`/jobs/{id}/file`, `/library/{id}/file`) stay plain strings,
+  since the browser fetches those itself as `src` attributes.
+- **One polling hook** (`hooks/useJobRunner.ts`) replaces `pollJob()`/`wireForm()`. Written as a
+  plain async loop rather than a react-query `refetchInterval`: a job is a one-shot
+  submit-then-watch, not a cache entry.
+- **Client-side validation shares the tab's single error surface**, the way `buildForm()` returning
+  `null` after writing to `errorEl` used to.
+- **Every app route is namespaced under `/ui`.** See below — this was the one real surprise.
+
+## Result
+
+All ported, `bun run lint` / `tsc -b --force` / `bun run test` clean, and verified against a live
+`uvicorn server.app:app`: uploaded a photo, checked an effect, rendered, watched the poll loop
+reach `done`, confirmed the `<video>` reported a real duration (not just a 200 on the URL), saved
+it to the library, and found the card in the Library tab with its preview and metadata. Screenshots:
+`frontend/test-results/manual-photo-render.png`, `manual-library.png` (gitignored, re-runnable).
+
+Capability gating was verified separately against a second backend started with
+`ACESTEP_URL`/`SOUND_EFFECTS_URL`/`IMAGE_GENERATION_URL`/`ML_SERVICE_URL` pointed at dead ports:
+the three gated tabs appear with the ⚠ marker and the right `docker compose --profile … up …`
+hint inside each (`manual-music.png`).
+
+Two things found by doing this rather than by reasoning about it:
+
+1. **`/library` and `/assemble` are API paths, so the SPA can't own them.** With flat routes, a
+   browser navigation to `/library` resolved to the JSON endpoint through Vite's dev proxy, not the
+   app — the API serves its routes unprefixed, with no `/api` base. Filtering the proxy on the
+   `Accept` header would separate navigations from SDK calls, but it would also break the plain
+   download links the Library tab falls back to for non-previewable assets, which *are* navigations
+   to an API path. Namespacing the app under `/ui` (with `/` redirecting there) leaves the API's URL
+   space alone and needs no proxy heuristics.
+2. **`GET /capabilities` takes ~12s when satellites are configured but unreachable** — four
+   health checks against dead addresses, and the browser sees the whole wait. Pre-existing backend
+   behaviour, not a UI bug (the tabs do appear once it resolves), but it means the gated tabs pop in
+   late on a first load in that state. Worth a look on the server side; the UI tolerates it as is.
+
+## Verdict
+
+- [x] Adopted — `frontend/src/{routes,components,hooks,lib}`, and (see the follow-up below)
+      `server/ui.py` is now deleted with `GET /` serving the built bundle.
+- [ ] Rejected
+- [ ] Inconclusive
+
+## Notes
+
+- The generated SDK's `formDataBodySerializer` appends array values one key at a time, which is
+  exactly what the multi-valued `effect` field needs — no special-casing.
+- `useJobRunner`'s cancellation ref is reset **on mount**, not only in the cleanup: StrictMode
+  mounts, unmounts and remounts the same instance (refs included), so a cleanup-only version would
+  leave it stuck `true` and silently swallow every job update in development.
+- Assemble's ordered buckets store `{key, assetId}` pairs rather than bare ids: the same clip can
+  legitimately appear twice, so "remove this one" needs an identity that neither the asset id nor
+  the list position provides.
+- `frontend/src/routeTree.gen.ts` is gitignored and regenerated by the Vite plugin, so `tsc -b`
+  needs a `vite build`/`vite dev` to have run once after adding or moving a route file.
+
+## Follow-up, same day: `ui.py` deleted, the bundle served at `/`
+
+Two UIs implementing the same seven tabs is one too many, so the port's own open question got
+closed immediately rather than left as a state anyone could mistake for permanent.
+
+`server/ui.py` is gone. `server/app.py` gained three routes — `/` and `/ui/{path}` (both the SPA's
+entry document, so a hard reload or a shared link resolves) and `/assets/{path}` (the hashed
+bundles, cached immutably; `/` itself is `no-store`, since it names those hashes). The bundle's
+location is `Settings.frontend_dist_dir` / `CINEMAGRAPH_FRONTEND_DIR`, defaulting to this repo's
+`frontend/dist`. The Docker image builds it in a `frontend-build` bun stage and copies only `dist/`
+into the runtime image.
+
+Deliberate choices: routes rather than `app.mount(StaticFiles(...))` (a mount freezes its directory
+at import time — the exact pattern `config.py` exists to escape — and can't be overridden in
+tests); the SPA fallback scoped to `/ui` rather than the root (a root catch-all would shadow
+`/library`, `/assemble`, `/jobs`); and a missing bundle returning a 503 page that says how to build
+it while every other route keeps serving.
+
+Two things this turned up, neither of them about the UI:
+
+1. **`bun run build` failed on a clean checkout.** `tsc -b` ran before `vite build`, but the
+   TanStack Router plugin generates the gitignored `src/routeTree.gen.ts` *during* the Vite build.
+   `test-frontend.yml` and any Docker build were already broken by this. Reordered to
+   `vite build && tsc -b`. Found by deleting the generated file and building the way CI does, not
+   by reading the workflow.
+2. **`Settings(data_dir=...)` was a silent no-op.** `validation_alias` makes a field settable only
+   by its alias, and `extra="ignore"` swallows the field-name form. Every test fixture and
+   `dependency_overrides` call in this repo passes `data_dir=` by name, so none of them ever took
+   effect: the suite has been writing job output into the repo's own `./data` while appearing to
+   isolate itself in `tmp_path`. Fixed with `populate_by_name=True`; all 163 tests still pass, now
+   actually isolated. It surfaced only because the new frontend tests assert on the configured path
+   rather than just exercising a route.
+
+Verified the same way as the port itself: `GET /`, `/ui`, `/ui/library`, `/ui/music`,
+`/assets/index-*.js`, `/library`, `/capabilities` and a `..` traversal attempt all probed against a
+real uvicorn serving the real bundle (200/200/200/200/200/JSON/JSON/404, correct cache headers),
+then the whole Playwright suite re-run against `http://localhost:8003` with **no Vite involved**,
+then a real photo render submitted, polled, previewed and saved to the library through that
+same single-origin deployment. CI gained a step asserting `GET /` and `GET /ui/library` return the
+built document from the image, since `/health` passing says nothing about whether the UI shipped.
+
+The image itself was then built and run for real (`docker build` + `docker run -p 8004:8000`), and
+the Playwright suite pointed at the container: `/`, `/ui/library` and the hashed chunks all served
+correctly. That run also caught a weak assertion in the suite -- the library test checked the grid
+*container*, which always renders, so it passed only against a populated library and failed against
+the container's fresh, empty one. Now it asserts on the first card or the empty-state line, exactly
+one of which is on screen in either case, and passes against both.

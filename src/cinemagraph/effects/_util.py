@@ -1,4 +1,5 @@
 """Small helpers shared across effect modules."""
+
 import numpy as np
 
 # Default per-effect speeds were tuned by eye against a 4s clip. Effects that

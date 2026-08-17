@@ -32,6 +32,7 @@ to). `supports_remix` (class attribute, `True` only on ACEStepAdapter) lets
 generation_registry.available_music_remix_generators() filter the registry
 without every caller needing to know which concrete adapter class it got.
 """
+
 import asyncio
 import json
 
@@ -82,8 +83,12 @@ class SDXLAdapter:
             files = {"image": (reference_image_filename, reference_image_bytes)}
 
         resp = await self._call_service(
-            self._settings.image_generation_service, "POST", "/generate",
-            data=data, files=files, timeout=120.0,
+            self._settings.image_generation_service,
+            "POST",
+            "/generate",
+            data=data,
+            files=files,
+            timeout=120.0,
         )
         return resp.content
 
@@ -154,16 +159,26 @@ class ACEStepAdapter:
         self._call_service = call_service
 
     async def generate(
-        self, prompt: str, *, lyrics: str, duration: float, thinking: bool, instrumental: bool = False
+        self,
+        prompt: str,
+        *,
+        lyrics: str,
+        duration: float,
+        thinking: bool,
+        instrumental: bool = False,
     ) -> bytes:
         service = self._settings.music_service
         effective_lyrics = "[Instrumental]" if instrumental else lyrics
 
         create_resp = await self._call_service(
-            service, "POST", "/release_task",
+            service,
+            "POST",
+            "/release_task",
             json={
-                "prompt": prompt, "lyrics": effective_lyrics,
-                "audio_duration": duration, "thinking": thinking,
+                "prompt": prompt,
+                "lyrics": effective_lyrics,
+                "audio_duration": duration,
+                "thinking": thinking,
                 # ACE-Step's own default is 2 (confirmed in its API.md) -- it
                 # generates that many candidate variations per task, but this
                 # adapter only ever keeps result[0] (below), so the second
@@ -202,8 +217,11 @@ class ACEStepAdapter:
         """
         service = self._settings.music_service
         data = {
-            "task_type": task_type, "prompt": prompt, "lyrics": lyrics,
-            "thinking": thinking, "batch_size": 1,
+            "task_type": task_type,
+            "prompt": prompt,
+            "lyrics": lyrics,
+            "thinking": thinking,
+            "batch_size": 1,
         }
         if duration is not None:
             data["audio_duration"] = duration
@@ -220,7 +238,11 @@ class ACEStepAdapter:
             files["reference_audio"] = ("reference.wav", reference_audio_bytes)
 
         create_resp = await self._call_service(
-            service, "POST", "/release_task", data=data, files=files,
+            service,
+            "POST",
+            "/release_task",
+            data=data,
+            files=files,
         )
         task_id = create_resp.json()["data"]["task_id"]
         return await self._poll_and_download(service, task_id)
@@ -242,8 +264,11 @@ class ACEStepAdapter:
             # steady-state polling (the overwhelmingly common case) is
             # unaffected since those calls return almost immediately either way.
             query_resp = await self._call_service(
-                service, "POST", "/query_result",
-                json={"task_id_list": [task_id]}, timeout=90.0,
+                service,
+                "POST",
+                "/query_result",
+                json={"task_id_list": [task_id]},
+                timeout=90.0,
             )
             entry = query_resp.json()["data"][0]
             if entry["status"] == 1:
@@ -252,9 +277,13 @@ class ACEStepAdapter:
             if entry["status"] == 2:
                 raise RuntimeError("ACE-Step reported generation failure.")
         if result is None:
-            raise RuntimeError(f"ACE-Step generation timed out after {MUSIC_POLL_MAX_ATTEMPTS} polls.")
+            raise RuntimeError(
+                f"ACE-Step generation timed out after {MUSIC_POLL_MAX_ATTEMPTS} polls."
+            )
 
-        audio_resp = await self._call_service(service, "GET", result["file"], timeout=60.0)
+        audio_resp = await self._call_service(
+            service, "GET", result["file"], timeout=60.0
+        )
         return audio_resp.content
 
 
@@ -291,7 +320,13 @@ class Lyria3Adapter:
         self._settings = settings
 
     async def generate(
-        self, prompt: str, *, lyrics: str, duration: float, thinking: bool, instrumental: bool = False
+        self,
+        prompt: str,
+        *,
+        lyrics: str,
+        duration: float,
+        thinking: bool,
+        instrumental: bool = False,
     ) -> bytes:
         from generation import generate_music
 
@@ -314,7 +349,9 @@ class Lyria3Adapter:
         picker both filter this adapter out before a remix request can ever
         reach it; this exists as a defensive backstop, not the primary path.
         """
-        raise NotImplementedError("Lyria 3 does not support cover/repaint/reference-audio remix.")
+        raise NotImplementedError(
+            "Lyria 3 does not support cover/repaint/reference-audio remix."
+        )
 
 
 class StableAudioAdapter:
@@ -328,7 +365,10 @@ class StableAudioAdapter:
 
     async def generate(self, prompt: str, *, duration: float) -> bytes:
         resp = await self._call_service(
-            self._settings.sound_effect_service, "POST", "/generate",
-            json={"prompt": prompt, "duration": duration}, timeout=300.0,
+            self._settings.sound_effect_service,
+            "POST",
+            "/generate",
+            json={"prompt": prompt, "duration": duration},
+            timeout=300.0,
         )
         return resp.content

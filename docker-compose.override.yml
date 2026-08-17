@@ -38,3 +38,35 @@ services:
           path: ./pyproject.toml
         - action: rebuild
           path: ./uv.lock
+
+  # Dev-mode Vite server, kept as its own service/image rather than bundled
+  # into `core` (unlike full-stack-fastapi-template's single-image approach)
+  # -- `core` is already a multi-service, GPU-adjacent image, and the
+  # frontend runs in dev mode only, so there's no built bundle to bake in.
+  # Unprofiled (always up under a plain `docker compose up`, same as `core`)
+  # -- the profile-gated services below are the GPU-heavy satellites, this
+  # isn't one of them.
+  frontend:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+    ports:
+      - "5173:5173"
+    environment:
+      # `core`, not `localhost` -- this runs inside the Compose network, so
+      # `localhost` would resolve to the frontend container itself. Bare-metal
+      # local dev (bun run dev directly on the host) relies on
+      # vite.config.ts's own default (http://localhost:8000) instead.
+      - VITE_API_PROXY_TARGET=http://core:8000
+    depends_on:
+      - core
+    develop:
+      watch:
+        - action: sync
+          path: ./frontend
+          target: /app
+          ignore:
+            - node_modules/
+            - dist/
+        - action: rebuild
+          path: ./frontend/package.json

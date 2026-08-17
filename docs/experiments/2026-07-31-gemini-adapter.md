@@ -18,7 +18,7 @@ conflicting doc summaries and a wrong output MIME type) -- introspected the actu
 installed `google-genai==2.16.0` package directly, then made real calls against a real key
 (sourced from the repo's own gitignored `.env`, never printed/logged):
 
-- `client.aio.interactions.create(model="gemini-3.1-flash-lite-image", input=..., 
+- `client.aio.interactions.create(model="gemini-3.1-flash-lite-image", input=...,
   response_format={"type": "image", "mime_type": "image/jpeg"})` -- same model/shape as the
   first attempt, still current.
 - Output images are still JPEG-only (`ImageResponseFormatParam.mime_type` typed

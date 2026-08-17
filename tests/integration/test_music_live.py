@@ -17,6 +17,7 @@ the default fast/hermetic suite should depend on. Not asserted bit-exact the
 way golden_check.py checks renders: this is generative output, not a
 deterministic pipeline -- validity/shape is what's checked, not exact bytes.
 """
+
 import time
 
 import pytest
@@ -75,7 +76,12 @@ def test_music_generation_end_to_end(live_client):
     prompt = "integration test: ambient synth pad, slow, sci-fi"
     resp = live_client.post(
         "/generate/music",
-        data={"prompt": prompt, "lyrics": "", "duration": TEST_DURATION, "thinking": "false"},
+        data={
+            "prompt": prompt,
+            "lyrics": "",
+            "duration": TEST_DURATION,
+            "thinking": "false",
+        },
     )
     resp.raise_for_status()
     job_id = resp.json()["job_id"]

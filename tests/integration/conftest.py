@@ -9,6 +9,7 @@ module does its own /capabilities check and skips (not fails) when its
 service isn't configured, so the skip reason names the actual missing piece
 rather than a single generic "integration tests skipped" note.
 """
+
 import os
 
 import httpx

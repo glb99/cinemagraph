@@ -18,6 +18,7 @@ Usage:
     uv run python scripts/verify_music_deploy.py
     uv run python scripts/verify_music_deploy.py --keep-up   # skip teardown (debugging)
 """
+
 import argparse
 import subprocess
 import time
@@ -28,7 +29,9 @@ import httpx
 ROOT = Path(__file__).resolve().parent.parent
 ACESTEP_HEALTH_URL = "http://localhost:8001/health"
 CORE_CAPABILITIES_URL = "http://localhost:8000/capabilities"
-READY_TIMEOUT_SECONDS = 1800  # generous: a cold acestep can take ~15-20min for a fresh ~11GB download
+READY_TIMEOUT_SECONDS = (
+    1800  # generous: a cold acestep can take ~15-20min for a fresh ~11GB download
+)
 POLL_INTERVAL_SECONDS = 5
 
 
@@ -59,7 +62,10 @@ def _wait_for_ready() -> bool:
                 acestep = client.get(ACESTEP_HEALTH_URL).json()["data"]
                 core = client.get(CORE_CAPABILITIES_URL).json()
                 if acestep.get("llm_initialized") and core.get("music_generation"):
-                    print("acestep fully loaded, core reports music_generation: true", flush=True)
+                    print(
+                        "acestep fully loaded, core reports music_generation: true",
+                        flush=True,
+                    )
                     return True
                 print(
                     f"waiting -- acestep models_initialized={acestep.get('models_initialized')} "
@@ -76,7 +82,8 @@ def _wait_for_ready() -> bool:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        "--keep-up", action="store_true",
+        "--keep-up",
+        action="store_true",
         help="don't tear the stack down afterward (for debugging a failure)",
     )
     args = parser.parse_args()
@@ -87,7 +94,10 @@ def main() -> int:
 
     try:
         if not _wait_for_ready():
-            print(f"\nTimed out after {READY_TIMEOUT_SECONDS}s waiting for acestep/core to be ready.", flush=True)
+            print(
+                f"\nTimed out after {READY_TIMEOUT_SECONDS}s waiting for acestep/core to be ready.",
+                flush=True,
+            )
             return 1
 
         print("\nRunning tests/integration/ ...", flush=True)
@@ -97,8 +107,11 @@ def main() -> int:
         return result.returncode
     finally:
         if args.keep_up:
-            print("\n--keep-up set -- leaving acestep/core running. "
-                  "Remember to `docker compose --profile audio down` when done.", flush=True)
+            print(
+                "\n--keep-up set -- leaving acestep/core running. "
+                "Remember to `docker compose --profile audio down` when done.",
+                flush=True,
+            )
         else:
             _compose("--profile", "audio", "down")
 

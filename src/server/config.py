@@ -17,12 +17,19 @@ server-tier dependency into a package that's meant to stay usable standalone,
 breaking the tier discipline in docs/DESIGN.md sec 3.2. Two config mechanisms
 instead of three is the correct outcome here, not a half-finished migration.
 """
+
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# src/server/config.py -> src/server -> src -> repo root. Only meaningful for a
+# source checkout (editable install or `uv run`); in a real installed package
+# this points somewhere that simply doesn't exist, which is exactly what the
+# frontend_dist_dir default below is written to tolerate.
+_REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 @dataclass(frozen=True)
@@ -50,9 +57,26 @@ class Settings(BaseSettings):
     than being silently renamed.
     """
 
-    model_config = SettingsConfigDict(extra="ignore")
+    # populate_by_name is load-bearing, not boilerplate: setting a
+    # validation_alias on a field otherwise makes that field *only* settable
+    # by its alias, and extra="ignore" then swallows the field-name form
+    # without a word. `Settings(data_dir=tmp_path)` -- which every test
+    # fixture and dependency_overrides call in this repo uses -- was
+    # therefore a silent no-op, leaving data_dir at its default and pointing
+    # tests at the repo's own ./data directory. Found while adding
+    # frontend_dist_dir, whose tests actually assert on the path.
+    model_config = SettingsConfigDict(extra="ignore", populate_by_name=True)
 
     data_dir: Path = Field(Path("./data"), validation_alias="CINEMAGRAPH_DATA_DIR")
+    # The frontend/ build output (`bun run build`) that GET / serves. Defaults
+    # to this repo's own frontend/dist, which is right for local development
+    # and wrong-but-harmless anywhere else: the routes report "not built yet"
+    # rather than failing, so an API-only deployment that never builds a
+    # frontend still starts and serves every other route. The Docker image
+    # builds the bundle and sets this explicitly.
+    frontend_dist_dir: Path = Field(
+        _REPO_ROOT / "frontend" / "dist", validation_alias="CINEMAGRAPH_FRONTEND_DIR"
+    )
     ml_service_url: str | None = None
     acestep_url: str | None = None
     sound_effects_url: str | None = None
@@ -63,17 +87,21 @@ class Settings(BaseSettings):
     # docs/DESIGN.md sec 3.6's Gemini follow-up.
     gemini_api_key: str | None = None
 
-    @field_validator("data_dir")
+    @field_validator("data_dir", "frontend_dist_dir")
     @classmethod
-    def _resolve_data_dir(cls, value: Path) -> Path:
+    def _resolve_paths(cls, value: Path) -> Path:
         # Matches the previous module-level `.resolve()`; job directories are
-        # created underneath it, so a relative path here would resolve
-        # against whatever cwd the worker happened to have.
+        # created underneath data_dir, so a relative path here would resolve
+        # against whatever cwd the worker happened to have. frontend_dist_dir
+        # gets the same treatment for the same reason, and because the static
+        # routes compare resolved paths to keep requests inside it.
         return value.resolve()
 
     @property
     def semantic_mask_service(self) -> OptionalService:
-        return OptionalService(self.ml_service_url, "Semantic masking", "ML_SERVICE_URL")
+        return OptionalService(
+            self.ml_service_url, "Semantic masking", "ML_SERVICE_URL"
+        )
 
     @property
     def music_service(self) -> OptionalService:
@@ -81,11 +109,15 @@ class Settings(BaseSettings):
 
     @property
     def sound_effect_service(self) -> OptionalService:
-        return OptionalService(self.sound_effects_url, "Sound effect generation", "SOUND_EFFECTS_URL")
+        return OptionalService(
+            self.sound_effects_url, "Sound effect generation", "SOUND_EFFECTS_URL"
+        )
 
     @property
     def image_generation_service(self) -> OptionalService:
-        return OptionalService(self.image_generation_url, "Image generation", "IMAGE_GENERATION_URL")
+        return OptionalService(
+            self.image_generation_url, "Image generation", "IMAGE_GENERATION_URL"
+        )
 
 
 @lru_cache

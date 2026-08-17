@@ -33,6 +33,7 @@ Hydrus-inspired "tags not folders" shape, and needs no schema migration.
 set_project()/list_projects()/rename_project()/delete_project() manage that
 tag; list_assets(project=...) filters by it the same way tag= already did.
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -41,7 +42,7 @@ import os
 import shutil
 import sqlite3
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime, timezone
 from pathlib import Path
 
 KINDS = ("reference", "source", "generated")
@@ -67,7 +68,9 @@ class Asset:
 
 
 def library_root() -> Path:
-    root = Path(os.environ.get("CINEMAGRAPH_LIBRARY_DIR", "~/.cinemagraph/library")).expanduser()
+    root = Path(
+        os.environ.get("CINEMAGRAPH_LIBRARY_DIR", "~/.cinemagraph/library")
+    ).expanduser()
     root.mkdir(parents=True, exist_ok=True)
     (root / "objects").mkdir(exist_ok=True)
     return root
@@ -145,8 +148,10 @@ def add(
 
     conn = _connect(root)
     try:
-        existing = conn.execute("SELECT * FROM assets WHERE id = ?", (asset_id,)).fetchone()
-        added_at = existing["added_at"] if existing else datetime.now(timezone.utc).isoformat()
+        existing = conn.execute(
+            "SELECT * FROM assets WHERE id = ?", (asset_id,)
+        ).fetchone()
+        added_at = existing["added_at"] if existing else datetime.now(UTC).isoformat()
         conn.execute(
             """
             INSERT INTO assets (id, kind, original_filename, added_at, extension, tags, provenance)
@@ -155,8 +160,13 @@ def add(
                 kind=excluded.kind, tags=excluded.tags, provenance=excluded.provenance
             """,
             (
-                asset_id, kind, recorded_name, added_at, extension,
-                ",".join(tags or []), json.dumps(provenance) if provenance else None,
+                asset_id,
+                kind,
+                recorded_name,
+                added_at,
+                extension,
+                ",".join(tags or []),
+                json.dumps(provenance) if provenance else None,
             ),
         )
         conn.commit()
@@ -176,7 +186,9 @@ def get(asset_id: str) -> Asset | None:
         conn.close()
 
 
-def list_assets(kind: str | None = None, tag: str | None = None, project: str | None = None) -> list[Asset]:
+def list_assets(
+    kind: str | None = None, tag: str | None = None, project: str | None = None
+) -> list[Asset]:
     root = library_root()
     conn = _connect(root)
     try:
@@ -230,10 +242,16 @@ def set_project(asset_id: str, project: str | None) -> Asset:
         row = conn.execute("SELECT * FROM assets WHERE id = ?", (asset_id,)).fetchone()
         if row is None:
             raise ValueError(f"No asset with id '{asset_id}'")
-        tags = [t for t in row["tags"].split(",") if t and not t.startswith(PROJECT_TAG_PREFIX)]
+        tags = [
+            t
+            for t in row["tags"].split(",")
+            if t and not t.startswith(PROJECT_TAG_PREFIX)
+        ]
         if project:
             tags.append(f"{PROJECT_TAG_PREFIX}{project}")
-        conn.execute("UPDATE assets SET tags = ? WHERE id = ?", (",".join(tags), asset_id))
+        conn.execute(
+            "UPDATE assets SET tags = ? WHERE id = ?", (",".join(tags), asset_id)
+        )
         conn.commit()
         row = conn.execute("SELECT * FROM assets WHERE id = ?", (asset_id,)).fetchone()
         return _row_to_asset(row, root)
@@ -249,13 +267,14 @@ def list_projects() -> list[str]:
     conn = _connect(root)
     try:
         rows = conn.execute(
-            "SELECT DISTINCT tags FROM assets WHERE tags LIKE ?", (f"%{PROJECT_TAG_PREFIX}%",)
+            "SELECT DISTINCT tags FROM assets WHERE tags LIKE ?",
+            (f"%{PROJECT_TAG_PREFIX}%",),
         ).fetchall()
         names = set()
         for row in rows:
             for t in row["tags"].split(","):
                 if t.startswith(PROJECT_TAG_PREFIX):
-                    names.add(t[len(PROJECT_TAG_PREFIX):])
+                    names.add(t[len(PROJECT_TAG_PREFIX) :])
         return sorted(names)
     finally:
         conn.close()
@@ -269,13 +288,16 @@ def _bulk_retag(old_tag: str, new_tag: str | None) -> int:
     conn = _connect(root)
     try:
         rows = conn.execute(
-            "SELECT id, tags FROM assets WHERE (',' || tags || ',') LIKE ?", (f"%,{old_tag},%",)
+            "SELECT id, tags FROM assets WHERE (',' || tags || ',') LIKE ?",
+            (f"%,{old_tag},%",),
         ).fetchall()
         for row in rows:
             tags = [t for t in row["tags"].split(",") if t and t != old_tag]
             if new_tag:
                 tags.append(new_tag)
-            conn.execute("UPDATE assets SET tags = ? WHERE id = ?", (",".join(tags), row["id"]))
+            conn.execute(
+                "UPDATE assets SET tags = ? WHERE id = ?", (",".join(tags), row["id"])
+            )
         conn.commit()
         return len(rows)
     finally:

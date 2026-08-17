@@ -4,6 +4,7 @@ exact pixel values (grain is unseeded, so runs aren't byte-identical) --
 just that the integration between pipeline.py, effects/, mask.py, and
 io_utils.py hasn't broken.
 """
+
 import cv2
 import pytest
 
@@ -19,7 +20,10 @@ def test_render_video_cinemagraph(test_video):
 
 def test_render_photo_cinemagraph_combined_effects(test_photo):
     frames, fps = pipeline.render_photo_cinemagraph(
-        test_photo, effect=["dust", "ripple"], duration=1.0, fps=10,
+        test_photo,
+        effect=["dust", "ripple"],
+        duration=1.0,
+        fps=10,
     )
     assert len(frames) == 10
     assert fps == 10
@@ -56,14 +60,18 @@ def test_save_cinemagraph_video_uses_browser_compatible_codec(test_video, tmp_pa
 
     cap = cv2.VideoCapture(str(out_path))
     fourcc_int = int(cap.get(cv2.CAP_PROP_FOURCC))
-    fourcc = "".join(chr((fourcc_int >> 8 * i) & 0xFF) for i in range(4)).lower().strip()
+    fourcc = (
+        "".join(chr((fourcc_int >> 8 * i) & 0xFF) for i in range(4)).lower().strip()
+    )
     cap.release()
 
     # OpenCV reports the tag differently depending on backend/version --
     # "avc1" is the container-level tag ffprobe reports, "h264"/"x264" show
     # up too depending on how it's read back. All three mean H.264; "mp4v"
     # (MPEG-4 Part 2) is the actual regression this test guards against.
-    assert fourcc in {"avc1", "h264", "x264"}, f"expected H.264, got {fourcc!r} -- browsers can't play this"
+    assert fourcc in {"avc1", "h264", "x264"}, (
+        f"expected H.264, got {fourcc!r} -- browsers can't play this"
+    )
 
 
 def test_write_video_handles_odd_dimensions(tmp_path):
@@ -91,7 +99,9 @@ def test_write_video_handles_odd_dimensions(tmp_path):
 
 def test_save_cinemagraph_from_photo_writes_readable_file(test_photo, tmp_path):
     out_path = tmp_path / "out.mp4"
-    pipeline.save_cinemagraph_from_photo(test_photo, str(out_path), effect="smoke", duration=1.0, fps=10)
+    pipeline.save_cinemagraph_from_photo(
+        test_photo, str(out_path), effect="smoke", duration=1.0, fps=10
+    )
     assert out_path.exists()
 
     frames, fps = io_utils.read_frames(str(out_path))
@@ -111,6 +121,11 @@ def test_save_mask_preview_writes_valid_png(test_video, tmp_path):
 def test_loop_duration_and_gif_together_raises(test_photo, tmp_path):
     with pytest.raises(ValueError):
         pipeline.save_cinemagraph_from_photo(
-            test_photo, str(tmp_path / "out.mp4"), effect="smoke",
-            duration=1.0, fps=10, also_gif=True, loop_duration=60.0,
+            test_photo,
+            str(tmp_path / "out.mp4"),
+            effect="smoke",
+            duration=1.0,
+            fps=10,
+            also_gif=True,
+            loop_duration=60.0,
         )

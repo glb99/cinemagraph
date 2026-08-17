@@ -1,13 +1,17 @@
 """Concatenates video clips into one track, crossfading between consecutive
 clips instead of hard-cutting.
 """
+
 from . import ffmpeg_runner
 
 
 def build_video_track(
-    clip_paths: list[str], output_path: str, *,
+    clip_paths: list[str],
+    output_path: str,
+    *,
     crossfade_duration: float = 1.0,
-    run_ffmpeg=ffmpeg_runner.run_ffmpeg, probe_duration=ffmpeg_runner.probe_duration,
+    run_ffmpeg=ffmpeg_runner.run_ffmpeg,
+    probe_duration=ffmpeg_runner.probe_duration,
 ) -> None:
     """Concatenates `clip_paths` in order into one video track at
     `output_path`, crossfading `crossfade_duration` seconds at each join via
@@ -46,9 +50,14 @@ def build_video_track(
         running_duration = running_duration + durations[i] - crossfade_duration
         prev_label = out_label
 
-    run_ffmpeg([
-        "-y", *inputs,
-        "-filter_complex", ";".join(filter_stages),
-        "-map", f"[{prev_label}]",
-        output_path,
-    ])
+    run_ffmpeg(
+        [
+            "-y",
+            *inputs,
+            "-filter_complex",
+            ";".join(filter_stages),
+            "-map",
+            f"[{prev_label}]",
+            output_path,
+        ]
+    )

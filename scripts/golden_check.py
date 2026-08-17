@@ -15,6 +15,7 @@ Usage:
     uv run python scripts/golden_check.py            # check against golden/
     uv run python scripts/golden_check.py --bless     # (re)generate golden/
 """
+
 import argparse
 import importlib.util
 import tempfile
@@ -27,11 +28,15 @@ from cinemagraph import pipeline
 
 ROOT = Path(__file__).resolve().parent.parent
 GOLDEN_DIR = ROOT / "tests" / "golden"
-TOLERANCE = 1.0  # mean abs pixel diff allowed (0..255 scale) -- covers float/codec rounding
+TOLERANCE = (
+    1.0  # mean abs pixel diff allowed (0..255 scale) -- covers float/codec rounding
+)
 
 
 def _load_example_module(name: str):
-    spec = importlib.util.spec_from_file_location(name, ROOT / "examples" / f"{name}.py")
+    spec = importlib.util.spec_from_file_location(
+        name, ROOT / "examples" / f"{name}.py"
+    )
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
@@ -47,7 +52,11 @@ def _cases(tmp_dir: Path):
 
     video_frames, _, _ = pipeline.render_video_cinemagraph(str(video_path), grain=0.0)
     photo_frames, _ = pipeline.render_photo_cinemagraph(
-        str(photo_path), effect=["dust", "ripple"], duration=1.0, fps=10, grain=0.0,
+        str(photo_path),
+        effect=["dust", "ripple"],
+        duration=1.0,
+        fps=10,
+        grain=0.0,
     )
 
     return {
@@ -60,7 +69,11 @@ def _cases(tmp_dir: Path):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--bless", action="store_true", help="(re)generate golden frames instead of checking")
+    parser.add_argument(
+        "--bless",
+        action="store_true",
+        help="(re)generate golden frames instead of checking",
+    )
     args = parser.parse_args()
 
     with tempfile.TemporaryDirectory() as tmp:
@@ -85,7 +98,9 @@ def main():
             continue
         golden = cv2.imread(str(golden_path))
         if golden.shape != frame.shape:
-            failures.append(f"{name}: shape mismatch {frame.shape} vs golden {golden.shape}")
+            failures.append(
+                f"{name}: shape mismatch {frame.shape} vs golden {golden.shape}"
+            )
             continue
         diff = np.mean(np.abs(frame.astype(np.int16) - golden.astype(np.int16)))
         status = "OK" if diff <= TOLERANCE else "MISMATCH"

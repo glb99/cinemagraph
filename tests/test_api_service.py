@@ -15,11 +15,12 @@ via monkeypatch.setenv, since service.py now takes settings as an explicit
 argument instead of reading the environment itself -- config is resolved
 once by the route (via Depends(get_settings)) and passed through.
 """
+
 from pathlib import Path
 
-import asset_library
 import pytest
 
+import asset_library
 from server import jobs, service
 from server.config import Settings
 
@@ -52,7 +53,11 @@ def test_render_job_registers_generated_output_in_library(tmp_path):
     output = tmp_path / "out.mp4"
     job = jobs.create_job()
     service.run_render_job(
-        job.id, fake_render, output, library_kind="generated", library_tags=["video"],
+        job.id,
+        fake_render,
+        output,
+        library_kind="generated",
+        library_tags=["video"],
     )
 
     assert jobs.get_job(job.id).status is jobs.JobStatus.DONE
@@ -67,12 +72,15 @@ def test_save_job_to_library_with_project_tags_the_asset(tmp_path):
     """project= is folded into the tag list right before asset_library.add()
     -- see save_job_to_library's own docstring for why project assignment
     happens at this exact call site rather than a separate step."""
+
     def fake_render(*, output_path, **kwargs):
         Path(output_path).write_bytes(b"fake-video-bytes")
 
     output = tmp_path / "out.mp4"
     job = jobs.create_job()
-    service.run_render_job(job.id, fake_render, output, library_kind="generated", library_tags=["video"])
+    service.run_render_job(
+        job.id, fake_render, output, library_kind="generated", library_tags=["video"]
+    )
 
     asset = service.save_job_to_library(job.id, project="sunset-loop")
     assert f"{asset_library.PROJECT_TAG_PREFIX}sunset-loop" in asset.tags
@@ -98,6 +106,7 @@ def test_render_job_skips_library_when_kind_not_given(tmp_path):
     not just "library happens to be empty right now" (true of every job
     immediately after completion under the new stage-then-save flow), which
     is why this also confirms save_job_to_library() itself raises."""
+
     def fake_render(*, output_path, **kwargs):
         Path(output_path).write_bytes(b"fake-mask-bytes")
 
@@ -116,6 +125,7 @@ def test_render_job_staging_never_touches_asset_library(monkeypatch, tmp_path):
     happens later, explicitly, via save_job_to_library(). Confirmed by
     making asset_library.add() raise: the render job must still complete
     normally, proving it was never even attempted during staging."""
+
     def fake_render(*, output_path, **kwargs):
         Path(output_path).write_bytes(b"fake-video-bytes")
 
@@ -142,12 +152,15 @@ def test_render_job_staging_never_touches_asset_library(monkeypatch, tmp_path):
 
 
 @pytest.mark.anyio
-async def test_music_job_downloads_audio_and_registers_in_library(tmp_path, acestep_settings):
+async def test_music_job_downloads_audio_and_registers_in_library(
+    tmp_path, acestep_settings
+):
     """ACE-Step's own polling-loop details (remote failure, timeout, the
     response-envelope parsing) are now ACEStepAdapter's concern, tested
     directly in test_generation_ports.py -- this just confirms run_music_job
     delegates to an injected MusicGenerator and records provenance
     correctly, the same job-level shape run_image_job's tests already use."""
+
     class FakeGenerator:
         async def generate(self, prompt, **kwargs):
             return b"audio-bytes"
@@ -155,8 +168,15 @@ async def test_music_job_downloads_audio_and_registers_in_library(tmp_path, aces
     output = tmp_path / "out.mp3"
     job = jobs.create_job()
     await service.run_music_job(
-        job.id, output, settings=acestep_settings, prompt="p", lyrics="", duration=10.0, thinking=False,
-        library_kind="generated", music_generator=FakeGenerator(),
+        job.id,
+        output,
+        settings=acestep_settings,
+        prompt="p",
+        lyrics="",
+        duration=10.0,
+        thinking=False,
+        library_kind="generated",
+        music_generator=FakeGenerator(),
     )
 
     result = jobs.get_job(job.id)
@@ -167,18 +187,25 @@ async def test_music_job_downloads_audio_and_registers_in_library(tmp_path, aces
     assert asset.kind == "generated"
     assert asset.tags == ["music"]
     assert asset.provenance == {
-        "prompt": "p", "lyrics": "", "model": "acestep",
-        "duration": 10.0, "thinking": False, "instrumental": False,
+        "prompt": "p",
+        "lyrics": "",
+        "model": "acestep",
+        "duration": 10.0,
+        "thinking": False,
+        "instrumental": False,
     }
 
 
 @pytest.mark.anyio
-async def test_music_job_provenance_records_submitted_lyrics_not_backend_marker(tmp_path, acestep_settings):
+async def test_music_job_provenance_records_submitted_lyrics_not_backend_marker(
+    tmp_path, acestep_settings
+):
     """Provenance must reflect what the caller actually asked for
     (instrumental=True, original lyrics text) -- not whatever
     backend-internal substitution an adapter makes to achieve it (ACE-Step's
     own "[Instrumental]" marker hack, entirely ACEStepAdapter's concern per
     its own docstring)."""
+
     class FakeGenerator:
         async def generate(self, prompt, **kwargs):
             return b"audio-bytes"
@@ -186,9 +213,16 @@ async def test_music_job_provenance_records_submitted_lyrics_not_backend_marker(
     output = tmp_path / "out.mp3"
     job = jobs.create_job()
     await service.run_music_job(
-        job.id, output, settings=acestep_settings, prompt="p", lyrics="some lyrics I typed",
-        duration=10.0, thinking=False, instrumental=True,
-        library_kind="generated", music_generator=FakeGenerator(),
+        job.id,
+        output,
+        settings=acestep_settings,
+        prompt="p",
+        lyrics="some lyrics I typed",
+        duration=10.0,
+        thinking=False,
+        instrumental=True,
+        library_kind="generated",
+        music_generator=FakeGenerator(),
     )
 
     result = jobs.get_job(job.id)
@@ -207,8 +241,13 @@ async def test_music_job_reports_generator_error(tmp_path, acestep_settings):
 
     job = jobs.create_job()
     await service.run_music_job(
-        job.id, tmp_path / "out.mp3",
-        settings=acestep_settings, prompt="p", lyrics="", duration=10.0, thinking=False,
+        job.id,
+        tmp_path / "out.mp3",
+        settings=acestep_settings,
+        prompt="p",
+        lyrics="",
+        duration=10.0,
+        thinking=False,
         music_generator=FailingGenerator(),
     )
 
@@ -218,7 +257,9 @@ async def test_music_job_reports_generator_error(tmp_path, acestep_settings):
 
 
 @pytest.mark.anyio
-async def test_music_job_routes_to_remix_for_cover_task_type(tmp_path, acestep_settings):
+async def test_music_job_routes_to_remix_for_cover_task_type(
+    tmp_path, acestep_settings
+):
     """task_type != text2music must call generator.remix(), not generate()
     -- the two are meaningfully different capabilities (see
     generation_ports.py's MusicGenerator.remix() docstring), not just an
@@ -239,9 +280,18 @@ async def test_music_job_routes_to_remix_for_cover_task_type(tmp_path, acestep_s
     output = tmp_path / "out.mp3"
     job = jobs.create_job()
     await service.run_music_job(
-        job.id, output, settings=acestep_settings, prompt="jazzier version", lyrics="",
-        duration=30.0, thinking=False, task_type="cover", src_audio_path=source,
-        cover_strength=0.5, library_kind="generated", music_generator=FakeGenerator(),
+        job.id,
+        output,
+        settings=acestep_settings,
+        prompt="jazzier version",
+        lyrics="",
+        duration=30.0,
+        thinking=False,
+        task_type="cover",
+        src_audio_path=source,
+        cover_strength=0.5,
+        library_kind="generated",
+        music_generator=FakeGenerator(),
     )
 
     result = jobs.get_job(job.id)
@@ -261,7 +311,9 @@ async def test_music_job_routes_to_remix_for_cover_task_type(tmp_path, acestep_s
 
 
 @pytest.mark.anyio
-async def test_music_job_routes_to_remix_for_text2music_with_reference_audio(tmp_path, acestep_settings):
+async def test_music_job_routes_to_remix_for_text2music_with_reference_audio(
+    tmp_path, acestep_settings
+):
     """Style transfer is independent of task_type -- a plain text2music
     request with a reference track attached must still route to remix(),
     not generate()."""
@@ -281,9 +333,17 @@ async def test_music_job_routes_to_remix_for_text2music_with_reference_audio(tmp
     output = tmp_path / "out.mp3"
     job = jobs.create_job()
     await service.run_music_job(
-        job.id, output, settings=acestep_settings, prompt="a dreamy synth piece", lyrics="",
-        duration=30.0, thinking=False, task_type="text2music", reference_audio_path=reference,
-        library_kind="generated", music_generator=FakeGenerator(),
+        job.id,
+        output,
+        settings=acestep_settings,
+        prompt="a dreamy synth piece",
+        lyrics="",
+        duration=30.0,
+        thinking=False,
+        task_type="text2music",
+        reference_audio_path=reference,
+        library_kind="generated",
+        music_generator=FakeGenerator(),
     )
 
     assert calls == ["remix"]
@@ -309,8 +369,15 @@ async def test_music_job_uses_generate_for_plain_text2music(tmp_path, acestep_se
     output = tmp_path / "out.mp3"
     job = jobs.create_job()
     await service.run_music_job(
-        job.id, output, settings=acestep_settings, prompt="p", lyrics="", duration=10.0, thinking=False,
-        library_kind="generated", music_generator=FakeGenerator(),
+        job.id,
+        output,
+        settings=acestep_settings,
+        prompt="p",
+        lyrics="",
+        duration=10.0,
+        thinking=False,
+        library_kind="generated",
+        music_generator=FakeGenerator(),
     )
 
     assert calls == ["generate"]
@@ -327,8 +394,12 @@ async def test_sound_effect_job_downloads_audio_and_registers_in_library(tmp_pat
     output = tmp_path / "out.wav"
     job = jobs.create_job()
     await service.run_sound_effect_job(
-        job.id, output, settings=Settings(sound_effects_url="http://sfx.invalid"),
-        prompt="gentle wind chimes", duration=8.0, library_kind="generated",
+        job.id,
+        output,
+        settings=Settings(sound_effects_url="http://sfx.invalid"),
+        prompt="gentle wind chimes",
+        duration=8.0,
+        library_kind="generated",
         sound_effect_generator=FakeGenerator(),
     )
 
@@ -351,8 +422,12 @@ async def test_image_job_downloads_image_and_registers_in_library(tmp_path):
     output = tmp_path / "out.png"
     job = jobs.create_job()
     await service.run_image_job(
-        job.id, output, settings=Settings(image_generation_url="http://img.invalid"),
-        prompt="a lofi bedroom at sunset", library_kind="generated", image_generator=FakeGenerator(),
+        job.id,
+        output,
+        settings=Settings(image_generation_url="http://img.invalid"),
+        prompt="a lofi bedroom at sunset",
+        library_kind="generated",
+        image_generator=FakeGenerator(),
     )
 
     result = jobs.get_job(job.id)
@@ -366,7 +441,9 @@ async def test_image_job_downloads_image_and_registers_in_library(tmp_path):
 
 
 @pytest.mark.anyio
-async def test_image_job_with_reference_image_passes_bytes_and_strength_to_generator(tmp_path):
+async def test_image_job_with_reference_image_passes_bytes_and_strength_to_generator(
+    tmp_path,
+):
     """reference_image_path switches the job into img2img mode: the file's
     bytes and filename are read here and handed to the injected
     ImageGenerator alongside strength -- run_image_job no longer builds the
@@ -384,9 +461,14 @@ async def test_image_job_with_reference_image_passes_bytes_and_strength_to_gener
     output = tmp_path / "out.png"
     job = jobs.create_job()
     await service.run_image_job(
-        job.id, output, settings=Settings(image_generation_url="http://img.invalid"),
-        prompt="a lofi bedroom at sunset", reference_image_path=reference, strength=0.4,
-        library_kind="generated", image_generator=FakeGenerator(),
+        job.id,
+        output,
+        settings=Settings(image_generation_url="http://img.invalid"),
+        prompt="a lofi bedroom at sunset",
+        reference_image_path=reference,
+        strength=0.4,
+        library_kind="generated",
+        image_generator=FakeGenerator(),
     )
 
     result = jobs.get_job(job.id)
@@ -399,11 +481,17 @@ async def test_image_job_with_reference_image_passes_bytes_and_strength_to_gener
     }
 
     asset = _save(job.id)
-    assert asset.provenance == {"prompt": "a lofi bedroom at sunset", "model": "sdxl", "strength": 0.4}
+    assert asset.provenance == {
+        "prompt": "a lofi bedroom at sunset",
+        "model": "sdxl",
+        "strength": 0.4,
+    }
 
 
 @pytest.mark.anyio
-async def test_image_job_resolves_generator_from_registry_by_model_when_none_injected(tmp_path):
+async def test_image_job_resolves_generator_from_registry_by_model_when_none_injected(
+    tmp_path,
+):
     """Without an explicit image_generator=, run_image_job looks the `model`
     name up in generation_registry -- the actual per-request model-selection
     path real requests go through (app.py never passes image_generator=
@@ -420,8 +508,11 @@ async def test_image_job_resolves_generator_from_registry_by_model_when_none_inj
         output = tmp_path / "out.png"
         job = jobs.create_job()
         await service.run_image_job(
-            job.id, output, settings=Settings(),
-            prompt="a lofi bedroom at sunset", model="test-registry-fake",
+            job.id,
+            output,
+            settings=Settings(),
+            prompt="a lofi bedroom at sunset",
+            model="test-registry-fake",
             library_kind="generated",
         )
 
@@ -444,8 +535,11 @@ async def test_image_job_errors_cleanly_for_unregistered_model(tmp_path):
     output = tmp_path / "out.png"
     job = jobs.create_job()
     await service.run_image_job(
-        job.id, output, settings=Settings(),
-        prompt="a lofi bedroom at sunset", model="does-not-exist",
+        job.id,
+        output,
+        settings=Settings(),
+        prompt="a lofi bedroom at sunset",
+        model="does-not-exist",
         library_kind="generated",
     )
 
@@ -480,10 +574,17 @@ async def test_semantic_mask_job_writes_mask_then_renders(tmp_path, test_photo):
     output_path = tmp_path / "out.mp4"
     job = jobs.create_job()
     await service.run_photo_semantic_mask_job(
-        job.id, output_path, settings=settings,
-        photo_path=Path(test_photo), mask_path=mask_path, mask_prompt="sky", effect=["dust"],
-        library_kind="generated", library_tags=["photo", "dust"],
-        call_service=fake_call, render_fn=fake_render,
+        job.id,
+        output_path,
+        settings=settings,
+        photo_path=Path(test_photo),
+        mask_path=mask_path,
+        mask_prompt="sky",
+        effect=["dust"],
+        library_kind="generated",
+        library_tags=["photo", "dust"],
+        call_service=fake_call,
+        render_fn=fake_render,
     )
 
     assert jobs.get_job(job.id).status is jobs.JobStatus.DONE
@@ -509,11 +610,19 @@ async def test_semantic_mask_job_errors_when_service_absent(tmp_path, test_photo
 
     job = jobs.create_job()
     await service.run_photo_semantic_mask_job(
-        job.id, tmp_path / "out.mp4", settings=settings,
-        photo_path=Path(test_photo), mask_path=tmp_path / "mask.png",
-        mask_prompt="sky", effect=["dust"], render_fn=fail_render,
+        job.id,
+        tmp_path / "out.mp4",
+        settings=settings,
+        photo_path=Path(test_photo),
+        mask_path=tmp_path / "mask.png",
+        mask_prompt="sky",
+        effect=["dust"],
+        render_fn=fail_render,
     )
 
     result = jobs.get_job(job.id)
     assert result.status is jobs.JobStatus.ERROR
-    assert "not configured" in result.error.lower() or "unavailable" in result.error.lower()
+    assert (
+        "not configured" in result.error.lower()
+        or "unavailable" in result.error.lower()
+    )

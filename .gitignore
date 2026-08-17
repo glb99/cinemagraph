@@ -17,3 +17,12 @@ examples/*.jpg
 
 # secrets -- Docker Compose auto-loads this for ${VAR} substitution, never commit it
 .env
+
+# frontend
+frontend/node_modules/
+frontend/dist/
+frontend/test-results/
+frontend/playwright-report/
+frontend/src/routeTree.gen.ts
+frontend/openapi.json
+frontend/*.tsbuildinfo

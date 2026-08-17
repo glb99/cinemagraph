@@ -6,6 +6,7 @@ job state living only as long as the process does is an accepted tradeoff,
 not an oversight. Revisit only if this ever needs to run with multiple
 worker processes, which is explicitly out of scope for now.
 """
+
 import uuid
 from dataclasses import dataclass
 from enum import Enum
@@ -64,7 +65,9 @@ def mark_error(job_id: str, error: str) -> None:
     job.error = error
 
 
-def stage_for_library(job_id: str, kind: str | None, tags: list[str] | None, provenance: dict | None) -> None:
+def stage_for_library(
+    job_id: str, kind: str | None, tags: list[str] | None, provenance: dict | None
+) -> None:
     """Attaches candidate library metadata to a completed job -- does NOT
     register it in the asset library yet (see save_job_to_library in
     service.py for the actual write, triggered by POST /jobs/{id}/save).
@@ -73,4 +76,8 @@ def stage_for_library(job_id: str, kind: str | None, tags: list[str] | None, pro
     registered immediately instead of staging."""
     if kind is None:
         return
-    _JOBS[job_id].pending_library = {"kind": kind, "tags": tags or [], "provenance": provenance}
+    _JOBS[job_id].pending_library = {
+        "kind": kind,
+        "tags": tags or [],
+        "provenance": provenance,
+    }

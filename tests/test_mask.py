@@ -3,6 +3,7 @@ same shape/dtype/range, and 4+ call sites across the codebase broadcast it
 to 3 channels via to_3ch() -- these are cheap to check and would otherwise
 be the kind of thing that silently breaks in one call site at a time.
 """
+
 import numpy as np
 
 from cinemagraph import mask

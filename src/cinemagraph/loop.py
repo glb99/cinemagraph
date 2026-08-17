@@ -1,9 +1,12 @@
 """Seamless looping of a short frame sequence."""
+
 import cv2
 import numpy as np
 
 
-def crossfade_loop(frames: list[np.ndarray], blend_frames: int = 10) -> list[np.ndarray]:
+def crossfade_loop(
+    frames: list[np.ndarray], blend_frames: int = 10
+) -> list[np.ndarray]:
     """Blend the tail of the clip into the head so the loop point is invisible.
 
     Replaces the last `blend_frames` frames with a crossfade between the

@@ -2,6 +2,7 @@
 reusing the same generators the README points users at (examples/make_test_clip.py,
 examples/make_test_photo.py) so there's exactly one place that logic lives.
 """
+
 import importlib.util
 from pathlib import Path
 

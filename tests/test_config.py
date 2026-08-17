@@ -1,6 +1,7 @@
 """Contract tests for server/config.py: env-var mapping, defaults, and the
 OptionalService properties that bundle url/name/env_var for error messages.
 """
+
 from pathlib import Path
 
 from server.config import Settings

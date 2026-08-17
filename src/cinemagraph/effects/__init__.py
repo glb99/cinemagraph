@@ -18,10 +18,12 @@ overlay (if any) is composited on top last, since particles sit visually
 above the scene regardless of what warps or brightness shifts happened to
 it.
 """
+
 import click
 import numpy as np
 
 from . import base
+
 # Importing these registers each effect as a side effect of module load.
 # Aliased so they don't shadow the same-named convenience wrappers defined
 # below (rain/snow/dust/ripple/sway/wind/flicker/smoke/vapor).
@@ -36,9 +38,16 @@ from .base import Effect, EffectContext, EffectFamily
 EFFECTS = base.names()
 
 
-def animate_photo(image: np.ndarray, effect, mask: np.ndarray | None = None,
-                   n_frames: int = 90, duration: float = 4.0,
-                   speed: float = 1.0, effect_kwargs: dict | None = None) -> list[np.ndarray]:
+def animate_photo(
+    image: np.ndarray,
+    effect,
+    mask: np.ndarray | None = None,
+    n_frames: int = 90,
+    duration: float = 4.0,
+    speed: float = 1.0,
+    effect_kwargs: dict | None = None,
+    unmasked_effects=None,
+) -> list[np.ndarray]:
     """Render `effect` (a single effect name, or a list to combine) onto `image`.
 
     Any number of effects can be combined, in any mix of particle
@@ -50,6 +59,12 @@ def animate_photo(image: np.ndarray, effect, mask: np.ndarray | None = None,
     incorrectly smear the particles along with the background.
     `effect_kwargs` is keyed by effect name, e.g. {"dust": {"count": 150},
     "flicker": {"strength": 0.3}}.
+
+    `unmasked_effects` (effect names) opt specific effects out of `mask`
+    entirely -- they animate over the whole frame regardless of what `mask`
+    says, while every other requested effect still respects it. Lets e.g.
+    snow fall over the whole photo while flicker stays confined to a masked
+    region, in one call.
     """
     effects = [effect] if isinstance(effect, str) else list(effect)
     if not effects:
@@ -60,12 +75,22 @@ def animate_photo(image: np.ndarray, effect, mask: np.ndarray | None = None,
     particle = [e for e in resolved if e.family is EffectFamily.PARTICLE]
 
     effect_kwargs = effect_kwargs or {}
+    unmasked_effects = set(unmasked_effects or ())
     h, w = image.shape[:2]
     mask_arr = mask if mask is not None else np.ones((h, w), dtype=np.float32)
+    full_frame = np.ones((h, w), dtype=np.float32)
 
     def ctx(e: Effect) -> EffectContext:
-        return EffectContext(image=image, h=h, w=w, mask=mask_arr, n_frames=n_frames,
-                              duration=duration, speed=speed, kwargs=effect_kwargs.get(e.name, {}))
+        return EffectContext(
+            image=image,
+            h=h,
+            w=w,
+            mask=full_frame if e.name in unmasked_effects else mask_arr,
+            n_frames=n_frames,
+            duration=duration,
+            speed=speed,
+            kwargs=effect_kwargs.get(e.name, {}),
+        )
 
     tone_stages = [(e.apply, e.precompute(ctx(e))) for e in tone]
     particle_stages = [(e.apply, e.precompute(ctx(e))) for e in particle]
@@ -86,10 +111,20 @@ def animate_photo(image: np.ndarray, effect, mask: np.ndarray | None = None,
 
 def _make_single_effect_wrapper(name: str):
     def wrapper(image, mask=None, n_frames=90, duration=4.0, speed=1.0, **kwargs):
-        return animate_photo(image, name, mask=mask, n_frames=n_frames, duration=duration,
-                              speed=speed, effect_kwargs={name: kwargs})
+        return animate_photo(
+            image,
+            name,
+            mask=mask,
+            n_frames=n_frames,
+            duration=duration,
+            speed=speed,
+            effect_kwargs={name: kwargs},
+        )
+
     wrapper.__name__ = name
-    wrapper.__doc__ = f"Render just the '{name}' effect. See animate_photo() for the general case."
+    wrapper.__doc__ = (
+        f"Render just the '{name}' effect. See animate_photo() for the general case."
+    )
     return wrapper
 
 

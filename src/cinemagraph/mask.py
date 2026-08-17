@@ -1,4 +1,5 @@
 """Mask generation: figure out which pixels should stay animated."""
+
 import click
 import cv2
 import numpy as np
@@ -36,7 +37,9 @@ def auto_motion_mask(
 
     # Keep only the largest connected motion region (avoids stray noise blobs
     # scattered around the frame turning into "hard edge" artifacts).
-    num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(binary, connectivity=8)
+    num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(
+        binary, connectivity=8
+    )
     if num_labels > 1:
         largest = 1 + np.argmax(stats[1:, cv2.CC_STAT_AREA])
         binary = np.where(labels == largest, 255, 0).astype(np.uint8)

@@ -97,12 +97,13 @@ point -- save_job_to_library()'s optional `project` argument, not a
 separate step -- see asset_library's own module docstring for why a
 "project" is a reserved-prefix tag rather than a new table.
 """
+
 import asyncio
 from pathlib import Path
 
-import asset_library
 from fastapi import HTTPException
 
+import asset_library
 from assembly import ffmpeg_runner as assembly_ffmpeg_runner
 from assembly import pipeline as assembly_pipeline
 from cinemagraph import pipeline
@@ -115,7 +116,9 @@ from .generation_ports import ImageGenerator, MusicGenerator, SoundEffectGenerat
 from .generation_registry import get_image_generator, get_music_generator
 
 
-def _stage_for_library(job_id: str, kind: str | None, tags: list[str] | None, provenance: dict | None) -> None:
+def _stage_for_library(
+    job_id: str, kind: str | None, tags: list[str] | None, provenance: dict | None
+) -> None:
     """Stages this job's output as a save candidate (jobs.stage_for_library)
     rather than registering it immediately -- the actual asset_library.add()
     call now only happens on demand, via save_job_to_library() below,
@@ -144,11 +147,20 @@ def save_job_to_library(job_id: str, project: str | None = None) -> asset_librar
     if job is None:
         raise ValueError(f"No job with id '{job_id}'")
     if job.pending_library is None:
-        raise ValueError("Nothing to save for this job (already saved, or this job type doesn't support saving).")
+        raise ValueError(
+            "Nothing to save for this job (already saved, or this job type doesn't support saving)."
+        )
     meta = job.pending_library
-    tags = [*meta["tags"], f"{asset_library.PROJECT_TAG_PREFIX}{project}"] if project else meta["tags"]
+    tags = (
+        [*meta["tags"], f"{asset_library.PROJECT_TAG_PREFIX}{project}"]
+        if project
+        else meta["tags"]
+    )
     asset = asset_library.add(
-        str(job.output_path), kind=meta["kind"], tags=tags, provenance=meta["provenance"],
+        str(job.output_path),
+        kind=meta["kind"],
+        tags=tags,
+        provenance=meta["provenance"],
     )
     job.saved_asset_id = asset.id
     job.pending_library = None
@@ -156,8 +168,13 @@ def save_job_to_library(job_id: str, project: str | None = None) -> asset_librar
 
 
 def run_render_job(
-    job_id: str, render_fn, output_path: Path, *,
-    library_kind: str | None = None, library_tags: list[str] | None = None, **kwargs,
+    job_id: str,
+    render_fn,
+    output_path: Path,
+    *,
+    library_kind: str | None = None,
+    library_tags: list[str] | None = None,
+    **kwargs,
 ) -> None:
     """Sync (threadpool) job: a purely local render, no external service."""
     jobs.mark_running(job_id)
@@ -199,7 +216,9 @@ async def run_photo_semantic_mask_job(
     try:
         image_bytes = photo_path.read_bytes()
         resp = await call_service(
-            settings.semantic_mask_service, "POST", "/segment",
+            settings.semantic_mask_service,
+            "POST",
+            "/segment",
             data={"prompt": mask_prompt},
             files={"image": (photo_path.name, image_bytes, "application/octet-stream")},
             timeout=60.0,
@@ -215,7 +234,9 @@ async def run_photo_semantic_mask_job(
         )
         jobs.mark_done(job_id, output_path)
         _stage_for_library(
-            job_id, library_kind, library_tags,
+            job_id,
+            library_kind,
+            library_tags,
             provenance={"mask_prompt": mask_prompt, **render_kwargs},
         )
     except HTTPException as e:
@@ -281,19 +302,33 @@ async def run_music_job(
                 prompt,
                 task_type=task_type,
                 src_audio_bytes=src_audio_path.read_bytes() if src_audio_path else None,
-                reference_audio_bytes=reference_audio_path.read_bytes() if reference_audio_path else None,
-                lyrics=lyrics, duration=duration, cover_strength=cover_strength,
-                repainting_start=repainting_start, repainting_end=repainting_end, thinking=thinking,
+                reference_audio_bytes=reference_audio_path.read_bytes()
+                if reference_audio_path
+                else None,
+                lyrics=lyrics,
+                duration=duration,
+                cover_strength=cover_strength,
+                repainting_start=repainting_start,
+                repainting_end=repainting_end,
+                thinking=thinking,
             )
         else:
             audio_bytes = await generator.generate(
-                prompt, lyrics=lyrics, duration=duration, thinking=thinking, instrumental=instrumental,
+                prompt,
+                lyrics=lyrics,
+                duration=duration,
+                thinking=thinking,
+                instrumental=instrumental,
             )
         output_path.write_bytes(audio_bytes)
         jobs.mark_done(job_id, output_path)
         provenance = {
-            "prompt": prompt, "lyrics": lyrics, "model": model,
-            "duration": duration, "thinking": thinking, "instrumental": instrumental,
+            "prompt": prompt,
+            "lyrics": lyrics,
+            "model": model,
+            "duration": duration,
+            "thinking": thinking,
+            "instrumental": instrumental,
         }
         if is_remix:
             provenance["task_type"] = task_type
@@ -309,7 +344,12 @@ async def run_music_job(
 
 
 async def run_sound_effect_job(
-    job_id: str, output_path: Path, *, settings: Settings, prompt: str, duration: float,
+    job_id: str,
+    output_path: Path,
+    *,
+    settings: Settings,
+    prompt: str,
+    duration: float,
     library_kind: str | None = None,
     sound_effect_generator: SoundEffectGenerator | None = None,
 ) -> None:
@@ -324,7 +364,9 @@ async def run_sound_effect_job(
         output_path.write_bytes(audio_bytes)
         jobs.mark_done(job_id, output_path)
         _stage_for_library(
-            job_id, library_kind, tags=["sound-effect"],
+            job_id,
+            library_kind,
+            tags=["sound-effect"],
             provenance={"prompt": prompt, "duration": duration},
         )
     except HTTPException as e:
@@ -334,7 +376,11 @@ async def run_sound_effect_job(
 
 
 async def run_image_job(
-    job_id: str, output_path: Path, *, settings: Settings, prompt: str,
+    job_id: str,
+    output_path: Path,
+    *,
+    settings: Settings,
+    prompt: str,
     reference_image_path: Path | None = None,
     strength: float = 0.6,
     model: str = "sdxl",
@@ -376,7 +422,9 @@ async def run_image_job(
         if reference_image_path is not None:
             provenance["strength"] = strength
         _stage_for_library(
-            job_id, library_kind, tags=["image"],
+            job_id,
+            library_kind,
+            tags=["image"],
             provenance=provenance,
         )
     except HTTPException as e:
@@ -386,8 +434,11 @@ async def run_image_job(
 
 
 def run_assembly_job(
-    job_id: str, output_path: Path, *,
-    video_clip_paths: list[str], music_track_paths: list[str],
+    job_id: str,
+    output_path: Path,
+    *,
+    video_clip_paths: list[str],
+    music_track_paths: list[str],
     sound_effect_paths: list[str] | None = None,
     video_crossfade_duration: float = 1.0,
     music_crossfade_duration: float = 5.0,

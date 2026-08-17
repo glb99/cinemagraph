@@ -206,32 +206,24 @@ special-casing the packaging config further.
   single-process, local, no-auth personal tool; job state doesn't survive a restart, which is an
   accepted tradeoff, not an oversight.
 - **`schemas.py`** — pydantic request/response models.
-- **`ui.py`** — `INDEX_HTML`, a single self-contained page (inline CSS/JS, no build step, no
-  static-file mount) served by `GET /`. Deliberately a plain Python string, not a static asset:
-  non-`.py` files need explicit `package-data` config to survive a real build, exactly the class
-  of bug the `api/`→`src/api/` move above already caught once. Six tabs — Photo, Video, Library
-  (always shown), Music, Sound effects, Image (each of the latter three hidden entirely, not
-  shown-disabled, unless `GET /capabilities` reports the matching flag true, same pattern
-  `mask_prompt` already used) — sharing one `pollJob()`/`wireForm()` implementation, since every
-  `/render/*`/`/generate/*` route returns the same `{job_id}` shape. The Library tab lists whatever
-  those routes have auto-registered (client-side kind/tag filtering over `GET /library`), with a
-  preview element chosen by file extension (img/video/audio/download-link) and delete via
-  `DELETE /library/{id}`. `asset.original_filename`/`asset.tags` are user-supplied (an upload's own
-  name, or free-text tags from a manual `library add`), so that card is built via
-  `createElement`/`textContent` throughout, never `innerHTML`, to rule out markup injection. Photo,
-  Video, Library, Sound effects, Image, and Music are all verified against a live server (including
-  a real render/generation's output showing up in its own tab with a genuinely loaded preview, and in
-  the Library tab). Music was verified repeatedly, both natively on the host and containerized
-  (`acestep:` in `docker-compose.yml`, `--profile audio`, same shape as `sound-effects`/
-  `image-generation`) — the containerized passes found and fixed three real bugs: a WSL2
-  file-sharing hang reading model checkpoints from any Windows-path bind mount cold (fixed with
-  named Docker volumes, not bind mounts, since a project-relative one wasn't immune either), a
-  cold model load blocking a single `/query_result` poll past `call_optional_service`'s timeout,
-  and ACE-Step's own `ensure_models_initialized` blocking its entire single-threaded server during
-  model loading (an upstream bug — mitigated here by eager-loading at container startup via
-  `ACESTEP_NO_INIT=false`, not the API-server-inert `ACESTEP_INIT_SERVICE` its own docs also
-  mention). See `docs/experiments/` for the full account. The host-native route is kept as a
-  documented alternative.
+- **web UI serving** (`app.py`'s `/`, `/ui/{path}`, `/assets/{path}`) — `GET /` serves
+  `frontend/`'s built bundle (see the Frontend section below); `/ui/{path}` serves that same
+  document so a client-side route survives a hard reload or a shared link; `/assets/{path}` serves
+  the hashed bundles. The SPA fallback is scoped to `/ui` rather than mounted at the root because
+  this API owns unprefixed top-level paths (`/library`, `/assemble`, `/jobs`) — a root-level
+  fallback would shadow them. Files are served through ordinary routes rather than
+  `app.mount(StaticFiles(...))`, since a mount resolves its directory at import time, which is
+  exactly the "config frozen at import" problem `config.py` exists to avoid, and would make the
+  path un-overridable in tests. Where the bundle lives is `CINEMAGRAPH_FRONTEND_DIR`
+  (`Settings.frontend_dist_dir`, defaulting to this repo's `frontend/dist`); when it isn't there,
+  the UI routes return a 503 page explaining how to build it and **every other route keeps
+  working** — the same degrade-don't-fail rule the optional services follow. This replaced
+  `server/ui.py`'s `INDEX_HTML` (a single self-contained page, inline CSS/JS, no build step),
+  deleted 2026-08-14 once `frontend/` was a complete 1:1 port of it. That module existed as a
+  plain Python string to sidestep the packaging trap the `api/`→`src/api/` move caught (non-`.py`
+  files silently dropped from a real build); the bundle now dodges that a different way — it's a
+  build artifact the Docker image builds in its own stage and copies in, never something
+  `pip install` is expected to carry.
 - **`config.py`** — `Settings(BaseSettings)` (from `pydantic-settings`) plus `get_settings()`
   (`@lru_cache`, injected into routes via `Annotated[Settings, Depends(get_settings)]`), replacing
   three inconsistent ways this package used to read `os.environ` (a module-level constant frozen
@@ -366,6 +358,61 @@ file, hashed/copied into the library, then the temp file is discarded) — the e
 `cinemagraph library` CLI subcommands call.
 
 Run locally: `uv run uvicorn server.app:app --reload` (needs `uv sync --extra server` first).
+
+## Frontend
+
+`frontend/` — the web UI, a React SPA that replaced `server/ui.py`'s single-page version
+(behaviour-identical port, 2026-08-14; see `docs/experiments/2026-08-14-ui-port-to-frontend.md`).
+Stack, all of it already pinned by the scaffold rather than chosen during the port: React 19,
+Vite 6, TanStack Router (file-based routes) + TanStack Query 5, Tailwind v4 (`@tailwindcss/vite`),
+shadcn conventions (`components.json`: new-york/neutral, `@/components/ui`, Radix `Slot` + CVA +
+`tailwind-merge`), Biome, Playwright, bun.
+
+```bash
+cd frontend
+bun install
+bun run dev            # :5173, proxies API routes to VITE_API_PROXY_TARGET (default :8000)
+bun run lint           # biome check --write --unsafe
+bun run build          # vite build && tsc -b -- writes dist/, which the API serves at GET /
+bun run test           # Playwright; needs a live backend (dev proxy, or a server serving dist/)
+```
+
+`build` runs Vite *before* `tsc` on purpose: the TanStack Router plugin generates
+`src/routeTree.gen.ts` during the Vite build and that file is gitignored, so type-checking first
+fails on any clean checkout — CI and Docker builds included.
+
+- **`src/client/`** — generated from the live app's own OpenAPI schema by
+  `scripts/generate-client.sh` (`@hey-api/openapi-ts`, axios, `throwOnError: true`), regenerated by
+  a pre-commit hook whenever `src/server/` changes. Never edited by hand, and every request in the
+  app goes through `DefaultService.*` so the client can't drift from the routes. The exceptions are
+  media URLs (`/jobs/{id}/file`, `/library/{id}/file`), which are plain path strings in
+  `lib/api.ts` because the browser fetches them itself as `src` attributes.
+- **`src/routes/`** — one file per tab, all under **`/ui`** (`/` redirects there). The namespace is
+  load-bearing: `server.app:app` serves its routes unprefixed, so a client-side `/library` or
+  `/assemble` shadows a real endpoint — see `src/lib/tabs.ts`'s own comment and the decision log.
+- **`src/hooks/useJobRunner.ts`** — the single submit-then-poll implementation shared by all six
+  job-producing tabs, replacing the old single-page UI's `pollJob()`/`wireForm()`. Client-side
+  validation failures
+  go through the same `fail()` surface as job errors.
+- **`src/components/`** — the shared pieces the tabs are built from: asset pickers with inline
+  previews, project assign/filter selects, save-to-library, the config hints, the repaint waveform.
+- **`tests/smoke.spec.ts`** — Playwright, against a live backend; covers the always-available tabs
+  only, since the gated ones depend on which satellites happen to be running.
+
+**How it gets served.** Two paths, and it matters which one you're looking at:
+
+- **Developing the UI** — `bun run dev` on :5173, hot reload, API calls proxied to the backend.
+  The `frontend` compose service is this, in a container.
+- **Everything else** — the backend serves `frontend/dist` itself at `GET /` (see the web-UI-serving
+  bullet under Server layer). The Docker image builds the bundle in a `frontend-build` stage and
+  copies it to `/app/frontend/dist`, with `CINEMAGRAPH_FRONTEND_DIR` set to match; running from a
+  source checkout, `bun run build` once is enough, since the default path is this repo's own
+  `frontend/dist`.
+
+So `:8000` serves whatever bundle was last built, and `:5173` serves what's on disk right now —
+if a UI change doesn't show up at `:8000`, it's a stale `dist/`, not a caching bug. `GET /` sends
+`cache-control: no-store` for exactly that reason (it names hash-suffixed bundles); the hashed
+assets themselves are cached immutably.
 
 ## Design document and experiments log
 

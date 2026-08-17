@@ -10,11 +10,13 @@ overlays that always composite after every tone effect, regardless of the
 order effects were requested in. That ordering is load-bearing behavior
 carried over unchanged from the original implementation.
 """
+
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Callable
+from typing import Any
 
 import numpy as np
 

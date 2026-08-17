@@ -1,0 +1,57 @@
+version: 2
+updates:
+  - package-ecosystem: uv
+    directory: /
+    schedule:
+      interval: monthly
+    groups:
+      python-dependencies:
+        patterns: ["*"]
+
+  - package-ecosystem: bun
+    directory: /frontend
+    schedule:
+      interval: monthly
+    groups:
+      frontend-dependencies:
+        patterns: ["*"]
+    # openapi-ts's generated-client shape can change between versions in ways
+    # that break scripts/generate-client.sh silently -- bump it deliberately,
+    # not via an automated PR.
+    ignore:
+      - dependency-name: "@hey-api/openapi-ts"
+
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: monthly
+
+  - package-ecosystem: docker
+    directory: /frontend
+    schedule:
+      interval: monthly
+
+  - package-ecosystem: docker
+    directory: /machine-learning
+    schedule:
+      interval: monthly
+
+  - package-ecosystem: docker
+    directory: /sound-effects
+    schedule:
+      interval: monthly
+
+  - package-ecosystem: docker
+    directory: /image-generation
+    schedule:
+      interval: monthly
+
+  - package-ecosystem: docker-compose
+    directory: /
+    schedule:
+      interval: monthly
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly

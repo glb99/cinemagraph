@@ -10,6 +10,7 @@ allows for below).
 Also covers basic registry integrity (no duplicate names, valid families)
 and that validation.py's per-effect kwarg checks work against the registry.
 """
+
 import numpy as np
 import pytest
 
@@ -36,7 +37,9 @@ def test_registry_has_no_duplicate_names_and_valid_families():
 def test_loop_closes_seamlessly(effect_name):
     image = _synthetic_image()
     n_frames = 48
-    frames = animate_photo(image, effect_name, n_frames=n_frames, duration=4.0, speed=1.0)
+    frames = animate_photo(
+        image, effect_name, n_frames=n_frames, duration=4.0, speed=1.0
+    )
     assert len(frames) == n_frames
 
     first = frames[0].astype(np.int16)
@@ -45,7 +48,9 @@ def test_loop_closes_seamlessly(effect_name):
     # short of the true closing point t=1.0 -- but should be close, the same
     # small residual any playback loop has between its last and first frame.
     mean_diff = np.mean(np.abs(first - last))
-    assert mean_diff < 15.0, f"{effect_name}: loop doesn't close cleanly (mean diff {mean_diff:.2f})"
+    assert mean_diff < 15.0, (
+        f"{effect_name}: loop doesn't close cleanly (mean diff {mean_diff:.2f})"
+    )
 
 
 def test_combined_tone_and_particle_effects_render():
@@ -61,7 +66,9 @@ def test_unknown_effect_raises():
 
 
 def test_resolve_effect_kwargs_accepts_valid_override():
-    resolved = validation.resolve_effect_kwargs(["ripple"], {"ripple": {"amplitude": 5.0}})
+    resolved = validation.resolve_effect_kwargs(
+        ["ripple"], {"ripple": {"amplitude": 5.0}}
+    )
     assert resolved == {"ripple": {"amplitude": 5.0}}
 
 
@@ -72,4 +79,6 @@ def test_resolve_effect_kwargs_rejects_misattributed_override():
 
 def test_resolve_effect_kwargs_rejects_unknown_kwarg_for_effect():
     with pytest.raises(ValueError):
-        validation.resolve_effect_kwargs(["ripple"], {"ripple": {"not_a_real_param": 1.0}})
+        validation.resolve_effect_kwargs(
+            ["ripple"], {"ripple": {"not_a_real_param": 1.0}}
+        )

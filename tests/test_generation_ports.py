@@ -5,13 +5,19 @@ functions in test_api_service.py) and the registries' basic
 get/register/list mechanics, same coverage shape as test_effects_registry.py
 covers effects/base.py's _REGISTRY.
 """
+
 import json
 
 import pytest
 
 from server import generation_adapters, generation_registry
 from server.config import Settings
-from server.generation_adapters import ACEStepAdapter, Lyria3Adapter, SDXLAdapter, StableAudioAdapter
+from server.generation_adapters import (
+    ACEStepAdapter,
+    Lyria3Adapter,
+    SDXLAdapter,
+    StableAudioAdapter,
+)
 from server.generation_registry import (
     available_image_generators,
     available_music_remix_generators,
@@ -35,7 +41,9 @@ async def test_sdxl_adapter_sends_plain_prompt_as_json_free_multipart():
 
         return _Resp()
 
-    adapter = SDXLAdapter(Settings(image_generation_url="http://img.invalid"), call_service=fake_call)
+    adapter = SDXLAdapter(
+        Settings(image_generation_url="http://img.invalid"), call_service=fake_call
+    )
     result = await adapter.generate("a lofi bedroom at sunset")
 
     assert result == b"fake-png-bytes"
@@ -58,7 +66,9 @@ async def test_sdxl_adapter_switches_to_img2img_when_reference_bytes_given():
 
         return _Resp()
 
-    adapter = SDXLAdapter(Settings(image_generation_url="http://img.invalid"), call_service=fake_call)
+    adapter = SDXLAdapter(
+        Settings(image_generation_url="http://img.invalid"), call_service=fake_call
+    )
     await adapter.generate(
         "a lofi bedroom at sunset",
         reference_image_bytes=b"fake-reference-bytes",
@@ -91,6 +101,7 @@ def test_registry_raises_clear_error_for_unknown_name():
 
 def _ace_response(payload):
     """Minimal stand-in for the httpx.Response that call_optional_service returns."""
+
     class _Resp:
         content = b"audio-bytes"
 
@@ -113,7 +124,9 @@ async def test_acestep_adapter_reports_remote_failure(monkeypatch):
             return _ace_response({"data": {"task_id": "t1"}})
         return _ace_response({"data": [{"status": 2, "result": None}]})
 
-    adapter = ACEStepAdapter(Settings(acestep_url="http://acestep.invalid"), call_service=fake_call)
+    adapter = ACEStepAdapter(
+        Settings(acestep_url="http://acestep.invalid"), call_service=fake_call
+    )
     with pytest.raises(RuntimeError, match="failure"):
         await adapter.generate("p", lyrics="", duration=10.0, thinking=False)
 
@@ -129,7 +142,9 @@ async def test_acestep_adapter_times_out_when_never_ready(monkeypatch):
             return _ace_response({"data": {"task_id": "t1"}})
         return _ace_response({"data": [{"status": 0, "result": None}]})
 
-    adapter = ACEStepAdapter(Settings(acestep_url="http://acestep.invalid"), call_service=fake_call)
+    adapter = ACEStepAdapter(
+        Settings(acestep_url="http://acestep.invalid"), call_service=fake_call
+    )
     with pytest.raises(RuntimeError, match="timed out"):
         await adapter.generate("p", lyrics="", duration=10.0, thinking=False)
 
@@ -146,17 +161,28 @@ async def test_acestep_adapter_downloads_audio_on_success(monkeypatch):
             return _ace_response({"data": {"task_id": "t1"}})
         if path == "/query_result":
             return _ace_response(
-                {"data": [{"status": 1, "result": json.dumps([{"file": "/v1/audio/t1.mp3"}])}]}
+                {
+                    "data": [
+                        {
+                            "status": 1,
+                            "result": json.dumps([{"file": "/v1/audio/t1.mp3"}]),
+                        }
+                    ]
+                }
             )
         return _ace_response({})  # the audio download
 
-    adapter = ACEStepAdapter(Settings(acestep_url="http://acestep.invalid"), call_service=fake_call)
+    adapter = ACEStepAdapter(
+        Settings(acestep_url="http://acestep.invalid"), call_service=fake_call
+    )
     result = await adapter.generate("p", lyrics="", duration=10.0, thinking=False)
     assert result == b"audio-bytes"
 
 
 @pytest.mark.anyio
-async def test_acestep_adapter_instrumental_sends_marker_not_submitted_lyrics(monkeypatch):
+async def test_acestep_adapter_instrumental_sends_marker_not_submitted_lyrics(
+    monkeypatch,
+):
     """instrumental=True must send ACE-Step's own instrumental marker as the
     lyrics field over the wire, regardless of what lyrics text was supplied
     -- an empty (or any other) lyrics string does not make ACE-Step's real
@@ -172,13 +198,26 @@ async def test_acestep_adapter_instrumental_sends_marker_not_submitted_lyrics(mo
             return _ace_response({"data": {"task_id": "t1"}})
         if path == "/query_result":
             return _ace_response(
-                {"data": [{"status": 1, "result": json.dumps([{"file": "/v1/audio/t1.mp3"}])}]}
+                {
+                    "data": [
+                        {
+                            "status": 1,
+                            "result": json.dumps([{"file": "/v1/audio/t1.mp3"}]),
+                        }
+                    ]
+                }
             )
         return _ace_response({})  # the audio download
 
-    adapter = ACEStepAdapter(Settings(acestep_url="http://acestep.invalid"), call_service=fake_call)
+    adapter = ACEStepAdapter(
+        Settings(acestep_url="http://acestep.invalid"), call_service=fake_call
+    )
     await adapter.generate(
-        "p", lyrics="some lyrics I typed", duration=10.0, thinking=False, instrumental=True,
+        "p",
+        lyrics="some lyrics I typed",
+        duration=10.0,
+        thinking=False,
+        instrumental=True,
     )
 
     assert sent_lyrics == ["[Instrumental]"]
@@ -198,7 +237,9 @@ async def test_stable_audio_adapter_sends_prompt_and_duration():
 
         return _Resp()
 
-    adapter = StableAudioAdapter(Settings(sound_effects_url="http://sfx.invalid"), call_service=fake_call)
+    adapter = StableAudioAdapter(
+        Settings(sound_effects_url="http://sfx.invalid"), call_service=fake_call
+    )
     result = await adapter.generate("gentle wind chimes", duration=8.0)
 
     assert result == b"sfx-bytes"
@@ -208,7 +249,9 @@ async def test_stable_audio_adapter_sends_prompt_and_duration():
 
 
 @pytest.mark.anyio
-async def test_acestep_adapter_remix_cover_sends_task_type_and_strength_via_multipart(monkeypatch):
+async def test_acestep_adapter_remix_cover_sends_task_type_and_strength_via_multipart(
+    monkeypatch,
+):
     """cover needs src_audio (multipart, not JSON -- same reason SDXLAdapter's
     img2img branch is) plus audio_cover_strength; no repaint-only fields
     should leak in."""
@@ -222,13 +265,25 @@ async def test_acestep_adapter_remix_cover_sends_task_type_and_strength_via_mult
             return _ace_response({"data": {"task_id": "t1"}})
         if path == "/query_result":
             return _ace_response(
-                {"data": [{"status": 1, "result": json.dumps([{"file": "/v1/audio/t1.mp3"}])}]}
+                {
+                    "data": [
+                        {
+                            "status": 1,
+                            "result": json.dumps([{"file": "/v1/audio/t1.mp3"}]),
+                        }
+                    ]
+                }
             )
         return _ace_response({})  # the audio download
 
-    adapter = ACEStepAdapter(Settings(acestep_url="http://acestep.invalid"), call_service=fake_call)
+    adapter = ACEStepAdapter(
+        Settings(acestep_url="http://acestep.invalid"), call_service=fake_call
+    )
     result = await adapter.remix(
-        "make it jazzier", task_type="cover", src_audio_bytes=b"source-bytes", cover_strength=0.4,
+        "make it jazzier",
+        task_type="cover",
+        src_audio_bytes=b"source-bytes",
+        cover_strength=0.4,
     )
 
     assert result == b"audio-bytes"
@@ -250,14 +305,26 @@ async def test_acestep_adapter_remix_repaint_sends_start_end_via_multipart(monke
             return _ace_response({"data": {"task_id": "t1"}})
         if path == "/query_result":
             return _ace_response(
-                {"data": [{"status": 1, "result": json.dumps([{"file": "/v1/audio/t1.mp3"}])}]}
+                {
+                    "data": [
+                        {
+                            "status": 1,
+                            "result": json.dumps([{"file": "/v1/audio/t1.mp3"}]),
+                        }
+                    ]
+                }
             )
         return _ace_response({})
 
-    adapter = ACEStepAdapter(Settings(acestep_url="http://acestep.invalid"), call_service=fake_call)
+    adapter = ACEStepAdapter(
+        Settings(acestep_url="http://acestep.invalid"), call_service=fake_call
+    )
     await adapter.remix(
-        "regenerate the bridge", task_type="repaint", src_audio_bytes=b"source-bytes",
-        repainting_start=10.0, repainting_end=20.0,
+        "regenerate the bridge",
+        task_type="repaint",
+        src_audio_bytes=b"source-bytes",
+        repainting_start=10.0,
+        repainting_end=20.0,
     )
 
     assert captured["data"]["task_type"] == "repaint"
@@ -281,12 +348,25 @@ async def test_acestep_adapter_remix_text2music_with_reference_audio_only(monkey
             return _ace_response({"data": {"task_id": "t1"}})
         if path == "/query_result":
             return _ace_response(
-                {"data": [{"status": 1, "result": json.dumps([{"file": "/v1/audio/t1.mp3"}])}]}
+                {
+                    "data": [
+                        {
+                            "status": 1,
+                            "result": json.dumps([{"file": "/v1/audio/t1.mp3"}]),
+                        }
+                    ]
+                }
             )
         return _ace_response({})
 
-    adapter = ACEStepAdapter(Settings(acestep_url="http://acestep.invalid"), call_service=fake_call)
-    await adapter.remix("a dreamy synth piece", task_type="text2music", reference_audio_bytes=b"ref-bytes")
+    adapter = ACEStepAdapter(
+        Settings(acestep_url="http://acestep.invalid"), call_service=fake_call
+    )
+    await adapter.remix(
+        "a dreamy synth piece",
+        task_type="text2music",
+        reference_audio_bytes=b"ref-bytes",
+    )
 
     assert captured["data"]["task_type"] == "text2music"
     assert captured["files"] == {"reference_audio": ("reference.wav", b"ref-bytes")}
@@ -304,7 +384,9 @@ async def test_acestep_adapter_remix_reports_remote_failure(monkeypatch):
             return _ace_response({"data": {"task_id": "t1"}})
         return _ace_response({"data": [{"status": 2, "result": None}]})
 
-    adapter = ACEStepAdapter(Settings(acestep_url="http://acestep.invalid"), call_service=fake_call)
+    adapter = ACEStepAdapter(
+        Settings(acestep_url="http://acestep.invalid"), call_service=fake_call
+    )
     with pytest.raises(RuntimeError, match="failure"):
         await adapter.remix("p", task_type="cover", src_audio_bytes=b"source-bytes")
 
@@ -336,8 +418,12 @@ def test_available_music_remix_generators_filters_by_supports_remix():
         async def generate(self, prompt, **kwargs):
             return b""
 
-    generation_registry.register_music_generator("test-fake-remix-capable", RemixCapableFake())
-    generation_registry.register_music_generator("test-fake-remix-incapable", RemixIncapableFake())
+    generation_registry.register_music_generator(
+        "test-fake-remix-capable", RemixCapableFake()
+    )
+    generation_registry.register_music_generator(
+        "test-fake-remix-incapable", RemixIncapableFake()
+    )
     try:
         remixable = available_music_remix_generators()
         assert "test-fake-remix-capable" in remixable
@@ -370,6 +456,8 @@ def test_sound_effect_registry_register_get_and_list_roundtrip():
     generation_registry.register_sound_effect_generator("test-fake-sfx", fake)
     try:
         assert generation_registry.get_sound_effect_generator("test-fake-sfx") is fake
-        assert "test-fake-sfx" in generation_registry.available_sound_effect_generators()
+        assert (
+            "test-fake-sfx" in generation_registry.available_sound_effect_generators()
+        )
     finally:
         del generation_registry._SOUND_EFFECT_GENERATORS["test-fake-sfx"]

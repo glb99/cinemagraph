@@ -1,10 +1,13 @@
 """Lofi-style color grading: warm, desaturated, lifted blacks, light grain."""
+
 import click
 import cv2
 import numpy as np
 
 
-def lofi_grade(frame: np.ndarray, strength: float = 1.0, grain: float = 0.03) -> np.ndarray:
+def lofi_grade(
+    frame: np.ndarray, strength: float = 1.0, grain: float = 0.03
+) -> np.ndarray:
     """Apply a warm/faded lofi grade. `strength` scales the whole effect 0..1+."""
     out = frame.astype(np.float32)
 
@@ -13,8 +16,8 @@ def lofi_grade(frame: np.ndarray, strength: float = 1.0, grain: float = 0.03) ->
     out = out * (1 - lift / 255.0) + lift
 
     # Warm the image: push reds up, pull blues down slightly.
-    out[:, :, 2] += 10.0 * strength   # R channel (BGR order)
-    out[:, :, 0] -= 6.0 * strength    # B channel
+    out[:, :, 2] += 10.0 * strength  # R channel (BGR order)
+    out[:, :, 0] -= 6.0 * strength  # B channel
 
     out = np.clip(out, 0, 255).astype(np.uint8)
 
@@ -38,6 +41,8 @@ def lofi_grade(frame: np.ndarray, strength: float = 1.0, grain: float = 0.03) ->
     return out
 
 
-def apply_grade_to_frames(frames: list[np.ndarray], strength: float = 1.0, grain: float = 0.03) -> list[np.ndarray]:
+def apply_grade_to_frames(
+    frames: list[np.ndarray], strength: float = 1.0, grain: float = 0.03
+) -> list[np.ndarray]:
     with click.progressbar(frames, label="Grading") as bar:
         return [lofi_grade(f, strength=strength, grain=grain) for f in bar]

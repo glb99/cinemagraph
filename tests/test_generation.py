@@ -9,6 +9,7 @@ API and is recorded in generation/__init__.py's own docstring and
 docs/experiments/2026-07-31-gemini-adapter.md /
 docs/experiments/2026-08-01-lyria3-adapter.md, not re-verified here.
 """
+
 import base64
 import io
 
@@ -60,9 +61,13 @@ class _FakeClient:
 
 
 @pytest.mark.anyio
-async def test_generate_image_text_to_image_sends_plain_string_input_and_returns_png(monkeypatch):
+async def test_generate_image_text_to_image_sends_plain_string_input_and_returns_png(
+    monkeypatch,
+):
     captured = {}
-    monkeypatch.setattr(generation.genai, "Client", lambda api_key: _FakeClient(captured))
+    monkeypatch.setattr(
+        generation.genai, "Client", lambda api_key: _FakeClient(captured)
+    )
 
     result = await generation.generate_image("fake-key", "a lofi bedroom at sunset")
 
@@ -77,10 +82,13 @@ async def test_generate_image_text_to_image_sends_plain_string_input_and_returns
 @pytest.mark.anyio
 async def test_generate_image_img2img_sends_multimodal_input_with_bytesio(monkeypatch):
     captured = {}
-    monkeypatch.setattr(generation.genai, "Client", lambda api_key: _FakeClient(captured))
+    monkeypatch.setattr(
+        generation.genai, "Client", lambda api_key: _FakeClient(captured)
+    )
 
     await generation.generate_image(
-        "fake-key", "make it lofi",
+        "fake-key",
+        "make it lofi",
         reference_image_bytes=b"fake-reference-bytes",
         reference_image_filename="ref.png",
     )
@@ -106,7 +114,11 @@ async def test_generate_image_raises_clearly_when_no_output_image(monkeypatch):
     class _EmptyAio:
         interactions = _EmptyInteractions()
 
-    monkeypatch.setattr(generation.genai, "Client", lambda api_key: type("C", (), {"aio": _EmptyAio()})())
+    monkeypatch.setattr(
+        generation.genai,
+        "Client",
+        lambda api_key: type("C", (), {"aio": _EmptyAio()})(),
+    )
 
     with pytest.raises(RuntimeError, match="Gemini returned no image"):
         await generation.generate_image("fake-key", "a prompt")
@@ -157,7 +169,13 @@ class _FakeAudioResp:
 def _audio_step(mime_type="audio/mpeg", data=b"fake-mp3-bytes"):
     return {
         "type": "model_output",
-        "content": [{"type": "audio", "mime_type": mime_type, "data": base64.b64encode(data).decode("ascii")}],
+        "content": [
+            {
+                "type": "audio",
+                "mime_type": mime_type,
+                "data": base64.b64encode(data).decode("ascii"),
+            }
+        ],
     }
 
 
@@ -171,9 +189,22 @@ async def test_generate_music_omits_mime_type_and_scans_steps_for_audio():
     async def fake_post(api_key, payload):
         captured["api_key"] = api_key
         captured["payload"] = payload
-        return _FakeAudioResp(200, {"steps": [{"type": "model_output", "content": [{"type": "text", "text": "<instrumental>"}]}, _audio_step()]})
+        return _FakeAudioResp(
+            200,
+            {
+                "steps": [
+                    {
+                        "type": "model_output",
+                        "content": [{"type": "text", "text": "<instrumental>"}],
+                    },
+                    _audio_step(),
+                ]
+            },
+        )
 
-    result = await generation.generate_music("fake-key", "cinematic piano", post_interaction=fake_post)
+    result = await generation.generate_music(
+        "fake-key", "cinematic piano", post_interaction=fake_post
+    )
 
     assert captured["api_key"] == "fake-key"
     assert captured["payload"]["model"] == generation.MUSIC_MODEL
@@ -193,7 +224,8 @@ async def test_generate_music_folds_lyrics_instrumental_duration_into_prompt_tex
         return _FakeAudioResp(200, {"steps": [_audio_step()]})
 
     await generation.generate_music(
-        "fake-key", "a ballad",
+        "fake-key",
+        "a ballad",
         lyrics="[Verse]\nHello world",
         duration=90.0,
         instrumental=True,
@@ -213,16 +245,30 @@ async def test_generate_music_raises_clearly_on_non_200():
         return _FakeAudioResp(400, {}, text='{"error": {"message": "boom"}}')
 
     with pytest.raises(RuntimeError, match="400"):
-        await generation.generate_music("fake-key", "prompt", post_interaction=fake_post)
+        await generation.generate_music(
+            "fake-key", "prompt", post_interaction=fake_post
+        )
 
 
 @pytest.mark.anyio
 async def test_generate_music_raises_clearly_when_no_audio_step():
     async def fake_post(api_key, payload):
-        return _FakeAudioResp(200, {"steps": [{"type": "model_output", "content": [{"type": "text", "text": "oops"}]}]})
+        return _FakeAudioResp(
+            200,
+            {
+                "steps": [
+                    {
+                        "type": "model_output",
+                        "content": [{"type": "text", "text": "oops"}],
+                    }
+                ]
+            },
+        )
 
     with pytest.raises(RuntimeError, match="no audio"):
-        await generation.generate_music("fake-key", "prompt", post_interaction=fake_post)
+        await generation.generate_music(
+            "fake-key", "prompt", post_interaction=fake_post
+        )
 
 
 @pytest.mark.anyio
@@ -242,13 +288,19 @@ async def test_lyria3_adapter_delegates_to_generation_module(monkeypatch):
 
     adapter = Lyria3Adapter(Settings(gemini_api_key="fake-key"))
     result = await adapter.generate(
-        "cinematic piano", lyrics="[Verse]\nHi", duration=90.0, thinking=True, instrumental=True,
+        "cinematic piano",
+        lyrics="[Verse]\nHi",
+        duration=90.0,
+        thinking=True,
+        instrumental=True,
     )
 
     assert result == b"fake-mp3-bytes"
     assert captured["api_key"] == "fake-key"
     assert captured["prompt"] == "cinematic piano"
     assert captured["kwargs"] == {
-        "lyrics": "[Verse]\nHi", "duration": 90.0, "instrumental": True,
+        "lyrics": "[Verse]\nHi",
+        "duration": 90.0,
+        "instrumental": True,
     }
     assert "thinking" not in captured["kwargs"]

@@ -3,6 +3,7 @@ BackgroundTasks synchronously as part of the request/response cycle, so by
 the time a /render/* call returns, the job has already finished -- no
 polling needed here, unlike a real deployment.
 """
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -21,7 +22,13 @@ def api_client(tmp_path, monkeypatch):
     # without reloading the whole module. Settings is resolved per-request via
     # Depends(get_settings), and dependency_overrides beats the @lru_cache.
     monkeypatch.setenv("CINEMAGRAPH_LIBRARY_DIR", str(tmp_path / "library"))
-    app.dependency_overrides[get_settings] = lambda: Settings(data_dir=tmp_path / "data")
+    # frontend_dist_dir is pinned at a path that doesn't exist so these tests
+    # never depend on whether this machine happens to have run `bun run build`
+    # -- its real default is this repo's own frontend/dist. The tests that do
+    # care about it build a fake bundle and override this again.
+    app.dependency_overrides[get_settings] = lambda: Settings(
+        data_dir=tmp_path / "data", frontend_dist_dir=tmp_path / "frontend-dist"
+    )
     with TestClient(app) as client:
         yield client
     app.dependency_overrides.clear()
@@ -43,13 +50,88 @@ def test_health(api_client):
     assert resp.json() == {"status": "ok"}
 
 
-def test_index_serves_the_web_ui(api_client):
+@pytest.fixture
+def built_frontend(tmp_path):
+    """A stand-in for `frontend/`'s build output: index.html plus one
+    content-hashed bundle, the only shape these routes care about. Building
+    the real thing would need bun and several seconds -- and would test Vite,
+    not this app.
+    """
+    dist = tmp_path / "frontend-dist"
+    (dist / "assets").mkdir(parents=True)
+    (dist / "index.html").write_text(
+        '<!doctype html><div id="root"></div>'
+        '<script src="/assets/index-abc123.js"></script>',
+        encoding="utf-8",
+    )
+    (dist / "assets" / "index-abc123.js").write_text("console.log(1)", encoding="utf-8")
+    (tmp_path / "secret.txt").write_text("not part of the bundle", encoding="utf-8")
+
+    app.dependency_overrides[get_settings] = lambda: Settings(
+        data_dir=tmp_path / "data", frontend_dist_dir=dist
+    )
+    return dist
+
+
+def test_index_explains_itself_when_the_frontend_isnt_built(api_client):
+    """An unbuilt frontend degrades to an explanation, not a 500 or a failed
+    startup -- same principle as an unconfigured optional service. Everything
+    else on the API keeps working, which is the point.
+    """
+    resp = api_client.get("/")
+    assert resp.status_code == 503
+    assert resp.headers["content-type"].startswith("text/html")
+    assert "bun run build" in resp.text
+    assert api_client.get("/health").status_code == 200
+
+
+def test_index_serves_the_built_frontend(api_client, built_frontend):
     resp = api_client.get("/")
     assert resp.status_code == 200
     assert resp.headers["content-type"].startswith("text/html")
-    assert "cinemagraph-tool" in resp.text
-    assert 'id="photo-form"' in resp.text
-    assert 'id="video-form"' in resp.text
+    assert 'id="root"' in resp.text
+    # index.html names hash-suffixed bundles, so a cached copy would outlive
+    # the files it points at.
+    assert resp.headers["cache-control"] == "no-store"
+    assert built_frontend.exists()
+
+
+@pytest.mark.parametrize("path", ["/ui", "/ui/library", "/ui/music"])
+def test_spa_routes_all_serve_the_entry_document(api_client, built_frontend, path):
+    """Client-side routes have to survive a hard reload or a shared link: the
+    server can't know what /ui/library means, so it hands back the same
+    document and lets the router resolve it."""
+    assert built_frontend.exists()
+    resp = api_client.get(path)
+    assert resp.status_code == 200
+    assert 'id="root"' in resp.text
+
+
+def test_api_routes_are_not_shadowed_by_the_spa(api_client, built_frontend):
+    """The SPA fallback is scoped to /ui precisely so it can't swallow the
+    API's own unprefixed top-level paths."""
+    assert built_frontend.exists()
+    resp = api_client.get("/library")
+    assert resp.status_code == 200
+    assert resp.json() == []
+
+
+def test_asset_route_serves_bundles(api_client, built_frontend):
+    assert built_frontend.exists()
+    resp = api_client.get("/assets/index-abc123.js")
+    assert resp.status_code == 200
+    assert resp.text == "console.log(1)"
+    assert "immutable" in resp.headers["cache-control"]
+
+
+@pytest.mark.parametrize(
+    "path", ["/assets/../secret.txt", "/assets/..%2Fsecret.txt", "/assets/nope.js"]
+)
+def test_asset_route_serves_nothing_outside_the_bundle(
+    api_client, built_frontend, path
+):
+    assert built_frontend.exists()
+    assert api_client.get(path).status_code == 404
 
 
 def test_capabilities_without_optional_services_configured(api_client):
@@ -77,7 +159,7 @@ def test_capabilities_distinguishes_configured_but_unreachable(api_client, tmp_p
     (e.g. its container isn't running) should show up as unavailable *and*
     configured -- the combination the web UI uses to show a hint instead of
     hiding the tab. Distinct from the "nothing configured" case, where
-    configured stays False too (see ui.py's loadCapabilities)."""
+    configured stays False too (see frontend/src/lib/tabs.ts)."""
     app.dependency_overrides[get_settings] = lambda: Settings(
         data_dir=tmp_path / "data", acestep_url="http://acestep.invalid:9"
     )
@@ -171,7 +253,12 @@ def test_render_photo_accepts_input_asset_id_from_library(api_client, test_photo
 
     resp = api_client.post(
         "/render/photo",
-        data={"input_asset_id": asset.id, "effect": ["dust"], "duration": "1.0", "fps": "10"},
+        data={
+            "input_asset_id": asset.id,
+            "effect": ["dust"],
+            "duration": "1.0",
+            "fps": "10",
+        },
     )
     assert resp.status_code == 200, resp.text
     status = api_client.get(f"/jobs/{resp.json()['job_id']}").json()
@@ -197,7 +284,8 @@ def test_render_photo_rejects_both_input_file_and_asset_id(api_client, test_phot
 
 def test_render_photo_rejects_unknown_input_asset_id(api_client):
     resp = api_client.post(
-        "/render/photo", data={"input_asset_id": "does-not-exist", "effect": ["dust"]},
+        "/render/photo",
+        data={"input_asset_id": "does-not-exist", "effect": ["dust"]},
     )
     assert resp.status_code == 422
     assert "does-not-exist" in resp.json()["detail"]
@@ -263,7 +351,9 @@ def test_render_video_rejects_loop_duration_with_gif(api_client, test_video):
     assert resp.status_code == 422
 
 
-def test_render_photo_accepts_uploaded_mask_and_per_effect_overrides(api_client, test_photo):
+def test_render_photo_accepts_uploaded_mask_and_per_effect_overrides(
+    api_client, test_photo
+):
     """Parity check: a hand-painted mask and per-effect overrides (--rain-count
     etc. on the CLI) were previously only reachable through the CLI."""
     with open(test_photo, "rb") as f:
@@ -273,7 +363,12 @@ def test_render_photo_accepts_uploaded_mask_and_per_effect_overrides(api_client,
                 "input_file": ("photo.jpg", f, "image/jpeg"),
                 "mask": ("mask.png", _hand_painted_mask_bytes(480, 320), "image/png"),
             },
-            data={"effect": ["dust"], "duration": "1.0", "fps": "10", "dust_count": "5"},
+            data={
+                "effect": ["dust"],
+                "duration": "1.0",
+                "fps": "10",
+                "dust_count": "5",
+            },
         )
     assert resp.status_code == 200, resp.text
     status = api_client.get(f"/jobs/{resp.json()['job_id']}").json()
@@ -392,7 +487,9 @@ def test_generate_music_rejects_unsupported_task_type(api_client):
 
 
 def test_generate_music_rejects_cover_without_source_audio(api_client):
-    resp = api_client.post("/generate/music", data={"prompt": "p", "task_type": "cover"})
+    resp = api_client.post(
+        "/generate/music", data={"prompt": "p", "task_type": "cover"}
+    )
     assert resp.status_code == 422
     assert "src_audio" in resp.json()["detail"]
 
@@ -420,7 +517,12 @@ def test_generate_music_rejects_remix_incapable_model(api_client, tmp_path):
     try:
         resp = api_client.post(
             "/generate/music",
-            data={"prompt": "p", "task_type": "cover", "model": "test-nonremix-fake", "src_audio_asset_id": asset.id},
+            data={
+                "prompt": "p",
+                "task_type": "cover",
+                "model": "test-nonremix-fake",
+                "src_audio_asset_id": asset.id,
+            },
         )
         assert resp.status_code == 422
         assert "test-nonremix-fake" in resp.json()["detail"]
@@ -456,8 +558,11 @@ def test_generate_music_cover_with_remix_capable_model_succeeds(api_client, tmp_
         resp = api_client.post(
             "/generate/music",
             data={
-                "prompt": "jazzier", "task_type": "cover", "model": "test-remix-fake",
-                "src_audio_asset_id": asset.id, "cover_strength": "0.3",
+                "prompt": "jazzier",
+                "task_type": "cover",
+                "model": "test-remix-fake",
+                "src_audio_asset_id": asset.id,
+                "cover_strength": "0.3",
             },
         )
         assert resp.status_code == 200, resp.text
@@ -474,7 +579,9 @@ def test_generate_music_save_flow(api_client):
         async def generate(self, prompt, **kwargs):
             return b"audio-bytes"
 
-    generation_registry.register_music_generator("test-save-toggle-fake", FakeGenerator())
+    generation_registry.register_music_generator(
+        "test-save-toggle-fake", FakeGenerator()
+    )
     try:
         resp = api_client.post(
             "/generate/music",
@@ -498,7 +605,9 @@ def test_generate_sound_effect_without_service_configured_reports_job_error(api_
     docstring. Validated for real against a live sound-effects/ instance
     outside the test suite (GPU required, not available in CI); see
     docs/experiments/."""
-    resp = api_client.post("/generate/sound-effect", data={"prompt": "gentle wind chimes"})
+    resp = api_client.post(
+        "/generate/sound-effect", data={"prompt": "gentle wind chimes"}
+    )
     assert resp.status_code == 200, resp.text
     job_id = resp.json()["job_id"]
 
@@ -511,7 +620,9 @@ def test_generate_image_without_service_configured_reports_job_error(api_client)
     """Same shape as the other two "not configured" tests above -- proxies
     to the local image-generation/ service (SDXL), degrading the same way
     when IMAGE_GENERATION_URL isn't configured."""
-    resp = api_client.post("/generate/image", data={"prompt": "a lofi bedroom at sunset"})
+    resp = api_client.post(
+        "/generate/image", data={"prompt": "a lofi bedroom at sunset"}
+    )
     assert resp.status_code == 200, resp.text
     job_id = resp.json()["job_id"]
 
@@ -525,7 +636,8 @@ def test_generate_image_rejects_unknown_model(api_client):
     before a job is even created -- an unregistered name is a 422, the same
     "reject at the route" pattern /render/photo already uses for unknown effects."""
     resp = api_client.post(
-        "/generate/image", data={"prompt": "a lofi bedroom at sunset", "model": "does-not-exist"}
+        "/generate/image",
+        data={"prompt": "a lofi bedroom at sunset", "model": "does-not-exist"},
     )
     assert resp.status_code == 422
     assert "does-not-exist" in resp.json()["detail"]
@@ -563,7 +675,9 @@ def test_generate_image_save_flow(api_client):
         async def generate(self, prompt, **kwargs):
             return b"fake-png-bytes"
 
-    generation_registry.register_image_generator("test-save-toggle-fake", FakeGenerator())
+    generation_registry.register_image_generator(
+        "test-save-toggle-fake", FakeGenerator()
+    )
     try:
         resp = api_client.post(
             "/generate/image",
@@ -629,9 +743,17 @@ def test_library_get_and_remove_missing_asset_return_404(api_client):
 
 def test_library_list_filters_by_kind(api_client, test_photo, test_video):
     with open(test_photo, "rb") as f:
-        api_client.post("/library", files={"upload": ("photo.jpg", f, "image/jpeg")}, data={"kind": "reference"})
+        api_client.post(
+            "/library",
+            files={"upload": ("photo.jpg", f, "image/jpeg")},
+            data={"kind": "reference"},
+        )
     with open(test_video, "rb") as f:
-        api_client.post("/library", files={"upload": ("input.mp4", f, "video/mp4")}, data={"kind": "source"})
+        api_client.post(
+            "/library",
+            files={"upload": ("input.mp4", f, "video/mp4")},
+            data={"kind": "source"},
+        )
 
     result = api_client.get("/library", params={"kind": "source"}).json()
     assert len(result) == 1
@@ -644,13 +766,18 @@ def test_assemble_rejects_unknown_asset_id(api_client):
     starts, not an opaque failure deep inside a background job."""
     resp = api_client.post(
         "/assemble",
-        data={"clip_asset_ids": ["does-not-exist"], "music_asset_ids": ["also-missing"]},
+        data={
+            "clip_asset_ids": ["does-not-exist"],
+            "music_asset_ids": ["also-missing"],
+        },
     )
     assert resp.status_code == 422
     assert "does-not-exist" in resp.json()["detail"]
 
 
-def test_assemble_combines_real_assets_into_one_valid_file(api_client, test_video, tmp_path):
+def test_assemble_combines_real_assets_into_one_valid_file(
+    api_client, test_video, tmp_path
+):
     """Real end-to-end smoke test, matching test_pipeline_smoke.py's own
     convention (real synthetic fixtures through the real pipeline, not
     mocked) -- run_assembly_job's `run_ffmpeg` default is bound at
@@ -666,7 +793,15 @@ def test_assemble_combines_real_assets_into_one_valid_file(api_client, test_vide
     audio_path = tmp_path / "tone.mp3"
     exe = imageio_ffmpeg.get_ffmpeg_exe()
     subprocess.run(
-        [exe, "-y", "-f", "lavfi", "-i", "sine=frequency=440:duration=1", str(audio_path)],
+        [
+            exe,
+            "-y",
+            "-f",
+            "lavfi",
+            "-i",
+            "sine=frequency=440:duration=1",
+            str(audio_path),
+        ],
         capture_output=True,
     )
 
@@ -686,7 +821,10 @@ def test_assemble_combines_real_assets_into_one_valid_file(api_client, test_vide
     # (added directly above, not through this route) exist in the library
     # until an explicit POST /jobs/{id}/save.
     assert status["can_save"] is True
-    assert {a["id"] for a in api_client.get("/library").json()} == {clip_asset.id, music_asset.id}
+    assert {a["id"] for a in api_client.get("/library").json()} == {
+        clip_asset.id,
+        music_asset.id,
+    }
 
     file_resp = api_client.get(f"/jobs/{job_id}/file")
     assert file_resp.status_code == 200
@@ -750,17 +888,27 @@ def test_projects_crud_flow(api_client, test_photo):
     # GET /library?project= filters to just that project's assets.
     filtered = api_client.get("/library", params={"project": "sunset-loop"}).json()
     assert [a["id"] for a in filtered] == [asset_id]
-    assert api_client.get("/library", params={"project": "no-such-project"}).json() == []
+    assert (
+        api_client.get("/library", params={"project": "no-such-project"}).json() == []
+    )
 
     # POST /library/{id}/project reassigns an already-saved asset.
-    reassign = api_client.post(f"/library/{asset_id}/project", data={"project": "new-name"})
+    reassign = api_client.post(
+        f"/library/{asset_id}/project", data={"project": "new-name"}
+    )
     assert reassign.status_code == 200
     assert reassign.json()["project"] == "new-name"
 
     # POST /projects/rename bulk-renames it back.
-    rename_resp = api_client.post("/projects/rename", data={"old": "new-name", "new": "sunset-loop"})
+    rename_resp = api_client.post(
+        "/projects/rename", data={"old": "new-name", "new": "sunset-loop"}
+    )
     assert rename_resp.status_code == 200
-    assert rename_resp.json() == {"renamed": "new-name", "to": "sunset-loop", "count": 1}
+    assert rename_resp.json() == {
+        "renamed": "new-name",
+        "to": "sunset-loop",
+        "count": 1,
+    }
     assert api_client.get(f"/library/{asset_id}").json()["project"] == "sunset-loop"
 
     # DELETE /projects/{name} untags without deleting the asset.
@@ -772,5 +920,7 @@ def test_projects_crud_flow(api_client, test_photo):
 
 
 def test_set_asset_project_rejects_unknown_asset(api_client):
-    resp = api_client.post("/library/does-not-exist/project", data={"project": "whatever"})
+    resp = api_client.post(
+        "/library/does-not-exist/project", data={"project": "whatever"}
+    )
     assert resp.status_code == 404

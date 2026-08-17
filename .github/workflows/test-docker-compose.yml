@@ -1,0 +1,56 @@
+name: Test Docker Compose
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      # machine-learning/, acestep, sound-effects/, image-generation/ are all
+      # GPU-oriented, profile-gated satellite services (see docker-compose.yml)
+      # -- not part of a plain `docker compose up` and not buildable/runnable
+      # on GH Actions' CPU-only runners. Only core+frontend are exercised here.
+      - name: Build core and frontend
+        run: docker compose build core frontend
+
+      # No healthcheck is defined on `core`/`frontend` in docker-compose.yml
+      # (a personal local tool with no orchestration needs beyond `up`), so
+      # `--wait` alone only confirms "container started", not "app ready" --
+      # retry the checks below instead of assuming readiness.
+      - name: Start core and frontend
+        run: docker compose up -d core frontend
+
+      - name: Check core health
+        run: timeout 60 bash -c 'until curl --fail --silent http://localhost:8000/health; do sleep 2; done'
+
+      - name: Check frontend dev server
+        run: timeout 60 bash -c 'until curl --fail --silent http://localhost:5173/; do sleep 2; done'
+
+      # The image builds the web UI in its own stage and serves it from GET /
+      # (Dockerfile, server/app.py). Without that stage the API still starts
+      # and /health still passes -- it's the UI routes that degrade to a
+      # "not built yet" page -- so health alone can't catch a broken build.
+      # A client-side route is checked too, since the SPA fallback under /ui
+      # is what makes a hard reload or a shared link work.
+      - name: Check core serves the built web UI
+        run: |
+          curl --fail --silent http://localhost:8000/ | grep -q 'id="root"'
+          curl --fail --silent http://localhost:8000/ui/library | grep -q 'id="root"'
+
+      - name: Show logs on failure
+        if: failure()
+        run: docker compose logs
+
+      - name: Tear down
+        if: always()
+        run: docker compose down -v --remove-orphans

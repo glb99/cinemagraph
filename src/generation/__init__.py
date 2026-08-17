@@ -72,6 +72,7 @@ Further confirmed, against the real API and the public docs
   section-marker step) -- callers must scan `steps` for the audio content
   block, not read one fixed attribute.
 """
+
 import base64
 import io
 import mimetypes
@@ -171,7 +172,9 @@ async def generate_music(
         {
             "model": MUSIC_MODEL,
             "input": input_text,
-            "response_format": {"type": "audio"},  # no mime_type -- see module docstring
+            "response_format": {
+                "type": "audio"
+            },  # no mime_type -- see module docstring
         },
     )
     if resp.status_code != 200:

@@ -17,6 +17,7 @@ music/image themselves started in; see docs/DESIGN.md sec 3.6 for why the
 registry is still worth having even with a single adapter (the payoff is at
 the next real backend, not the first one).
 """
+
 from .generation_ports import ImageGenerator, MusicGenerator, SoundEffectGenerator
 
 _IMAGE_GENERATORS: dict[str, ImageGenerator] = {}
@@ -68,7 +69,11 @@ def available_music_remix_generators() -> tuple[str, ...]:
     adapter class to define `supports_remix`: a future adapter that forgets
     the attribute degrades to "not remix-capable" instead of an AttributeError.
     """
-    return tuple(name for name, adapter in _MUSIC_GENERATORS.items() if getattr(adapter, "supports_remix", False))
+    return tuple(
+        name
+        for name, adapter in _MUSIC_GENERATORS.items()
+        if getattr(adapter, "supports_remix", False)
+    )
 
 
 _SOUND_EFFECT_GENERATORS: dict[str, SoundEffectGenerator] = {}

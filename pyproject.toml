@@ -31,7 +31,16 @@ generation = [
 ]
 
 [dependency-groups]
-dev = ["pytest>=8.0.0", "pytest-cov", "httpx>=0.27.0,<1"]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-cov",
+    "httpx>=0.27.0,<1",
+    "ruff>=0.2.2,<1.0.0",
+    "mypy>=1.8.0,<2.0.0",
+    "ty>=0.0.25",
+    "prek>=0.4.11,<1.0.0",
+    "zizmor>=1.0.0",
+]
 
 [project.scripts]
 cinemagraph = "cinemagraph.cli:cli"
@@ -45,3 +54,32 @@ markers = [
     "integration: requires a live deployed stack (docker compose up) and, for most cases, a real GPU-backed service. Excluded from the default run -- see docs/DESIGN.md sec 3.7.",
 ]
 addopts = "-m 'not integration'"
+
+[tool.ruff]
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "W", "F", "I", "B", "C4", "UP", "ARG001", "T201"]
+# E501: line length -- not worth the churn on a codebase with no prior formatting pass.
+# B008: FastAPI's Depends(...)-in-default-argument pattern is idiomatic, not a bug.
+# W191/B904: match this codebase's existing style rather than forcing a
+# app-code-wide rewrite as a side effect of adopting a linter.
+ignore = ["E501", "B008", "W191", "B904"]
+
+[tool.mypy]
+# Matches the interpreter actually used to run mypy (.python-version), not
+# requires-python's floor (3.11) -- numpy's bundled stubs use 3.12+ syntax
+# (PEP 695 `type` statements) that mypy can't even parse under python_version
+# 3.11, which aborted type checking entirely before this was raised to 3.13.
+python_version = "3.13"
+warn_unused_ignores = true
+# Non-strict to start: no existing type-hint baseline to assume `strict = true`
+# is reachable in one pass. Revisit once `uv run mypy src`'s real error count is known.
+
+[tool.ty.terminal]
+error-on-warning = true
+
+[tool.typos.default.extend-words]
+# typos-crate tokenizes "PNGs" as "PN" + "Gs" and misreads "PN" as a typo of
+# "ON" -- false positive, not a real spelling issue.
+PN = "PN"

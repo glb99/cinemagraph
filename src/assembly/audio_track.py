@@ -2,6 +2,7 @@
 fading the whole piece in/out at its edges), and layers sound effects
 continuously under/over a finished audio track.
 """
+
 from . import ffmpeg_runner
 
 # silenceremove's threshold is a *linear* amplitude (0..1 for normalized
@@ -17,8 +18,12 @@ _SILENCE_MIN_DURATION = 0.1
 
 
 def build_music_track(
-    track_paths: list[str], output_path: str, *,
-    crossfade_duration: float = 5.0, edge_fade_duration: float = 2.0, gap_duration: float = 0.0,
+    track_paths: list[str],
+    output_path: str,
+    *,
+    crossfade_duration: float = 5.0,
+    edge_fade_duration: float = 2.0,
+    gap_duration: float = 0.0,
     run_ffmpeg=ffmpeg_runner.run_ffmpeg,
 ) -> None:
     """Concatenates `track_paths` in order. `crossfade_duration` defaults to
@@ -124,7 +129,9 @@ def build_music_track(
             if i > 0:
                 filters.append(f"afade=t=in:st=0:d={edge_fade_duration}")
             if i < len(track_paths) - 1:
-                filters.append(f"areverse,afade=t=in:st=0:d={edge_fade_duration},areverse")
+                filters.append(
+                    f"areverse,afade=t=in:st=0:d={edge_fade_duration},areverse"
+                )
         label = f"trimmed{i}"
         stages.append(f"[{i}:a]{','.join(filters)}[{label}]")
         track_labels.append(label)
@@ -136,8 +143,12 @@ def build_music_track(
             concat_labels.append(track_labels[i])
             if i < len(track_paths) - 1:
                 inputs += [
-                    "-f", "lavfi", "-t", str(gap_duration),
-                    "-i", "anullsrc=channel_layout=stereo:sample_rate=44100",
+                    "-f",
+                    "lavfi",
+                    "-t",
+                    str(gap_duration),
+                    "-i",
+                    "anullsrc=channel_layout=stereo:sample_rate=44100",
                 ]
                 concat_labels.append(f"{silence_input_index}:a")
                 silence_input_index += 1
@@ -165,17 +176,26 @@ def build_music_track(
     else:
         final_label = prev_label
 
-    run_ffmpeg([
-        "-y", *inputs,
-        "-filter_complex", ";".join(stages),
-        "-map", f"[{final_label}]",
-        output_path,
-    ])
+    run_ffmpeg(
+        [
+            "-y",
+            *inputs,
+            "-filter_complex",
+            ";".join(stages),
+            "-map",
+            f"[{final_label}]",
+            output_path,
+        ]
+    )
 
 
 def layer_sound_effects(
-    base_audio_path: str, effect_paths: list[str], output_path: str, *,
-    run_ffmpeg=ffmpeg_runner.run_ffmpeg, probe_duration=ffmpeg_runner.probe_duration,
+    base_audio_path: str,
+    effect_paths: list[str],
+    output_path: str,
+    *,
+    run_ffmpeg=ffmpeg_runner.run_ffmpeg,
+    probe_duration=ffmpeg_runner.probe_duration,
 ) -> None:
     """Mixes `effect_paths` continuously under/over `base_audio_path` via
     ffmpeg's `amix` filter -- each effect loops (`-stream_loop -1`) and is
@@ -198,9 +218,14 @@ def layer_sound_effects(
     for effect_path in effect_paths:
         inputs += ["-stream_loop", "-1", "-t", str(base_duration), "-i", effect_path]
 
-    run_ffmpeg([
-        "-y", *inputs,
-        "-filter_complex", f"amix=inputs={len(effect_paths) + 1}:duration=first:dropout_transition=0[a]",
-        "-map", "[a]",
-        output_path,
-    ])
+    run_ffmpeg(
+        [
+            "-y",
+            *inputs,
+            "-filter_complex",
+            f"amix=inputs={len(effect_paths) + 1}:duration=first:dropout_transition=0[a]",
+            "-map",
+            "[a]",
+            output_path,
+        ]
+    )
