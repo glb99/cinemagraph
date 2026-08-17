@@ -44,6 +44,11 @@ services:
     profiles: ["ml"]
     ports:
       - "8004:8004"
+    environment:
+      # Seconds idle before the model is unloaded and its memory released;
+      # 0 = stay resident forever, PRELOAD=1 = load at startup rather than on
+      # first request. See image-generation below for why these exist at all.
+      - MODEL_TTL=${MODEL_TTL:-900}
     volumes:
       - ./data/machine-learning-cache:/cache/huggingface
 
@@ -154,6 +159,7 @@ services:
       - "8003:8003"
     environment:
       - HF_TOKEN=${HF_TOKEN}
+      - MODEL_TTL=${MODEL_TTL:-900}
     volumes:
       - ./data/sound-effects-cache:/cache/huggingface
     deploy:
@@ -170,11 +176,40 @@ services:
   # already). A hosted API (Gemini's native image models) was tried first
   # and reverted: new Google AI Studio accounts require a non-refundable
   # minimum prepay to use it at all. `docker compose --profile image up`.
+  #
+  # MODEL_TTL (all three torch satellites): seconds a loaded model may sit
+  # idle before it's unloaded and its VRAM released; 0 keeps it resident
+  # forever, PRELOAD=1 loads at startup instead of on first request. This
+  # exists because the satellites are mutually exclusive on this hardware,
+  # measured rather than assumed: SDXL alone occupies ~7.1GB of an 8.19GB
+  # card, and the Docker VM has ~10GB of RAM for every container together,
+  # so holding two models resident OOM-killed one (`Exited (137)`, seen
+  # repeatedly on sound-effects). With a TTL they take turns on the GPU
+  # instead: whichever service is asked for next loads, the idle one has
+  # already let go. Same pattern as Immich's MACHINE_LEARNING_MODEL_TTL
+  # (whose 0-means-forever semantics these follow) and Ollama's
+  # OLLAMA_KEEP_ALIVE.
+  #
+  # The default is 900s rather than Immich's 300s because of a measured
+  # cost specific to this deployment: a cold SDXL load here takes ~6
+  # minutes (`Loading pipeline components...: 7/7 [06:08, 52.64s/it]`),
+  # far longer than the ~30s generation it precedes. The cause is not the
+  # model -- it's that image-generation's and sound-effects' Hugging Face
+  # caches are *bind mounts* under ./data, read through Docker Desktop's
+  # WSL2 file-sharing layer: the same `p9_client_rpc` slowness diagnosed
+  # for acestep above, which was fixed there by moving to named volumes
+  # (see the acestep-checkpoints/acestep-hf-cache volumes below) but never
+  # applied to these two. Until it is, a short TTL thrashes -- unloading a
+  # model that costs 6 minutes to restore is worse than holding it unless
+  # another service actually needs the card. Fixing those two mounts is
+  # the prerequisite for dropping this back to 300.
   image-generation:
     build: ./image-generation
     profiles: ["image"]
     ports:
       - "8005:8005"
+    environment:
+      - MODEL_TTL=${MODEL_TTL:-900}
     volumes:
       - ./data/image-generation-cache:/cache/huggingface
     deploy:

@@ -1,14 +1,50 @@
 """FastAPI wrapper around Stable Diffusion XL for text-to-image generation.
 
-This is the entire reason this service exists as a wrapper rather than
-cinemagraph-tool shelling out to a script per call: the model loads once,
-at startup, instead of paying the multi-second checkpoint-load / GPU-init
-cost on every single request. Same shape as sound-effects/app.py -- eager
-load in a startup hook, module-global singleton, one /generate endpoint --
-deliberately kept consistent since both are the same kind of thing (a
-single-purpose diffusion model wrapper), not because there's shared code
-between them (there isn't, on purpose -- see docs/DESIGN.md sec 3.3 on why
-isolated services never share code with each other).
+This service exists as a wrapper rather than cinemagraph-tool shelling out
+to a script per call so that the model stays resident *between* requests
+instead of paying the multi-second checkpoint-load / GPU-init cost on every
+one. Same shape as sound-effects/app.py -- module-global singleton behind a
+lazy getter, one /generate endpoint -- deliberately kept consistent since
+both are the same kind of thing (a single-purpose diffusion model wrapper),
+not because there's shared code between them (there isn't, on purpose --
+see docs/DESIGN.md sec 3.3 on why isolated services never share code with
+each other; that rule is why the identical TTL logic below is written out
+separately in each service instead of being factored into a shared module).
+
+Residency is bounded by an idle TTL rather than lasting forever. Measured
+on this project's actual hardware: SDXL alone sits at ~7.1GB of an 8.19GB
+card, so while this service holds its model *nothing else can load* --
+sound-effects (Stable Audio Open) and ACE-Step each need several GB of
+their own, and the host's Docker VM has only ~10GB of RAM for all of them
+put together. Holding weights forever therefore didn't just waste memory,
+it made the satellites mutually exclusive: starting a second one
+OOM-killed something (a real, repeated `Exited (137)`, not a hypothetical).
+So the model now loads on the first request that needs it and unloads
+after MODEL_TTL idle seconds, freeing the GPU for whichever service is
+asked for next. This is the pattern Immich uses for its own ML service
+(MACHINE_LEARNING_MODEL_TTL, default 300s, 0 = never unload) and Ollama
+for model residency (OLLAMA_KEEP_ALIVE) -- the env var's semantics here
+follow Immich's, matching the convention this project already borrows from
+them elsewhere (see machine-learning/'s and server/'s own naming).
+
+The tradeoff is real, and on this deployment it is much larger than it
+looks -- measured, not estimated: a cold load here takes **~6 minutes**
+(`Loading pipeline components...: 7/7 [06:08, 52.64s/it]`), against ~30s
+for the generation itself. That is not SDXL being slow; it is this
+service's Hugging Face cache being a *bind mount*
+(./data/image-generation-cache) read through Docker Desktop's WSL2
+cross-OS file-sharing layer -- the identical `p9_client_rpc` pathology
+already diagnosed for ACE-Step and documented in docker-compose.yml, where
+it was fixed by switching that service to **named volumes**. The same fix
+has never been applied here or to sound-effects/, which is why the reload
+cost is what it is. Until it is, keep MODEL_TTL generous (see compose):
+unloading a model that takes 6 minutes to get back is worse than holding
+it, unless another service genuinely needs the card.
+
+MODEL_TTL=0 opts back into the old always-resident behaviour when this
+service is the only GPU tenant; PRELOAD=1 loads at startup rather than on
+first use (paying that 6 minutes once, up front, as this service did
+unconditionally before).
 
 Supports an optional reference image (img2img) alongside plain
 text-to-image: `StableDiffusionXLImg2ImgPipeline.from_pipe(pipe)` wraps the
@@ -57,7 +93,10 @@ batch rather than all at once -- a no-op for this service's batch size of
 1, but free and correct to leave on in case that ever changes).
 """
 import asyncio
+import gc
 import io
+import os
+import time
 
 import torch
 from diffusers import AutoencoderKL, StableDiffusionXLImg2ImgPipeline, StableDiffusionXLPipeline
@@ -69,15 +108,27 @@ DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 MODEL_ID = "stabilityai/stable-diffusion-xl-base-1.0"
 VAE_ID = "madebyollin/sdxl-vae-fp16-fix"
 
+# Seconds the pipeline may sit unused before it's unloaded and its VRAM
+# released. 0 disables unloading entirely (Immich's MACHINE_LEARNING_MODEL_TTL
+# semantics, not Ollama's -- there 0 means "unload immediately"; the two
+# conventions genuinely disagree, and this project follows Immich elsewhere).
+MODEL_TTL = int(os.environ.get("MODEL_TTL", "900"))
+# Load at startup instead of on first request. Off by default: eager loading
+# is exactly what made this service hold the whole GPU while idle.
+PRELOAD = os.environ.get("PRELOAD", "").lower() in ("1", "true", "yes")
+
 app = FastAPI(title="image-generation service")
 
 _pipe = None
 _img2img_pipe = None
+_last_used = 0.0
 # Serializes actual GPU generation calls -- this card can't run two at once
 # anyway (see the VRAM notes above), and asyncio.to_thread alone would let
 # concurrent requests launch truly parallel threads both hitting the GPU,
 # which is worse than the accidental serialization the blocking-call bug
-# below used to provide as an (unintended) side effect.
+# below used to provide as an (unintended) side effect. The idle reaper takes
+# this same lock, which is what keeps it from unloading the pipeline out from
+# under a generation that's still running.
 _generation_lock = asyncio.Lock()
 
 
@@ -120,18 +171,67 @@ def _get_img2img_pipe():
     return _img2img_pipe
 
 
+def _unload():
+    """Drops the pipelines and returns their VRAM to the driver.
+
+    Both globals have to go: _img2img_pipe holds references to the very
+    same UNet/VAE/text-encoder modules _pipe does (that's the whole point of
+    from_pipe()), so clearing only _pipe would free nothing at all whenever
+    an img2img request had ever been served. gc.collect() before
+    empty_cache() for the same reason -- empty_cache only releases blocks
+    the allocator already considers free, so the Python objects owning those
+    tensors must actually be collected first or the call is a no-op.
+    """
+    global _pipe, _img2img_pipe
+    if _pipe is None:
+        return
+    print("Unloading model (idle).")
+    _pipe = None
+    _img2img_pipe = None
+    gc.collect()
+    if DEVICE == "cuda":
+        torch.cuda.empty_cache()
+    print("Model unloaded.")
+
+
+async def _reap_idle_model():
+    """Unloads the pipeline once it's gone MODEL_TTL seconds without use.
+
+    Polls rather than arming a timer per request: a timer would have to be
+    cancelled and rescheduled around every generation (including ones that
+    fail), and getting that wrong silently reverts this service to holding
+    the GPU forever -- the exact bug this is here to prevent. Polling has no
+    such failure mode; it just reads a timestamp.
+    """
+    interval = max(1, min(30, MODEL_TTL))
+    while True:
+        await asyncio.sleep(interval)
+        if _pipe is None or time.monotonic() - _last_used < MODEL_TTL:
+            continue
+        # Same lock a generation holds, so this can never pull the model out
+        # from under one in flight; it simply waits for it to finish.
+        async with _generation_lock:
+            if _pipe is not None and time.monotonic() - _last_used >= MODEL_TTL:
+                _unload()
+
+
 @app.on_event("startup")
-async def load_model_at_startup():
-    # Eager-load the txt2img pipe so the first real request isn't the one
-    # paying the cost -- this is the whole point of being a service instead
-    # of a script. The img2img wrapper deliberately is NOT built here too --
-    # see this module's own docstring for the real OOM that caused this.
-    _get_pipe()
+async def on_startup():
+    if PRELOAD:
+        # The img2img wrapper deliberately is NOT built here too -- see this
+        # module's own docstring for the real OOM that caused this.
+        _get_pipe()
+    if MODEL_TTL > 0:
+        asyncio.create_task(_reap_idle_model())
 
 
 @app.get("/health")
 async def health():
-    return {"status": "ok", "device": DEVICE}
+    # Deliberately does not touch _get_pipe(): a health check must never be
+    # what loads a multi-GB model onto the GPU. core's /capabilities polls
+    # this route, so making it a loader would mean merely *looking at* the UI
+    # seizes the card from whichever service actually needs it.
+    return {"status": "ok", "device": DEVICE, "model_loaded": _pipe is not None}
 
 
 def _run_txt2img(prompt, negative_prompt, steps, guidance_scale, width, height, generator):
@@ -189,9 +289,16 @@ async def generate(
     requests launch truly parallel threads both hitting this GPU's already
     tight VRAM budget at once, which is strictly worse than one at a time.
     """
+    global _last_used
     generator = torch.Generator(device=DEVICE).manual_seed(seed) if seed != -1 else None
 
     async with _generation_lock:
+        # Stamped on both sides of the work: before, so the reaper can't
+        # decide this model is idle while a long generation is still running
+        # (it holds the lock, but the timestamp is what it reads); after, so
+        # the TTL counts from when the GPU actually went quiet rather than
+        # from when the request happened to arrive.
+        _last_used = time.monotonic()
         if image is not None:
             # img2img: output dimensions follow the reference image, not
             # width/height (which don't apply to this pipeline -- the
@@ -222,6 +329,7 @@ async def generate(
             # runs would let the next request's own generation start
             # allocating while this cache-clear is still in flight.
             torch.cuda.empty_cache()
+        _last_used = time.monotonic()
 
     buf = io.BytesIO()
     result.save(buf, format="PNG")
