@@ -120,23 +120,29 @@ PRELOAD = os.environ.get("PRELOAD", "").lower() in ("1", "true", "yes")
 # GPU only for the moment it runs, via accelerate's hooks. Trades speed for a
 # smaller *VRAM* footprint.
 #
-# Off by default, and that default is a finding rather than caution. This was
-# added to test docs/experiments/2026-08-18-...'s suggestion that offload
-# would drop SDXL's resident ~7.1GB far enough to end the satellites' mutual
-# exclusion. The A/B could not be run on this host at all: with the WSL2 VM
-# capped at 10GB (.wslconfig) and ~2.9GB of the host's 15.3GB free, *both*
-# arms died with CUDA refusing 26-77MB allocations while 4.8-5.8GB of VRAM
-# sat free -- the driver could not get host memory to back them. A fresh
-# container allocates 4GiB on the same GPU without complaint, so this is the
-# host's RAM ceiling, not the card's.
+# On by default, on measured evidence (docs/experiments/2026-08-18-sdxl-cpu-offload.md):
 #
-# Which points at the deeper problem with offload here: it *moves weights
-# into system RAM and keeps them there*, and system RAM is exactly this
-# machine's binding constraint -- the original `Exited (137)` kills that
-# started this whole line of work were host-RAM OOM kills, not VRAM ones. So
-# offload may trade away the resource there is more of for the one there is
-# less of. Enable it only on a host with RAM to spare, and measure.
-CPU_OFFLOAD = os.environ.get("CPU_OFFLOAD", "0").lower() in ("1", "true", "yes")
+#                       resident VRAM   host RAM free   warm generate
+#   .to("cuda")            7147 MiB        ~2.9 GB         33-44 s
+#   this                    147 MiB        ~0.4 GB         35-71 s
+#
+# 7.0 GB of VRAM returned for ~2.5 GB of extra host RAM, with the speed
+# difference inside the run-to-run noise of two samples per arm. Cold
+# generation is actually *faster* (60s vs 89s), since loading straight to
+# CPU skips pushing 7 GB across PCIe.
+#
+# The catch is real though, and it is host RAM: the weights now live in
+# system RAM permanently, which leaves this 15.6 GB host (WSL2 VM capped at
+# 10 GB in .wslconfig) with only ~400 MB free while loaded. Starting a
+# generation on an already-drained host is how the one observed crash
+# happened -- the service died mid-request when the benchmark ran this arm
+# immediately after the .to("cuda") arm. It did not recur in 3/3 runs from a
+# clean host. Set CPU_OFFLOAD=0 if this service must share a host with
+# something else memory-hungry, and see MODEL_TTL, which releases both.
+#
+# Note this does *not* on its own let two torch satellites coexist: it moves
+# the ceiling from VRAM to host RAM rather than removing it.
+CPU_OFFLOAD = os.environ.get("CPU_OFFLOAD", "1").lower() in ("1", "true", "yes")
 
 app = FastAPI(title="image-generation service")
 
