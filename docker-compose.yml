@@ -238,12 +238,19 @@ volumes:
   # startup and impossible to ignore when it happens every time the model
   # comes back.
   #
-  # Migrating rather than re-downloading: ./data/image-generation-cache and
-  # ./data/sound-effects-cache already hold ~14GB and ~5.4GB of weights, so
-  # the existing directories are copied into these volumes once (see the
-  # matching note in docs/experiments/) instead of pulling them from the HF
-  # Hub again. The old ./data directories are left in place afterwards --
-  # deleting ~19GB of working weights is not something a compose edit should
-  # do implicitly.
+  # These start empty and repopulate from the HF Hub on first use. Migrating
+  # the weights already on disk (./data/image-generation-cache and
+  # ./data/sound-effects-cache, ~14GB and ~5.4GB) was tried first and
+  # abandoned: the copy ran at ~2.6 MB/s, since reading the old bind mount is
+  # exactly the bottleneck these volumes exist to escape -- ~2 hours
+  # projected, against minutes to re-download at the ~57 MB/s this machine
+  # actually pulls at. Measured, not assumed; see docs/experiments/.
+  #
+  # Those two directories are therefore still on disk and no longer mounted
+  # by anything (unlike ./data/machine-learning-cache, which that service
+  # still bind-mounts -- its ~577MB of CLIPSeg weights never showed the
+  # pathology worth fixing). Deleting ~19GB of weights isn't something a
+  # compose edit should do implicitly, so that's left as a deliberate manual
+  # step once these volumes are known to be populated.
   image-generation-hf-cache:
   sound-effects-hf-cache:
