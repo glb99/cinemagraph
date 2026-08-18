@@ -116,6 +116,27 @@ MODEL_TTL = int(os.environ.get("MODEL_TTL", "900"))
 # Load at startup instead of on first request. Off by default: eager loading
 # is exactly what made this service hold the whole GPU while idle.
 PRELOAD = os.environ.get("PRELOAD", "").lower() in ("1", "true", "yes")
+# Keep the pipeline's weights in system RAM and move each sub-model onto the
+# GPU only for the moment it runs, via accelerate's hooks. Trades speed for a
+# smaller *VRAM* footprint.
+#
+# Off by default, and that default is a finding rather than caution. This was
+# added to test docs/experiments/2026-08-18-...'s suggestion that offload
+# would drop SDXL's resident ~7.1GB far enough to end the satellites' mutual
+# exclusion. The A/B could not be run on this host at all: with the WSL2 VM
+# capped at 10GB (.wslconfig) and ~2.9GB of the host's 15.3GB free, *both*
+# arms died with CUDA refusing 26-77MB allocations while 4.8-5.8GB of VRAM
+# sat free -- the driver could not get host memory to back them. A fresh
+# container allocates 4GiB on the same GPU without complaint, so this is the
+# host's RAM ceiling, not the card's.
+#
+# Which points at the deeper problem with offload here: it *moves weights
+# into system RAM and keeps them there*, and system RAM is exactly this
+# machine's binding constraint -- the original `Exited (137)` kills that
+# started this whole line of work were host-RAM OOM kills, not VRAM ones. So
+# offload may trade away the resource there is more of for the one there is
+# less of. Enable it only on a host with RAM to spare, and measure.
+CPU_OFFLOAD = os.environ.get("CPU_OFFLOAD", "0").lower() in ("1", "true", "yes")
 
 app = FastAPI(title="image-generation service")
 
@@ -144,7 +165,15 @@ def _get_pipe():
             torch_dtype=dtype,
             use_safetensors=True,
         )
-        _pipe = _pipe.to(DEVICE)
+        if DEVICE == "cuda" and CPU_OFFLOAD:
+            # Not .to("cuda") -- enable_model_cpu_offload() installs
+            # accelerate hooks that own device placement from here on, and
+            # moving the pipeline to the GPU first defeats it entirely (the
+            # weights would already be resident, which is the thing being
+            # avoided). diffusers warns about exactly this combination.
+            _pipe.enable_model_cpu_offload()
+        else:
+            _pipe = _pipe.to(DEVICE)
         _pipe.enable_vae_slicing()
         # Added alongside the img2img feature: found via a real OOM inside
         # the UNet's own cross-attention forward pass (not the VAE) once

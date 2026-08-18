@@ -38,12 +38,12 @@ Second thread, found while verifying the first: a cold SDXL load took **6 minute
 
 **The bind mount is quantifiably the problem.** Migrating the existing ~19 GB of weights into the named volumes ran at **~2.6 MB/s** (235 MB in ~90s). On this same machine pip pulls wheels at **57 MB/s** — reading the *local* cache through the WSL2 bridge is ~20× slower than downloading over the internet. Migration was abandoned as a result: re-downloading takes minutes where copying would have taken ~2 hours. The old `./data/*-cache` directories are left in place rather than deleted.
 
-**Still open:** the clean measurement — load time with weights already in the named volume — was not complete at time of writing. That number decides whether `MODEL_TTL` can drop from the defensive 900s back to Immich's 300s. Until it exists, 900s stands: unloading a model that costs 6 minutes to restore is worse than holding it.
+**Still open — now answered, see [the offload experiment](2026-08-18-sdxl-cpu-offload.md).** The clean measurement (load time with weights already in the named volume) was not complete at time of writing. It has since been taken as a side effect of benchmarking CPU offload: the 7 pipeline components load in **43 s** from the volume, against `7/7 [06:08]` through the old bind mount. 900 s was defensive because "unloading a model that costs 6 minutes to restore is worse than holding it"; at 43 s that no longer applies, so **`MODEL_TTL` can drop to Immich's 300 s**.
 
 ## Verdict
 
 - [x] **Adopted** — `MODEL_TTL`/`PRELOAD` in all three satellites' `app.py`, wired through `docker-compose.yml`; `image-generation-hf-cache` / `sound-effects-hf-cache` named volumes replacing the `./data` bind mounts. Branch `refactor/lazy-model-ttl`.
-- [ ] Inconclusive — whether 900s can drop to 300s. Resolved by timing one container restart once the volume is populated.
+- [x] Resolved — 900s can drop to 300s: the volume is populated (~14GB) and a cold component load off it takes 43s, not 6 minutes. See [the offload experiment](2026-08-18-sdxl-cpu-offload.md), which measured it while investigating something else.
 
 ## Notes
 
