@@ -83,6 +83,19 @@ jobs:
           TAG=$(echo "$TAGS" | head -n1)
           docker run -d --name smoke -p 8000:8000 "$TAG"
           timeout 90 bash -c 'until curl --fail --silent http://localhost:8000/health; do sleep 3; done'
+
+          # /health alone is not enough: it would pass even if the
+          # frontend-build stage were dropped or its COPY removed, and the
+          # image would ship with the web UI degraded to a "not built yet"
+          # page. That is a release-visible regression nobody would notice
+          # until someone opened the port, so it gates the publish instead.
+          curl --fail --silent http://localhost:8000/ | grep -q 'id="root"'
+
+          # A client-side route, which only resolves if the SPA fallback is
+          # wired up -- a bundle that exists but isn't reachable on a deep
+          # link or a hard reload is its own failure.
+          curl --fail --silent -o /dev/null http://localhost:8000/ui/setup
+
           docker rm -f smoke
 
 # The three satellite images (machine-learning, sound-effects,
