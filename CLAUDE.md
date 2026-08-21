@@ -71,6 +71,42 @@ uv run python examples/make_test_photo.py  # writes examples/test_photo.jpg
 uv run cinemagraph from-photo examples/test_photo.jpg examples/test_output.mp4 --effect smoke
 ```
 
+## Task runner and preflight
+
+`justfile` holds every common task -- `just` (not `make`, which isn't installed on the Windows host
+this is developed on). `just` with no arguments lists the recipes. The ones worth knowing:
+
+```bash
+just doctor       # what's installed, running, reachable, and free right now
+just api          # the API locally on :8000 (PORT=8010 to move it)
+just ui           # Vite dev server on :5173, proxying to the API
+just gpu-image    # SDXL + CLIPSeg in Docker; stops the audio satellites first
+just gpu-audio    # ACE-Step + Stable Audio; stops image-generation first
+just hosted       # every feature via Gemini/Lyria 3, no GPU at all
+```
+
+`gpu-image`/`gpu-audio` stopping each other's profile is the point of the file, not a convenience:
+any two torch satellites resident at once exceed both this card's VRAM and Docker's VM RAM (see
+`docs/experiments/2026-08-18-lazy-model-ttl-and-hf-cache-volumes.md`). That constraint was real but
+unenforced before -- it lived in a comment and in whoever remembered it. It is the operator-level
+version of the admission control surveyed in
+`docs/experiments/2026-08-21-model-lifecycle-prior-art.md`.
+
+`cinemagraph doctor` (`src/diagnostics/`) is the preflight: tooling (including the ffmpeg binary
+bundled inside `imageio-ffmpeg`, which `which ffmpeg` would wrongly call missing), whether
+`frontend/dist` was actually built and when, GPU free VRAM against SDXL's measured ~7147 MiB
+footprint, which known ports are occupied, each satellite as configured-vs-reachable-vs-*wedged*
+(the busy watchdog's 503), and whether the API answers. It starts nothing, changes nothing, never
+prints the value of `GEMINI_API_KEY` (only whether it's set), and **exits 0 by default** -- being
+down is what it's there to tell you about, so it must not fail a task chain. `--strict` inverts
+that for a deploy gate or healthcheck.
+
+Its own top-level package for the same reason `asset_library` is one: it's cross-cutting, and
+`cinemagraph` must not learn about ACE-Step URLs or Docker. Stdlib only (`urllib`, `subprocess`,
+`socket`, `nvidia-smi` parsed from CSV), because it has to work from a bare `uv sync` with no
+extras -- which is exactly when you need it, since "the server extra isn't installed" is one of the
+things it reports.
+
 ## Architecture
 
 Package lives at `src/cinemagraph/` (src-layout, to keep `import cinemagraph` from ever silently

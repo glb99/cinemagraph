@@ -104,11 +104,14 @@ support burden immediately, serves CLI and Docker users equally, and is genuinel
 own debugging — the satellite work in `fix/satellite-busy-watchdog` would have been easier to
 verify with it.
 
-**Design constraint, decided up front:** `doctor` lives in the `cinemagraph` core tier, which must
-not gain `httpx` or `pydantic` (§3.2). So it reads `os.environ` directly (exactly as
-`asset_library` already does) and uses stdlib `urllib.request` for reachability. It must not
-import `server.config`. Getting this wrong is the obvious way this workstream quietly breaks the
-tier discipline.
+**Design constraint, decided up front — and half wrong:** the stdlib-only part was right (no
+`httpx`, no `pydantic`, no importing `server.config`; `os.environ` and `urllib.request` directly,
+exactly as `asset_library` does), because `doctor` has to run from a bare `uv sync` with no extras.
+The placement was not: this said "`doctor` lives in the `cinemagraph` core tier", which puts
+satellite URLs, Docker and GPU knowledge inside the animate-a-photo package. §3.2's own scope test
+says the opposite, and `src/diagnostics/` — which already existed on an unmerged branch — had it
+right. Left here as written rather than quietly corrected, since getting the tier discipline
+*nearly* right is the interesting failure mode. See the outcome below.
 
 **Changes**
 
@@ -133,27 +136,39 @@ tier discipline.
 **Done when:** `uv run cinemagraph doctor` prints a status table on a clean checkout, and each
 failing line names the command or URL that fixes it.
 
-**Outcome:** shipped as `src/cinemagraph/doctor.py` (checks return `CheckResult` records, never
-print) plus a thin `doctor` command in `cli.py`. The tier constraint held and is now verified
-rather than asserted: importing the CLI pulls in no `httpx`, `pydantic`, `fastapi`, `server`, or
-`torch`.
+**Outcome:** shipped, then **reconciled against work that already existed** — see below.
 
-Four statuses rather than pass/fail, because "not configured" and "configured but broken" are
-genuinely different: `ok`, `off` (an optional feature nobody enabled — the expected state, and
-flagging it would train people to skim), `warn` (configured but unreachable, or wedged), `fail`
-(something core is actually broken). Exit code is non-zero only on `fail`, so an optional service
-being down doesn't break a deploy gate.
+`cinemagraph doctor` now lives in `src/diagnostics/`, a top-level sibling package. It reports
+tooling (including the ffmpeg binary bundled inside a wheel, where `which` won't find it), whether
+`frontend/dist` was built and when, GPU free VRAM against SDXL's measured footprint, which known
+ports are occupied, each satellite as configured / reachable / *wedged*, and whether the API
+answers. Exits 0 by default so it can't break a `just` recipe; `--strict` opts into a non-zero exit
+for a deploy gate. 19 tests, none needing a live stack.
 
-It also reads the satellites' new `/health` fields, so a wedged model shows up as
-`reports a wedged request (1500s in flight)` rather than as a generic outage — the CLI and the web
-UI will report the same state from the same source.
+**The reconciliation, recorded because the mistake is the useful part:** this was first built as
+`src/cinemagraph/doctor.py`, without noticing that a more complete implementation already sat
+unmerged on `feat/run-commands` — along with a `justfile`. Both existed for a while; the duplicate
+has been deleted.
 
-25 tests in `tests/test_doctor.py`, none needing a live stack. One behaviour worth noting: the
-library check deliberately does *not* call `asset_library.library_root()`, because that function
-creates the directory as a side effect and a diagnostic must not change what it diagnoses — there's
-a test asserting the directory stays absent.
+`src/diagnostics/` won on two counts. **Placement:** it passes the same cross-cutting test
+`asset_library` passed (§5.1) — it knows about satellite URLs, Docker and the GPU, none of which
+the core photo/video package may learn about. The duplicate put exactly that knowledge inside
+`cinemagraph/`, which was simply wrong by this project's own rule. **Coverage:** ports, GPU
+headroom, bundle freshness and tooling were all absent from the duplicate.
 
-**Effort:** as estimated.
+Three things were ported *from* the duplicate: detection of the busy watchdog's wedged-503 state
+(which postdated the original), the ffmpeg check, and a library check that resolves its own path
+rather than calling `library_root()`, which mkdirs — a diagnostic must not create the thing it
+reports on.
+
+The `justfile` came across whole, and its `gpu-image`/`gpu-audio` recipes are more interesting than
+a task runner: each stops the profile it conflicts with, which is operator-level admission control
+for the same GPU contention surveyed in
+`docs/experiments/2026-08-21-model-lifecycle-prior-art.md`. That constraint was previously real,
+measured, written down — and enforced only by whoever remembered it.
+
+**Effort:** as estimated, plus the reconciliation. Checking existing branches first would have
+avoided the duplicate entirely.
 
 ---
 

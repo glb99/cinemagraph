@@ -9,10 +9,11 @@ Usage:
 import click
 
 import asset_library as library
+import diagnostics
 from assembly import pipeline as assembly_pipeline
 
-from . import doctor, pipeline, validation
 from . import effects as effects_pkg
+from . import pipeline, validation
 
 
 @click.group()
@@ -454,52 +455,49 @@ def assemble(
     click.echo(f"Saved assembled video to {output_path}")
 
 
-_DOCTOR_MARKERS = {
-    doctor.Status.OK: ("ok  ", "green"),
-    doctor.Status.OFF: ("--  ", None),
-    doctor.Status.WARN: ("warn", "yellow"),
-    doctor.Status.FAIL: ("FAIL", "red"),
+_STATUS_MARKS = {
+    diagnostics.Status.OK: ("+", "green"),
+    diagnostics.Status.WARN: ("!", "yellow"),
+    diagnostics.Status.FAIL: ("x", "red"),
+    diagnostics.Status.INFO: (".", None),
 }
 
 
 @cli.command()
-def doctor_cmd():
-    """Check the environment: what's configured, reachable, and broken.
+@click.option(
+    "--strict",
+    is_flag=True,
+    help="Exit non-zero if any check FAILs, for use as a deploy gate or healthcheck.",
+)
+def doctor(strict):
+    """Report what's installed, running, reachable, and free right now.
 
-    Exits non-zero if any check fails, so it can gate a deploy or serve as a
-    container healthcheck. A satellite that simply isn't configured is not a
-    failure -- optional features being off is the expected state.
+    Purely diagnostic -- it starts nothing and changes nothing, so it stays
+    safe to run at any point. A FAIL row means "configured but not working",
+    which is a real problem; INFO rows are just facts, including "not
+    configured", which is a perfectly valid state for every optional service.
+
+    Exits 0 by default, including when rows FAIL: this is called from a
+    justfile recipe, and a command whose whole job is reporting problems
+    must not break a task chain by doing so. --strict inverts that for the
+    cases that genuinely want a gate.
     """
-    results = doctor.run_all_checks()
-    width = max(len(r.name) for r in results)
-
-    for result in results:
-        marker, color = _DOCTOR_MARKERS[result.status]
-        click.echo(
-            f"{click.style(marker, fg=color, bold=result.status is doctor.Status.FAIL)}  "
-            f"{result.name.ljust(width)}  {result.detail}"
-        )
-        # Only show the fix where there's something to act on -- a passing
-        # check with a hint attached is noise that trains people to skim.
-        if result.fix and result.status in (doctor.Status.WARN, doctor.Status.FAIL):
-            click.echo(f"      {' ' * width}  -> {result.fix}")
-
-    worst = doctor.worst_status(results)
+    sections = diagnostics.run_all()
+    failed = []
+    for section in sections:
+        click.secho(f"\n{section.title}", bold=True)
+        for check in section.checks:
+            mark, colour = _STATUS_MARKS[check.status]
+            click.echo("  ", nl=False)
+            click.secho(f"[{mark}] ", fg=colour, nl=False)
+            click.echo(f"{check.name:<28} {check.detail}")
+            if check.status is diagnostics.Status.FAIL:
+                failed.append(check.name)
     click.echo()
-    if worst is doctor.Status.FAIL:
-        failed = [r.name for r in results if r.status is doctor.Status.FAIL]
+    if strict and failed:
         raise click.ClickException(
             f"{len(failed)} check(s) failed: {', '.join(failed)}"
         )
-    if worst is doctor.Status.WARN:
-        click.echo(
-            "Core features are fine; some optional services need attention (above)."
-        )
-    else:
-        click.echo("All good.")
-
-
-cli.add_command(doctor_cmd, name="doctor")
 
 
 @cli.group()

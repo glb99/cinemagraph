@@ -48,10 +48,23 @@ To see the state of all of it at once:
 uv run cinemagraph doctor
 ```
 
-It reports what's configured, what's actually reachable, and what to run to fix anything that
-isn't — including whether a satellite is loaded, idle, or stuck on a wedged request. Optional
-services being off is reported as off, not as a problem; it exits non-zero only when something is
-genuinely broken, so it also works as a deploy gate.
+It reports what's installed, what's running, what's reachable, and how much VRAM is free —
+including whether a satellite is loaded, idle, or stuck on a wedged request. Optional services
+being off is reported as off, not as a problem, and it exits 0 so it can't break a task chain;
+pass `--strict` when you want failures to propagate, as a deploy gate would.
+
+If you have [`just`](https://github.com/casey/just), `just` on its own lists every common task:
+
+```bash
+just doctor       # the above
+just up           # everything that needs no GPU, in Docker
+just gpu-image    # SDXL + CLIPSeg, stopping the audio satellites first
+just gpu-audio    # ACE-Step + Stable Audio, stopping image generation first
+just hosted       # every feature via Gemini/Lyria 3, no GPU at all
+```
+
+`gpu-image` and `gpu-audio` stopping each other is deliberate: the torch satellites can't share an
+8 GB card, so the recipes enforce what was previously just a note in a comment.
 
 ## Before you put this on a network
 

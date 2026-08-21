@@ -10,8 +10,13 @@ someone who only wants the 200 KB core.
 uv sync                                      # core CLI + dev tools
 uv sync --extra server --extra generation    # + the API and the Gemini/Lyria adapters
 uv run pytest                                # fast, no GPU needed
-uv run cinemagraph doctor                    # what's configured, reachable, or broken
+uv run cinemagraph doctor                    # what's installed, running, reachable, free
 ```
+
+With [`just`](https://github.com/casey/just) installed, `just` lists every common task and
+`just setup` does both installs. The GPU recipes are worth knowing before you start a
+satellite by hand: `just gpu-image` and `just gpu-audio` stop the profile they conflict with,
+because the torch satellites cannot share this project's 8 GB card.
 
 `dev` is a [PEP 735 dependency group](https://peps.python.org/pep-0735/) — synced by default, never
 part of a real install. `server` and `generation` are real optional features, opt-in via `--extra`.
