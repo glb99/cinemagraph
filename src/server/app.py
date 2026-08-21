@@ -95,11 +95,12 @@ from fastapi import (
 from fastapi.responses import FileResponse, HTMLResponse, Response
 
 import asset_library as library
+import cinemagraph
 from cinemagraph import effects as effects_pkg
 from cinemagraph import pipeline, validation
 
 from . import jobs, service
-from ._external_service import call_optional_service, service_available
+from ._external_service import call_optional_service, probe_service
 from .config import Settings, get_settings
 from .generation_adapters import (
     ACEStepAdapter,
@@ -116,7 +117,13 @@ from .generation_registry import (
     register_music_generator,
     register_sound_effect_generator,
 )
-from .schemas import AssetResponse, CapabilitiesResponse, JobResponse, JobStatusResponse
+from .schemas import (
+    AssetResponse,
+    CapabilitiesResponse,
+    JobResponse,
+    JobStatusResponse,
+    ServiceStatus,
+)
 
 SettingsDep = Annotated[Settings, Depends(get_settings)]
 
@@ -311,28 +318,48 @@ async def capabilities(settings: SettingsDep):
     UI -- POST /generate/music still rejects it server-side too, since the
     UI filtering isn't the only way to hit this route.
     """
+    # Probe each satellite exactly once and reuse the result for both the
+    # capability bool and the per-service detail. This route already made one
+    # health call per service; keeping the answer instead of discarding it is
+    # free, and it removes the four separate `await service_available(...)`
+    # calls that previously had to stay in sync with the `configured` dict
+    # below by hand.
+    mask_probe = await probe_service(settings.semantic_mask_service)
+    music_probe = await probe_service(settings.music_service)
+    sfx_probe = await probe_service(settings.sound_effect_service)
+    image_probe = await probe_service(settings.image_generation_service)
+    has_gemini = bool(settings.gemini_api_key)
+
     return CapabilitiesResponse(
-        semantic_mask=await service_available(settings.semantic_mask_service),
-        music_generation=(
-            await service_available(settings.music_service)
-            or bool(settings.gemini_api_key)
-        ),
-        sound_effect_generation=await service_available(settings.sound_effect_service),
-        image_generation=(
-            await service_available(settings.image_generation_service)
-            or bool(settings.gemini_api_key)
-        ),
+        semantic_mask=mask_probe.reachable,
+        music_generation=music_probe.reachable or has_gemini,
+        sound_effect_generation=sfx_probe.reachable,
+        image_generation=image_probe.reachable or has_gemini,
         image_generation_models=list(available_image_generators()),
         music_generation_models=list(available_music_generators()),
         music_remix_models=list(available_music_remix_generators()),
         configured={
-            "semantic_mask": bool(settings.ml_service_url),
-            "music_generation": bool(settings.acestep_url)
-            or bool(settings.gemini_api_key),
-            "sound_effect_generation": bool(settings.sound_effects_url),
-            "image_generation": bool(settings.image_generation_url)
-            or bool(settings.gemini_api_key),
+            "semantic_mask": mask_probe.configured,
+            "music_generation": music_probe.configured or has_gemini,
+            "sound_effect_generation": sfx_probe.configured,
+            "image_generation": image_probe.configured or has_gemini,
         },
+        version=cinemagraph.__version__,
+        services=[
+            ServiceStatus(
+                name=service.name,
+                env_var=service.env_var,
+                configured=probe.configured,
+                reachable=probe.reachable,
+                health=probe.health,
+            )
+            for service, probe in (
+                (settings.semantic_mask_service, mask_probe),
+                (settings.music_service, music_probe),
+                (settings.sound_effect_service, sfx_probe),
+                (settings.image_generation_service, image_probe),
+            )
+        ],
     )
 
 

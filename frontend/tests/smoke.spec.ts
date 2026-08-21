@@ -64,3 +64,42 @@ test("library tab lists assets from GET /library", async ({ page }) => {
     timeout: 10_000,
   });
 });
+
+test("setup tab reports every optional service and how to enable it", async ({ page }) => {
+  await page.goto("/ui/setup");
+
+  await expect(page.getByRole("heading", { name: "Setup" })).toBeVisible();
+
+  // Always-available, unlike the gated tabs -- the whole point is that it
+  // works when nothing else is configured, so it's safe to assert on here.
+  await expect(page.getByRole("link", { name: "Setup", exact: true })).toBeVisible();
+
+  // Every satellite is listed whether or not it's configured, with the env var
+  // that turns it on. Which *state* each is in depends on what's running, so
+  // that deliberately isn't asserted -- only that the row and its variable are
+  // present, which is what makes the page actionable.
+  for (const service of [
+    "Semantic masking",
+    "Music generation",
+    "Sound effect generation",
+    "Image generation",
+  ]) {
+    await expect(page.getByText(service, { exact: true })).toBeVisible({ timeout: 10_000 });
+  }
+  for (const envVar of [
+    "ML_SERVICE_URL",
+    "ACESTEP_URL",
+    "SOUND_EFFECTS_URL",
+    "IMAGE_GENERATION_URL",
+  ]) {
+    // .first(): each variable appears twice by design when the service is off
+    // -- once as the row's own label, and once inside the "start it, then set
+    // this" sentence, which has to name it to stand alone.
+    await expect(page.getByText(envVar, { exact: true }).first()).toBeVisible();
+  }
+
+  // Recheck re-runs the capability probe rather than reading a cached answer,
+  // which is the reason this tab exists as more than a static help page.
+  await page.getByRole("button", { name: "Recheck" }).click();
+  await expect(page.getByRole("button", { name: "Recheck" })).toBeEnabled({ timeout: 10_000 });
+});

@@ -1,6 +1,6 @@
 # Open-source readiness plan
 
-**Status:** 2026-08-21. W0, W1, W2 shipped; W3 half-shipped (`core` images only, by decision); W4-W5 not started. Decisions recorded at the end.
+**Status:** 2026-08-21. W0, W1, W2, W4 shipped; W3 half-shipped (`core` images only, by decision); W5 deliberately unscheduled. Decisions recorded at the end.
 **Goal:** make this repo something a stranger can install, understand, run, and extend — without
 reading the source to find out why a feature is missing.
 
@@ -224,7 +224,7 @@ three-day estimate actually lives.
 
 ---
 
-## W4 — A Setup tab in the web UI
+## W4 — A Setup tab in the web UI — ✅ done 2026-08-21
 
 **Why here:** small, and mostly a new *view* over data that already exists. Deliberately after W3,
 because the most useful thing it can tell a user is "run this command", and that command should be
@@ -250,7 +250,36 @@ that shows *everything* at once rather than one hint inside whichever tab you ha
 **Done when:** the Setup tab explains the state of every optional capability without the user
 opening a terminal or a source file.
 
-**Effort:** one to two days.
+**Outcome:** shipped. `GET /capabilities` gained `version` and a `services[]` array (name, env var,
+`configured`, `reachable`, and the satellite's own `/health` body). Both additive — every existing
+field kept its shape, so nothing else in the UI had to change.
+
+It costs no extra requests: the route already health-checked all four satellites and threw the
+bodies away. Replacing the four `service_available()` calls with one `probe_service()` each
+actually *removed* duplication, since the `configured` dict previously had to be kept in sync with
+those calls by hand.
+
+`frontend/src/routes/ui/setup.tsx` renders four states rather than three, because the satellites
+can now report a fourth: **Running**, **Not running** (configured, nothing answering), **Stuck**
+(it answered 503 — the busy watchdog flagged a wedged request, which needs different advice), and
+**Not configured**. A Recheck button invalidates the shared capabilities query, which was cached
+for the session — exactly wrong for the one tab you open *because* you just started a container.
+
+`SERVICE_START_COMMANDS` in `lib/tabs.ts` is keyed by env var rather than by tab, because semantic
+masking has no tab of its own (it's a field inside Photo) and would otherwise have no home. The
+existing `TABS` entries now reference it instead of repeating the commands.
+
+**Verified against a live backend**, not just typechecked: the API served the built bundle on
+:8000 and the new Playwright test passed against it. 191 Python tests, ruff at its pre-existing
+71-error baseline, biome and `tsc -b` clean.
+
+**Found while doing this, not fixed:** `tests/smoke.spec.ts`'s library test fails on
+`getByRole("combobox", { name: "Kind" })`. Confirmed pre-existing by stashing this work, rebuilding,
+and reproducing it — and unnoticed because `test-frontend.yml` doesn't run Playwright at all. Two
+separate things worth fixing: the selector or the control's accessible name, and the CI gap that
+hid it.
+
+**Effort:** as estimated.
 
 ---
 

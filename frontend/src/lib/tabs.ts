@@ -25,8 +25,30 @@ import type { CapabilitiesResponse } from "@/client";
  *   - not configured       -> no link at all (nothing to hint about without
  *                             redeploying)
  * See app.py's /capabilities docstring for the configured/available split. */
+/** How to start each optional satellite, keyed by the env var that configures
+ * it -- the same key `GET /capabilities`'s `services[]` reports.
+ *
+ * Keyed by env var rather than by tab because the two don't line up: semantic
+ * masking has no tab of its own (it's a field inside the Photo tab), so it
+ * would otherwise have no home here, and the Setup tab needs a command for all
+ * four. The TABS entries below reference this rather than repeating it. */
+export const SERVICE_START_COMMANDS: Record<string, string> = {
+  ML_SERVICE_URL: "docker compose --profile ml up machine-learning",
+  ACESTEP_URL: "docker compose --profile audio up acestep",
+  SOUND_EFFECTS_URL: "docker compose --profile audio up sound-effects",
+  IMAGE_GENERATION_URL: "docker compose --profile image up image-generation",
+};
+
 export interface TabDef {
-  to: "/ui" | "/ui/video" | "/ui/music" | "/ui/sfx" | "/ui/image" | "/ui/assemble" | "/ui/library";
+  to:
+    | "/ui"
+    | "/ui/video"
+    | "/ui/music"
+    | "/ui/sfx"
+    | "/ui/image"
+    | "/ui/assemble"
+    | "/ui/library"
+    | "/ui/setup";
   label: string;
   always?: boolean;
   capability?: keyof Pick<
@@ -43,22 +65,23 @@ export const TABS: TabDef[] = [
     to: "/ui/music",
     label: "Music",
     capability: "music_generation",
-    startCommand: "docker compose --profile audio up acestep",
+    startCommand: SERVICE_START_COMMANDS.ACESTEP_URL,
   },
   {
     to: "/ui/sfx",
     label: "Sound effects",
     capability: "sound_effect_generation",
-    startCommand: "docker compose --profile audio up sound-effects",
+    startCommand: SERVICE_START_COMMANDS.SOUND_EFFECTS_URL,
   },
   {
     to: "/ui/image",
     label: "Image",
     capability: "image_generation",
-    startCommand: "docker compose --profile image up image-generation",
+    startCommand: SERVICE_START_COMMANDS.IMAGE_GENERATION_URL,
   },
   { to: "/ui/assemble", label: "Assemble", always: true },
   { to: "/ui/library", label: "Library", always: true },
+  { to: "/ui/setup", label: "Setup", always: true },
 ];
 
 export interface TabAvailability {

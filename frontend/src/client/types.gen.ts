@@ -478,6 +478,14 @@ export type CapabilitiesResponse = {
     configured?: {
         [key: string]: boolean;
     };
+    /**
+     * Version
+     */
+    version?: string;
+    /**
+     * Services
+     */
+    services?: Array<ServiceStatus>;
 };
 
 /**
@@ -528,6 +536,42 @@ export type JobStatusResponse = {
      * Saved Asset Id
      */
     saved_asset_id?: string | null;
+};
+
+/**
+ * ServiceStatus
+ *
+ * Per-satellite detail behind the capability booleans below.
+ *
+ * The bools answer "can the UI offer this feature". These answer "what is
+ * actually going on", which is what the Setup tab and `cinemagraph doctor`
+ * need in order to tell someone what to do about it -- including which env
+ * var configures it, so the answer doesn't require reading
+ * docker-compose.yml.
+ */
+export type ServiceStatus = {
+    /**
+     * Name
+     */
+    name: string;
+    /**
+     * Env Var
+     */
+    env_var: string;
+    /**
+     * Configured
+     */
+    configured: boolean;
+    /**
+     * Reachable
+     */
+    reachable: boolean;
+    /**
+     * Health
+     */
+    health?: {
+        [key: string]: unknown;
+    } | null;
 };
 
 /**

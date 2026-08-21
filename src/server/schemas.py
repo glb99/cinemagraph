@@ -21,6 +21,27 @@ class JobStatusResponse(BaseModel):
     saved_asset_id: str | None = None
 
 
+class ServiceStatus(BaseModel):
+    """Per-satellite detail behind the capability booleans below.
+
+    The bools answer "can the UI offer this feature". These answer "what is
+    actually going on", which is what the Setup tab and `cinemagraph doctor`
+    need in order to tell someone what to do about it -- including which env
+    var configures it, so the answer doesn't require reading
+    docker-compose.yml.
+    """
+
+    name: str
+    env_var: str
+    configured: bool
+    reachable: bool
+    # The service's own /health body when it answered: `device`,
+    # `model_loaded`, and `inflight_seconds` (plus `status: "stuck"` when the
+    # busy watchdog has flagged a wedged request). Free to include -- this
+    # route already health-checks every service and used to discard the body.
+    health: dict | None = None
+
+
 class CapabilitiesResponse(BaseModel):
     semantic_mask: bool
     music_generation: bool
@@ -37,6 +58,13 @@ class CapabilitiesResponse(BaseModel):
     # bool fields above. See docs/DESIGN.md's "configured-but-unreachable
     # UI hint" note.
     configured: dict[str, bool] = {}
+    # Running version, so a bug report can name one. Empty when the package
+    # metadata isn't readable (e.g. running from a source tree that was never
+    # installed).
+    version: str = ""
+    # One entry per optional satellite, in a stable order. Additive: nothing
+    # above changes shape, so existing clients are unaffected.
+    services: list[ServiceStatus] = []
 
 
 class AssetResponse(BaseModel):

@@ -135,8 +135,13 @@ def test_asset_route_serves_nothing_outside_the_bundle(
 
 
 def test_capabilities_without_optional_services_configured(api_client):
+    import cinemagraph
+
     resp = api_client.get("/capabilities")
     assert resp.status_code == 200
+    # Whole-shape equality on purpose: this is the contract the web UI's
+    # generated client is built from, so a field appearing or vanishing should
+    # fail here rather than at runtime in the browser.
     assert resp.json() == {
         "semantic_mask": False,
         "music_generation": False,
@@ -151,6 +156,40 @@ def test_capabilities_without_optional_services_configured(api_client):
             "sound_effect_generation": False,
             "image_generation": False,
         },
+        "version": cinemagraph.__version__,
+        # Every satellite is listed even when none is configured -- the Setup
+        # tab needs to show "not configured, here's the env var" rather than
+        # an empty page that looks like a loading failure.
+        "services": [
+            {
+                "name": "Semantic masking",
+                "env_var": "ML_SERVICE_URL",
+                "configured": False,
+                "reachable": False,
+                "health": None,
+            },
+            {
+                "name": "Music generation",
+                "env_var": "ACESTEP_URL",
+                "configured": False,
+                "reachable": False,
+                "health": None,
+            },
+            {
+                "name": "Sound effect generation",
+                "env_var": "SOUND_EFFECTS_URL",
+                "configured": False,
+                "reachable": False,
+                "health": None,
+            },
+            {
+                "name": "Image generation",
+                "env_var": "IMAGE_GENERATION_URL",
+                "configured": False,
+                "reachable": False,
+                "health": None,
+            },
+        ],
     }
 
 
@@ -168,6 +207,61 @@ def test_capabilities_distinguishes_configured_but_unreachable(api_client, tmp_p
     assert body["music_generation"] is False
     assert body["configured"]["music_generation"] is True
     assert body["configured"]["sound_effect_generation"] is False
+
+
+def test_capabilities_services_carry_the_env_var_that_configures_them(
+    api_client, tmp_path
+):
+    """The Setup tab has to be able to say *which variable* to set, without
+    the reader going to docker-compose.yml for it."""
+    app.dependency_overrides[get_settings] = lambda: Settings(
+        data_dir=tmp_path / "data", acestep_url="http://acestep.invalid:9"
+    )
+    services = {
+        s["name"]: s for s in api_client.get("/capabilities").json()["services"]
+    }
+    assert services["Music generation"]["env_var"] == "ACESTEP_URL"
+    assert services["Music generation"]["configured"] is True
+    assert services["Music generation"]["reachable"] is False
+    # Unreachable means there was no body to report.
+    assert services["Music generation"]["health"] is None
+    assert services["Semantic masking"]["configured"] is False
+
+
+def test_capabilities_surfaces_a_wedged_satellites_health(
+    api_client, tmp_path, monkeypatch
+):
+    """A satellite whose busy watchdog has flagged a stuck request answers
+    /health with 503 and a `status: "stuck"` body. That must come through as
+    unreachable (it genuinely can't serve a request) while still carrying the
+    reason, or the UI can only say "down" for something that is actually
+    "wedged, and about to restart itself"."""
+    from server import _external_service
+
+    async def fake_probe(service, _health_path="/health", _timeout=2.0):
+        if service.env_var != "IMAGE_GENERATION_URL":
+            return _external_service.ServiceProbe(configured=False, reachable=False)
+        return _external_service.ServiceProbe(
+            configured=True,
+            reachable=False,
+            health={"status": "stuck", "device": "cuda", "inflight_seconds": 1500.0},
+        )
+
+    monkeypatch.setattr("server.app.probe_service", fake_probe)
+    app.dependency_overrides[get_settings] = lambda: Settings(
+        data_dir=tmp_path / "data"
+    )
+    body = api_client.get("/capabilities").json()
+    image = next(s for s in body["services"] if s["env_var"] == "IMAGE_GENERATION_URL")
+    assert image["reachable"] is False
+    assert image["health"]["status"] == "stuck"
+    assert image["health"]["inflight_seconds"] == 1500.0
+
+
+def test_capabilities_reports_the_running_version(api_client):
+    import cinemagraph
+
+    assert api_client.get("/capabilities").json()["version"] == cinemagraph.__version__
 
 
 def test_list_effects(api_client):
