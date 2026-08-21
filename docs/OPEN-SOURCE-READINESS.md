@@ -1,6 +1,6 @@
 # Open-source readiness plan
 
-**Status:** 2026-08-21. W0, W1, W2 shipped; W3–W5 proposed, not started. Decisions recorded at the end.
+**Status:** 2026-08-21. W0, W1, W2 shipped; W3 half-shipped (`core` images only, by decision); W4-W5 not started. Decisions recorded at the end.
 **Goal:** make this repo something a stranger can install, understand, run, and extend — without
 reading the source to find out why a feature is missing.
 
@@ -157,7 +157,7 @@ a test asserting the directory stays absent.
 
 ---
 
-## W3 — Published images and a release compose file
+## W3 — Published images and a release compose file — 🟡 core done 2026-08-21, satellites deferred
 
 **Why here:** this is what makes "one command" honest. Today `docker compose --profile image up`
 *builds* SDXL's torch image locally. Immich's users pull; ours compile. This is the highest-value
@@ -192,7 +192,35 @@ item for adoption and also the riskiest to execute, which is why it sits after t
 **Done when:** `docker compose -f docker-compose.release.yml --profile image up` starts SDXL on a
 machine that has never cloned the repo.
 
-**Effort:** two to three days, dominated by CI iteration.
+**Outcome (partial — the `core`-only half, per decision 3):**
+`.github/workflows/publish-images.yml` publishes `ghcr.io/glb99/cinemagraph-core` on `v*` tags,
+with `workflow_dispatch` so the pipeline can be exercised without minting a version first. Action
+SHAs were resolved from the GitHub API rather than written from memory, matching this repo's
+pinning convention. `latest` is applied only on a real semver tag, so a manual run can't quietly
+repoint it at an untagged commit.
+
+The workflow smoke-tests the pushed image (`docker run` → poll `/health`) before the job succeeds:
+`test-docker-compose.yml` already proves the *build* per PR, but not the artifact that just landed
+in a public registry, and a broken tag is public before anyone notices. zizmor flagged the first
+draft for template injection — `${{ steps.meta.outputs.tags }}` interpolated into a `run` block is
+substituted as raw text before the shell sees it — fixed by passing it through `env:` rather than
+suppressing the finding.
+
+`docker-compose.release.yml` pulls only, never builds, and is written to be downloaded on its own
+with no repo. It binds to `127.0.0.1:8000` by default rather than `0.0.0.0`, since the app has no
+authentication.
+
+**Verified:** both compose files pass `docker compose config`, and zizmor is clean across all
+workflows. **Not verified:** the release file has not been *run* — that needs a published image,
+which needs the first tag, and Docker Desktop was not running on this machine at the time. The
+cheap local check before tagging is to build `core`, tag it
+`ghcr.io/glb99/cinemagraph-core:latest`, and bring the release file up against it.
+
+**Still open:** the three satellite images. That's the half of W3 carrying the CI disk risk, and
+it's deliberately deferred, not forgotten.
+
+**Effort:** the `core` half took well under the estimate; the satellite half is where the two-to-
+three-day estimate actually lives.
 
 ---
 

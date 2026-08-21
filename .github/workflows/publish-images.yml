@@ -1,0 +1,94 @@
+name: Publish images
+
+# Tags only, never every push: these images are large and nobody needs a
+# registry entry per commit. workflow_dispatch is here so the pipeline can be
+# exercised without minting a version tag first.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+# Least privilege: read the repo, write packages. Nothing else.
+permissions:
+  contents: read
+
+jobs:
+  core:
+    name: core
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Derive tags
+        id: meta
+        uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5
+        with:
+          # repository_owner rather than a hardcoded name, so a fork publishes
+          # to its own namespace instead of failing on someone else's.
+          images: ghcr.io/${{ github.repository_owner }}/cinemagraph-core
+          # v1.2.3 produces 1.2.3, 1.2, and latest. `latest` is applied only on
+          # a real semver tag, so a workflow_dispatch run can never quietly
+          # repoint it at an untagged commit.
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+            type=sha,enable=${{ github.event_name == 'workflow_dispatch' }}
+
+      - name: Build and push
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          # linux/amd64 only. arm64 would need emulated builds of the whole
+          # frontend stage for a platform this project has never been run on.
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          # GitHub's own layer cache: the frontend stage (bun install + vite
+          # build) is the slow part and changes far less often than the Python
+          # source it sits beside.
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Smoke-test the pushed image
+        # Publishing an image that doesn't start is worse than not publishing:
+        # the tag is public before anyone finds out. `docker compose build`
+        # already runs per-PR (test-docker-compose.yml), but that proves the
+        # build, not the artifact that just went to the registry.
+        #
+        # The tag list arrives through `env:` rather than being interpolated
+        # straight into the script. A ${{ }} expansion inside a run block is
+        # substituted as raw text before the shell ever sees it, so anything
+        # attacker-influenced in that value becomes shell code; via env it is
+        # only ever a variable's contents. zizmor flags the inline form.
+        env:
+          TAGS: ${{ steps.meta.outputs.tags }}
+        run: |
+          TAG=$(echo "$TAGS" | head -n1)
+          docker run -d --name smoke -p 8000:8000 "$TAG"
+          timeout 90 bash -c 'until curl --fail --silent http://localhost:8000/health; do sleep 3; done'
+          docker rm -f smoke
+
+# The three satellite images (machine-learning, sound-effects,
+# image-generation) are deliberately NOT published here yet -- see decision 3 in
+# docs/OPEN-SOURCE-READINESS.md. They are multi-GB CUDA/torch builds and GitHub's
+# standard runners ship roughly 14GB of free disk, so whether they build here at
+# all is an open question that shouldn't gate the first release. Until it's
+# measured, they build locally from docker-compose.yml exactly as before, which
+# leaves no one worse off than today.

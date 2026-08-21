@@ -1,0 +1,71 @@
+# Run cinemagraph from published images -- no clone, no build.
+#
+#   curl -O https://github.com/glb99/cinemagraph/releases/latest/download/docker-compose.release.yml
+#   docker compose -f docker-compose.release.yml up
+#
+# Then open http://localhost:8000.
+#
+# Take this file from a RELEASE, not from the main branch: the branch version
+# tracks unreleased code and can expect images or environment variables that
+# don't exist yet. This is the same reason Immich tells people to fetch their
+# compose file from the release rather than from `main`.
+#
+# The difference from docker-compose.yml, which lives in the repo: that one
+# BUILDS from source and is the development file. This one only ever pulls.
+#
+# NOTE: there is no authentication. Anyone who reaches port 8000 gets every
+# endpoint, your whole asset library, and your GPU. Bind it to localhost or put
+# it behind something that authenticates -- see the README.
+
+services:
+  core:
+    # Pin a version in .env (CINEMAGRAPH_VERSION=1.2.3) for a reproducible
+    # deployment; `latest` is convenient and moves under you.
+    image: ghcr.io/glb99/cinemagraph-core:${CINEMAGRAPH_VERSION:-latest}
+    restart: unless-stopped
+    ports:
+      # 127.0.0.1: reachable from this machine only. Change to "8000:8000" to
+      # expose it on the network, but read the note above before you do.
+      - "127.0.0.1:8000:8000"
+    volumes:
+      # Job scratch space AND the asset library both live here, so this is the
+      # single directory to back up.
+      - ./data:/data
+    environment:
+      - CINEMAGRAPH_DATA_DIR=/data
+      # Must stay under the mounted path. Without it the library defaults to a
+      # location inside the container's own filesystem, which survives a
+      # `restart` but is destroyed by `down` + `up` -- silently losing exactly
+      # the thing that is supposed to persist.
+      - CINEMAGRAPH_LIBRARY_DIR=/data/library
+
+      # --- Optional generation backends -------------------------------------
+      # All read per request, so the app starts fine with every one unset and
+      # simply reports those features as unavailable. `docker compose
+      # -f docker-compose.release.yml exec core cinemagraph doctor` shows the
+      # current state of all of them.
+
+      # Hosted, needs no container and no GPU. Enables the `gemini` image
+      # backend and `lyria3` music backend. Put the key in a .env file beside
+      # this one; Compose reads it automatically.
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+
+      # Self-hosted satellites. Not published as images yet (see below), so
+      # these only apply if you're running them yourself -- from a source
+      # checkout, or on another machine. host.docker.internal is Docker
+      # Desktop's route from a container back to the host.
+      # - ML_SERVICE_URL=http://host.docker.internal:8004
+      # - ACESTEP_URL=http://host.docker.internal:8001
+      # - SOUND_EFFECTS_URL=http://host.docker.internal:8003
+      # - IMAGE_GENERATION_URL=http://host.docker.internal:8005
+
+# The GPU satellites (semantic masking, image generation, music, sound effects)
+# are not in this file, because their images aren't published yet -- see
+# decision 3 in docs/OPEN-SOURCE-READINESS.md. Everything that doesn't need a
+# GPU works here: photo effects, video cinemagraphs, the asset library,
+# long-form assembly, the whole web UI, and Gemini-backed image and music
+# generation if you supply a key.
+#
+# To run the GPU services today, clone the repo and use docker-compose.yml with
+# the matching profile (--profile image / audio / ml), which builds them
+# locally.

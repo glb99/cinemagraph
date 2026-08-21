@@ -330,6 +330,27 @@ render while tuning a mask or effect getting swept in automatically.
 
 ## Docker
 
+### From published images (no clone, no build)
+
+```bash
+curl -O https://github.com/glb99/cinemagraph/releases/latest/download/docker-compose.release.yml
+docker compose -f docker-compose.release.yml up
+```
+
+Then open <http://localhost:8000>. This pulls a prebuilt image instead of compiling one, which is
+the difference between a minute and a long coffee.
+
+Take that file from a **release**, not from the main branch — the branch version tracks unreleased
+code and may expect images or variables that don't exist yet. Pin a version with
+`CINEMAGRAPH_VERSION=1.2.3` in a `.env` beside it; `latest` is convenient but moves under you.
+
+The GPU services aren't published as images yet, so the release file covers everything that
+doesn't need a GPU: photo effects, video cinemagraphs, the library, assembly, the full web UI, and
+Gemini-backed image/music generation if you supply a key. For the self-hosted GPU services, clone
+the repo and use the build-from-source path below.
+
+### From source
+
 ```bash
 docker compose up
 ```
