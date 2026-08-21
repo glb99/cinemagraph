@@ -42,6 +42,11 @@ services:
   machine-learning:
     build: ./machine-learning
     profiles: ["ml"]
+    # Required, not optional hardening: the busy watchdog recovers a wedged
+    # model by killing its own process (see BUSY_TIMEOUT below), and without a
+    # restart policy that turns a stuck satellite into a *missing* one. The
+    # two are one mechanism, not two independent settings.
+    restart: unless-stopped
     ports:
       - "8004:8004"
     environment:
@@ -49,8 +54,29 @@ services:
       # 0 = stay resident forever, PRELOAD=1 = load at startup rather than on
       # first request. See image-generation below for why these exist at all.
       - MODEL_TTL=${MODEL_TTL:-900}
+      # Seconds a single request may run before the service assumes it's
+      # wedged and exits. Covers the case MODEL_TTL structurally cannot: a
+      # hung CUDA call never returns, so nothing unloads and the GPU is held
+      # forever. 0 disables. See
+      # docs/experiments/2026-08-21-model-lifecycle-prior-art.md.
+      - BUSY_TIMEOUT=${BUSY_TIMEOUT:-1200}
     volumes:
       - ./data/machine-learning-cache:/cache/huggingface
+    healthcheck:
+      # /health now reports 503 once a request is wedged, rather than a
+      # cheerful 200 from an event loop that happens to still be alive.
+      #
+      # Docker will NOT restart an unhealthy-but-running container on its own
+      # -- `restart:` reacts to the process *exiting*, never to health status
+      # (that needs an orchestrator or an autoheal sidecar). So this is for
+      # visibility and for depends_on; the actual recovery is the watchdog's
+      # own exit above. urllib rather than curl: these are python:3.11-slim
+      # images and don't ship curl. A non-200 raises, which is the failure.
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8004/health', timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
 
   # ACE-Step's own published image, referenced directly -- not vendored, not
   # built by us. Unlike machine-learning/, there's no wrapper for us to write
@@ -155,13 +181,22 @@ services:
   sound-effects:
     build: ./sound-effects
     profiles: ["audio"]
+    # See machine-learning above: pairs with BUSY_TIMEOUT, not optional.
+    restart: unless-stopped
     ports:
       - "8003:8003"
     environment:
       - HF_TOKEN=${HF_TOKEN}
       - MODEL_TTL=${MODEL_TTL:-900}
+      - BUSY_TIMEOUT=${BUSY_TIMEOUT:-1200}
     volumes:
       - sound-effects-hf-cache:/cache/huggingface
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8003/health', timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
     deploy:
       resources:
         reservations:
@@ -206,12 +241,27 @@ services:
   image-generation:
     build: ./image-generation
     profiles: ["image"]
+    # See machine-learning above: pairs with BUSY_TIMEOUT, not optional.
+    restart: unless-stopped
     ports:
       - "8005:8005"
     environment:
       - MODEL_TTL=${MODEL_TTL:-900}
+      # 1200s is deliberately well above this service's real worst case
+      # (cold load + generate; cold load was ~6 min through the old bind
+      # mount, and hasn't been re-measured since the named-volume switch).
+      # Killing a slow-but-healthy generation is worse than waiting out a
+      # genuinely stuck one, so this stays generous until that measurement
+      # exists -- the same measurement that would let MODEL_TTL drop to 300.
+      - BUSY_TIMEOUT=${BUSY_TIMEOUT:-1200}
     volumes:
       - image-generation-hf-cache:/cache/huggingface
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8005/health', timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
     deploy:
       resources:
         reservations:

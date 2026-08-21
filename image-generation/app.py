@@ -102,7 +102,7 @@ import torch
 from diffusers import AutoencoderKL, StableDiffusionXLImg2ImgPipeline, StableDiffusionXLPipeline
 from fastapi import FastAPI, File, Form, UploadFile
 from PIL import Image
-from starlette.responses import Response
+from starlette.responses import JSONResponse, Response
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 MODEL_ID = "stabilityai/stable-diffusion-xl-base-1.0"
@@ -143,12 +143,38 @@ PRELOAD = os.environ.get("PRELOAD", "").lower() in ("1", "true", "yes")
 # Note this does *not* on its own let two torch satellites coexist: it moves
 # the ceiling from VRAM to host RAM rather than removing it.
 CPU_OFFLOAD = os.environ.get("CPU_OFFLOAD", "1").lower() in ("1", "true", "yes")
+# Seconds a single generation may hold the pipeline before this process is
+# assumed wedged and kills itself. 0 disables the busy watchdog entirely.
+#
+# MODEL_TTL above cannot cover this case, and used to be actively defeated by
+# it: a hung generation holds _generation_lock forever, so the reaper --
+# which took that same lock before unloading -- blocked behind it
+# permanently, leaving this service holding the card exactly when the other
+# satellites needed it. See
+# docs/experiments/2026-08-21-model-lifecycle-prior-art.md.
+#
+# The default is generous because this service's own worst case is slow: a
+# cold load plus a generation, and cold loads here were measured at ~6
+# minutes back when the HF cache was a WSL2 bind mount. That mount is a named
+# volume now and the number should be far lower, but it hasn't been
+# re-measured -- so this is deliberately set well above the old worst case
+# rather than tuned to an unverified new one. Killing a slow-but-healthy
+# generation is a worse failure than waiting a few extra minutes for a
+# genuinely stuck one.
+BUSY_TIMEOUT = int(os.environ.get("BUSY_TIMEOUT", "1200"))
+# How long the supervisor waits for the lock before giving up for this tick.
+# It must never block indefinitely -- that was the original bug.
+LOCK_ACQUIRE_TIMEOUT = 5.0
 
 app = FastAPI(title="image-generation service")
 
 _pipe = None
 _img2img_pipe = None
 _last_used = 0.0
+# When the in-flight generation started, or None when nothing is running.
+# This is what distinguishes "busy" from "wedged"; the lock alone cannot,
+# since it looks identical in both cases.
+_inflight_since: float | None = None
 # Serializes actual GPU generation calls -- this card can't run two at once
 # anyway (see the VRAM notes above), and asyncio.to_thread alone would let
 # concurrent requests launch truly parallel threads both hitting the GPU,
@@ -229,25 +255,82 @@ def _unload():
     print("Model unloaded.")
 
 
-async def _reap_idle_model():
-    """Unloads the pipeline once it's gone MODEL_TTL seconds without use.
+def _poll_interval() -> int:
+    """Cap the supervisor's tick at 30s, but never poll slower than whichever
+    deadline it's enforcing."""
+    deadlines = [t for t in (MODEL_TTL, BUSY_TIMEOUT) if t > 0]
+    return max(1, min(30, min(deadlines))) if deadlines else 30
+
+
+def _exit_if_wedged() -> None:
+    """Kills this process when a generation has held the pipeline past
+    BUSY_TIMEOUT.
+
+    Exiting looks drastic, and it is the only thing that reliably works. A
+    hung CUDA call doesn't raise into Python, so there is nothing to catch;
+    the thread running it can't be cancelled; and torch.cuda.empty_cache()
+    can't return memory the wedged interpreter still owns. Killing the
+    process is what hands the card back to the driver -- so the container
+    must have a restart policy, or this trades a stuck service for a missing
+    one (see docker-compose.yml).
+
+    os._exit, not sys.exit: sys.exit unwinds and would block on the very
+    to_thread worker that's stuck. That also skips flushing stdout, hence
+    flush=True on the way out -- losing the reason would make this look like
+    an unexplained crash.
+    """
+    if BUSY_TIMEOUT <= 0 or _inflight_since is None:
+        return
+    busy_for = time.monotonic() - _inflight_since
+    if busy_for < BUSY_TIMEOUT:
+        return
+    print(
+        f"FATAL: generation in flight for {busy_for:.0f}s, past BUSY_TIMEOUT="
+        f"{BUSY_TIMEOUT}s. Assuming wedged; exiting to release the GPU.",
+        flush=True,
+    )
+    os._exit(1)
+
+
+async def _supervise_model():
+    """Unloads the pipeline once it's gone MODEL_TTL seconds without use, and
+    kills the process if a generation wedges past BUSY_TIMEOUT.
 
     Polls rather than arming a timer per request: a timer would have to be
     cancelled and rescheduled around every generation (including ones that
     fail), and getting that wrong silently reverts this service to holding
     the GPU forever -- the exact bug this is here to prevent. Polling has no
     such failure mode; it just reads a timestamp.
+
+    The unload path takes _generation_lock with a timeout and skips this tick
+    if it can't get it. It used to wait unconditionally, on the reasoning
+    that this can then never pull the model out from under a generation in
+    flight -- true, but it also meant a single hung generation disabled idle
+    unloading permanently, since the lock it was waiting on was never coming
+    back. The _inflight_since check below preserves the original intent
+    without the wait.
     """
-    interval = max(1, min(30, MODEL_TTL))
+    interval = _poll_interval()
     while True:
         await asyncio.sleep(interval)
-        if _pipe is None or time.monotonic() - _last_used < MODEL_TTL:
+        _exit_if_wedged()
+        if MODEL_TTL <= 0 or _pipe is None:
             continue
-        # Same lock a generation holds, so this can never pull the model out
-        # from under one in flight; it simply waits for it to finish.
-        async with _generation_lock:
+        # A generation that's running but not yet wedged: leave it alone, and
+        # don't queue up behind it either.
+        if _inflight_since is not None or time.monotonic() - _last_used < MODEL_TTL:
+            continue
+        try:
+            await asyncio.wait_for(
+                _generation_lock.acquire(), timeout=LOCK_ACQUIRE_TIMEOUT
+            )
+        except asyncio.TimeoutError:
+            continue
+        try:
             if _pipe is not None and time.monotonic() - _last_used >= MODEL_TTL:
                 _unload()
+        finally:
+            _generation_lock.release()
 
 
 @app.on_event("startup")
@@ -256,17 +339,50 @@ async def on_startup():
         # The img2img wrapper deliberately is NOT built here too -- see this
         # module's own docstring for the real OOM that caused this.
         _get_pipe()
-    if MODEL_TTL > 0:
-        asyncio.create_task(_reap_idle_model())
+    if MODEL_TTL > 0 or BUSY_TIMEOUT > 0:
+        asyncio.create_task(_supervise_model())
 
 
 @app.get("/health")
 async def health():
+    """Reports in-flight state, not just "the event loop is alive".
+
+    A wedged satellite used to answer a plain 200 here forever: /generate
+    holds the lock, but this route never took it, so the process looked
+    perfectly healthy while being unable to complete another request.
+    core's service_available() believed it, and /capabilities kept
+    advertising image generation that could no longer work.
+
+    Only *wedged* fails the check -- an ordinary in-progress generation is
+    not unhealthy, and 503-ing on one would make /capabilities flap every
+    time someone generates an image, which is the same user-visible symptom
+    as the event-loop-blocking bug this route already suffered once (sec
+    3.7). Note the window this 503 is visible for is short by design: the
+    supervisor kills the process on its next tick. The durable signal is the
+    connection refusal that follows.
+    """
     # Deliberately does not touch _get_pipe(): a health check must never be
     # what loads a multi-GB model onto the GPU. core's /capabilities polls
     # this route, so making it a loader would mean merely *looking at* the UI
     # seizes the card from whichever service actually needs it.
-    return {"status": "ok", "device": DEVICE, "model_loaded": _pipe is not None}
+    inflight_since = _inflight_since
+    inflight_seconds = (
+        round(time.monotonic() - inflight_since, 1) if inflight_since is not None else None
+    )
+    wedged = (
+        BUSY_TIMEOUT > 0
+        and inflight_seconds is not None
+        and inflight_seconds >= BUSY_TIMEOUT
+    )
+    return JSONResponse(
+        {
+            "status": "stuck" if wedged else "ok",
+            "device": DEVICE,
+            "model_loaded": _pipe is not None,
+            "inflight_seconds": inflight_seconds,
+        },
+        status_code=503 if wedged else 200,
+    )
 
 
 def _run_txt2img(prompt, negative_prompt, steps, guidance_scale, width, height, generator):
@@ -324,7 +440,7 @@ async def generate(
     requests launch truly parallel threads both hitting this GPU's already
     tight VRAM budget at once, which is strictly worse than one at a time.
     """
-    global _last_used
+    global _last_used, _inflight_since
     generator = torch.Generator(device=DEVICE).manual_seed(seed) if seed != -1 else None
 
     async with _generation_lock:
@@ -333,38 +449,47 @@ async def generate(
         # (it holds the lock, but the timestamp is what it reads); after, so
         # the TTL counts from when the GPU actually went quiet rather than
         # from when the request happened to arrive.
-        _last_used = time.monotonic()
-        if image is not None:
-            # img2img: output dimensions follow the reference image, not
-            # width/height (which don't apply to this pipeline -- the
-            # diffusion process starts from a noised version of the
-            # reference instead of pure noise).
-            reference = Image.open(io.BytesIO(await image.read())).convert("RGB")
-            result = await asyncio.to_thread(
-                _run_img2img, prompt, negative_prompt, reference, strength,
-                steps, guidance_scale, generator,
-            )
-        else:
-            result = await asyncio.to_thread(
-                _run_txt2img, prompt, negative_prompt, steps, guidance_scale,
-                width, height, generator,
-            )
+        #
+        # _inflight_since is the busy watchdog's own input, and is cleared in
+        # a finally rather than after the work: a generation that raised
+        # would otherwise look permanently in-flight and get this process
+        # killed for a failure it had already reported cleanly. OOMs here are
+        # a normal, recoverable outcome on this card, not a wedge.
+        _last_used = _inflight_since = time.monotonic()
+        try:
+            if image is not None:
+                # img2img: output dimensions follow the reference image, not
+                # width/height (which don't apply to this pipeline -- the
+                # diffusion process starts from a noised version of the
+                # reference instead of pure noise).
+                reference = Image.open(io.BytesIO(await image.read())).convert("RGB")
+                result = await asyncio.to_thread(
+                    _run_img2img, prompt, negative_prompt, reference, strength,
+                    steps, guidance_scale, generator,
+                )
+            else:
+                result = await asyncio.to_thread(
+                    _run_txt2img, prompt, negative_prompt, steps, guidance_scale,
+                    width, height, generator,
+                )
 
-        if DEVICE == "cuda":
-            # Found necessary via a real OOM: a second img2img call failed
-            # even though the first one succeeded, on a GPU this tight --
-            # PyTorch's CUDA caching allocator holds freed-but-not-released
-            # memory between calls, and can fragment enough after a
-            # shape/pipeline switch (first txt2img, then a differently-shaped
-            # img2img call) that a later allocation fails even with "enough"
-            # total free memory reported. Emptying the cache after every
-            # request keeps that from compounding across calls -- a small,
-            # fixed cost every time, not a proportional one to the problem it
-            # prevents. Kept inside the lock: releasing the lock before this
-            # runs would let the next request's own generation start
-            # allocating while this cache-clear is still in flight.
-            torch.cuda.empty_cache()
-        _last_used = time.monotonic()
+            if DEVICE == "cuda":
+                # Found necessary via a real OOM: a second img2img call failed
+                # even though the first one succeeded, on a GPU this tight --
+                # PyTorch's CUDA caching allocator holds freed-but-not-released
+                # memory between calls, and can fragment enough after a
+                # shape/pipeline switch (first txt2img, then a differently-shaped
+                # img2img call) that a later allocation fails even with "enough"
+                # total free memory reported. Emptying the cache after every
+                # request keeps that from compounding across calls -- a small,
+                # fixed cost every time, not a proportional one to the problem it
+                # prevents. Kept inside the lock: releasing the lock before this
+                # runs would let the next request's own generation start
+                # allocating while this cache-clear is still in flight.
+                torch.cuda.empty_cache()
+        finally:
+            _inflight_since = None
+            _last_used = time.monotonic()
 
     buf = io.BytesIO()
     result.save(buf, format="PNG")

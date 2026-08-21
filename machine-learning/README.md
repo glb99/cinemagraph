@@ -47,7 +47,7 @@ yourself.
 
 Or via Docker Compose from the repo root: `docker compose --profile ml up machine-learning`.
 
-First request (or startup, since the model loads eagerly) downloads the CLIPSeg weights from
+First request (or startup, if `PRELOAD=1`) downloads the CLIPSeg weights from
 the Hugging Face Hub — cached afterward (`HF_HOME`/`/cache` volume in the Dockerfile/compose
 entry). CPU-capable but slower; a GPU (CUDA) is picked up automatically if available
 (`torch.cuda.is_available()`).
@@ -56,7 +56,17 @@ entry). CPU-capable but slower; a GPU (CUDA) is picked up automatically if avail
 
 ```
 GET /health
-  200 {"status": "ok", "device": "cuda" | "cpu"}
+  200 {"status": "ok", "device": "cuda" | "cpu",
+       "model_loaded": bool, "inflight_seconds": float | null}
+  503 {"status": "stuck", ...}  once a request has run past BUSY_TIMEOUT
+
+  Never loads the model -- core's /capabilities polls this, and a health check that
+  loaded on demand would defeat the idle TTL entirely.
+
+  inflight_seconds is null when idle, otherwise how long the current request has been
+  running. The 503 is deliberately short-lived: the busy watchdog kills the process on
+  its next tick, so what a caller sees next is a refused connection, then a restarted
+  service. See "Model lifecycle" below.
 
 POST /segment
   multipart/form-data:
@@ -73,6 +83,32 @@ POST /segment
 `server/app.py`'s `POST /mask/semantic` implements the client side of this contract (proxies the
 same multipart request through, converts an error/timeout from this service into a `503`
 rather than propagating a `500`, and returns the PNG bytes unmodified).
+
+## Model lifecycle
+
+| Var | Default | Meaning |
+|---|---|---|
+| `MODEL_TTL` | `900` | Seconds idle before the model is unloaded and its memory released. `0` = resident forever (Immich's semantics). |
+| `PRELOAD` | off | Load at startup instead of on first request. |
+| `BUSY_TIMEOUT` | `1200` | Seconds a single request may run before this process assumes it's wedged and exits. `0` disables. |
+
+`MODEL_TTL` handles an *idle* model. `BUSY_TIMEOUT` handles a *stuck* one, which the TTL
+structurally cannot — and which used to defeat it outright: a hung request holds the inference
+lock forever, and the idle reaper waited on that same lock before unloading, so it blocked
+permanently.
+
+Exiting is the recovery because nothing gentler works: a hung inference call never raises into
+Python and the worker thread running it can't be cancelled, so killing the process is the only
+reliable way to get the memory back. That means the container needs a restart policy
+(`restart: unless-stopped`, set in `docker-compose.yml`) or this trades a stuck service for a
+missing one.
+
+CLIPSeg is the smallest of the three satellites and runs on CPU here, so this matters less for
+this service specifically. It's applied anyway so all three behave identically rather than one
+being a special case someone has to remember — the same reasoning as `MODEL_TTL`.
+
+Prior art, and why this rather than a VRAM-aware scheduler:
+`docs/experiments/2026-08-21-model-lifecycle-prior-art.md`.
 
 ## Validated
 

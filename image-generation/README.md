@@ -45,7 +45,17 @@ CPU-capable but very slow; a GPU (CUDA) is picked up automatically if available
 
 ```
 GET /health
-  200 {"status": "ok", "device": "cuda" | "cpu"}
+  200 {"status": "ok", "device": "cuda" | "cpu",
+       "model_loaded": bool, "inflight_seconds": float | null}
+  503 {"status": "stuck", ...}  once a generation has run past BUSY_TIMEOUT
+
+  Never loads the pipeline -- core's /capabilities polls this, and a health check that
+  loaded on demand would seize the card from whichever service actually needs it.
+
+  inflight_seconds is null when idle, otherwise how long the current generation has
+  been running. The 503 is deliberately short-lived: the busy watchdog kills the
+  process on its next tick, so what a caller sees next is a refused connection, then a
+  restarted service. See "Model lifecycle" below.
 
 POST /generate  (multipart/form-data -- not JSON, see the img2img note below)
   prompt: str (required)
@@ -101,6 +111,34 @@ card can't run two generations at once anyway, per the VRAM note above -- `to_th
 let concurrent requests launch truly parallel threads both hitting the GPU). Verified directly:
 `/health` now responds in single-digit milliseconds even while a real generation is in flight.
 See `docs/experiments/2026-07-30-image-to-image-generation.md`'s follow-up section.
+
+## Model lifecycle
+
+| Var | Default | Meaning |
+|---|---|---|
+| `MODEL_TTL` | `900` | Seconds idle before the pipeline is unloaded and its VRAM released. `0` = resident forever (Immich's semantics, not Ollama's). |
+| `PRELOAD` | off | Load at startup instead of on first request. |
+| `BUSY_TIMEOUT` | `1200` | Seconds a single generation may run before this process assumes it's wedged and exits. `0` disables. |
+| `CPU_OFFLOAD` | on | Keep weights in host RAM, move each sub-model to the GPU only while it runs. |
+
+`MODEL_TTL` handles an *idle* model. `BUSY_TIMEOUT` handles a *stuck* one, which the TTL
+structurally cannot — and which used to defeat it outright: a hung generation holds the
+generation lock forever, and the idle reaper waited on that same lock before unloading, so it
+blocked permanently and this service kept the card exactly when the other satellites needed it.
+
+Exiting is the recovery because nothing gentler works. A hung CUDA call never raises into
+Python, the worker thread running it can't be cancelled, and `torch.cuda.empty_cache()` can't
+release memory the wedged interpreter still owns. Killing the process is what hands the card
+back to the driver — so the container needs a restart policy (`restart: unless-stopped`, set in
+`docker-compose.yml`) or this trades a stuck service for a missing one.
+
+`1200` is deliberately generous: this service's worst case is a cold load plus a generation, and
+cold loads were measured at ~6 minutes through the old WSL2 bind mount. That cache is a named
+volume now and the real number should be much lower, but it hasn't been re-measured — killing a
+slow-but-healthy generation is a worse failure than waiting out a genuinely stuck one.
+
+Prior art, and why this rather than a VRAM-aware scheduler:
+`docs/experiments/2026-08-21-model-lifecycle-prior-art.md`.
 
 ## Validated
 
