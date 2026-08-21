@@ -599,9 +599,18 @@ ffmpeg version 7.1-essentials_build-www.gyan.dev
 configuration: --enable-gpl --enable-version3 ...
 ```
 
-`--enable-gpl --enable-version3` means that build is **GPL v3**, not LGPL. (Checked on the Windows
-binary; the Linux one shipped inside the Docker image comes from the same package and hasn't been
-checked — run `ffmpeg -version` inside the image to confirm before relying on either answer.)
+`--enable-gpl --enable-version3` means that build is **GPL v3**, not LGPL. Confirmed on both
+platforms this project ships on — the Windows binary is a gyan.dev build, and the Linux binary
+inside the Docker image is a [johnvansickle](https://johnvansickle.com/ffmpeg/) static build. Both
+carry the same two flags.
+
+To check it yourself in a built image (ffmpeg isn't on `PATH` — it lives inside the Python
+package):
+
+```bash
+docker run --rm <image> python -c \
+  "import imageio_ffmpeg,subprocess; subprocess.run([imageio_ffmpeg.get_ffmpeg_exe(),'-version'])"
+```
 
 This does **not** affect this project's own Apache-2.0 licensing: the code invokes ffmpeg as a
 separate process, so it isn't a derivative work. It does mean that *publishing a Docker image
