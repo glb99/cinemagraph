@@ -1,6 +1,56 @@
 # cinemagraph-tool
 
-Generate lofi-style cinemagraphs (frozen background + one looping moving element), entirely from the command line — either from a short video clip, or from a single still photo using built-in procedural motion effects.
+Make looping lofi video: freeze a background, keep one element moving. Start from a short video
+clip, or from a single still photo animated with built-in procedural effects — rain, snow, dust,
+ripple, sway, wind, flicker, smoke, vapor — with no source footage at all.
+
+It optionally also generates the music, the sound effects, and the images to animate, and
+assembles finished clips into long-form video. Those parts are opt-in: they run as separate
+containers with their own models, and everything else works without them.
+
+Usable from the command line or from a local web UI.
+
+## Quick start
+
+No Docker, no GPU, no API keys. This is the whole install:
+
+```bash
+uv sync
+uv run cinemagraph from-photo photo.jpg output.mp4 --effect smoke
+```
+
+`photo.jpg` is checked in, so that second line runs verbatim on a fresh clone. Uses
+[uv](https://docs.astral.sh/uv/).
+
+## What needs what
+
+| Feature | Requires |
+|---|---|
+| Photo → looping video, 9 effects | nothing |
+| Video clip → cinemagraph | nothing |
+| Asset library, long-form assembly | nothing |
+| Web UI | `bun run build` once, or Docker |
+| Semantic masking ("animate just the water") | `machine-learning` container |
+| Image generation | `image-generation` container + GPU, or a Gemini API key |
+| Music | `acestep` container + GPU, or a Gemini API key |
+| Sound effects | `sound-effects` container + GPU |
+
+Anything unavailable degrades rather than breaks: the API reports it as unavailable, the web UI
+hides or annotates that tab, and every other feature keeps working. Nothing is checked at startup,
+so a missing service can never stop the app from booting.
+
+Copy `.env.example` to `.env` before enabling any of the optional pieces — it documents every
+variable, including the Hugging Face license acceptance that `sound-effects` needs.
+
+## Before you put this on a network
+
+There is **no authentication**. Anyone who can reach the port can use every endpoint, read your
+entire asset library, and spend your GPU. Job state lives in process memory and is lost on
+restart, and job directories are not cleaned up automatically.
+
+This is a deliberate design for a personal, single-user, local tool — not an oversight (see
+`docs/DESIGN.md`). Run it on localhost, or behind something that does the authenticating. It is
+not built to face the internet.
 
 ## Setup
 
@@ -287,6 +337,24 @@ docker compose --profile audio up      # core + sound-effects (Stable Audio Open
 docker compose --profile ml up         # core + machine-learning (CLIPSeg)
 docker compose --profile image up      # core + image-generation (Stable Diffusion XL)
 ```
+
+**What each one costs you.** These are measured on this project's own hardware, not estimates. The
+weights download on first use and are cached in a named volume afterwards:
+
+| Service | Profile | First-run download | VRAM while loaded |
+|---|---|---|---|
+| `machine-learning` (CLIPSeg) | `ml` | ~577 MB | runs on CPU here |
+| `sound-effects` (Stable Audio Open) | `audio` | ~5.4 GB | GPU strongly preferred |
+| `image-generation` (SDXL) | `image` | ~14 GB | ~147 MiB with `CPU_OFFLOAD=1`, ~7.1 GB without |
+| `acestep` (ACE-Step) | `audio` | ~11 GB | needs ~8 GB |
+
+On a single 8 GB card these are effectively **mutually exclusive**, which is why each unloads its
+model after `MODEL_TTL` seconds idle and they take turns rather than fighting. Running two profiles
+at once on one GPU will work, slowly, as they swap. See each service's README under "Model
+lifecycle", and `docs/experiments/2026-08-21-model-lifecycle-prior-art.md` for why it works this way.
+
+`sound-effects` additionally needs `HF_TOKEN` **and** a license acceptance on the model's Hugging
+Face page — see `.env.example`.
 
 `acestep` downloads its own ~11GB of checkpoints into `./data/acestep-checkpoints` on first run,
 cached across restarts same as the other services. If you'd rather run ACE-Step natively on the
