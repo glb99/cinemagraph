@@ -1,5 +1,10 @@
 [build-system]
-requires = ["setuptools>=68"]
+# >=77, not >=68, because the `license`/`license-files` fields below are PEP 639
+# (an SPDX expression plus explicit file globs), which setuptools only understands
+# from 77 on. The older `license = {text = "..."}` table plus a `License ::`
+# classifier is the alternative, and it's the deprecated one -- PyPI no longer
+# wants those classifiers, and combining them with an SPDX expression is an error.
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -7,6 +12,32 @@ name = "cinemagraph-tool"
 version = "0"
 description = "Turn a short video or photo into a looping lofi cinemagraph."
 requires-python = ">=3.11"
+authors = [{ name = "Guillermo" }]
+readme = "README.md"
+# Apache-2.0 rather than MIT for the patent grant (sec 3 -- this project sits in
+# diffusion-model and video-codec territory, where patents genuinely exist) and
+# for the explicit contribution terms in sec 5, which make a drive-by PR's
+# licensing unambiguous without needing a CLA. See docs/OPEN-SOURCE-READINESS.md.
+#
+# Scope note: this covers *this repo's code only*. Model weights pulled at
+# runtime (SDXL, Stable Audio Open, CLIPSeg) and anything generated with them are
+# governed by their own licenses -- see the README's Licensing section.
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+classifiers = [
+    # No "License ::" classifier here on purpose: PEP 639 forbids pairing one
+    # with the SPDX `license` field above.
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: End Users/Desktop",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Multimedia :: Graphics",
+    "Topic :: Multimedia :: Video",
+]
 dependencies = [
     "opencv-python-headless>=4.9.0,<5",
     "numpy>=1.26.0,<3",

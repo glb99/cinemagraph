@@ -456,3 +456,35 @@ Key design decisions this reflects:
   convention for this same shape of split). The core image never depends on `torch`/`transformers`;
   `server/app.py` checks for the service at request time and degrades to a clean `503` when it's absent,
   so the core tool is never blocked when the optional service isn't running.
+
+## Licensing
+
+This project's own code is licensed under the **Apache License 2.0** — see [`LICENSE`](LICENSE).
+Apache-2.0 rather than MIT for its explicit patent grant (§3), which matters in diffusion-model and
+video-codec territory, and for the contribution terms in §5 that make a pull request's licensing
+unambiguous without a CLA.
+
+**That license covers this repository's code, and nothing else.** The optional satellite services
+download model weights at runtime, and those weights — plus, depending on the model, what you
+generate with them — carry their own separate terms:
+
+| Model | Used by | Terms to check before you rely on the output |
+|---|---|---|
+| Stable Diffusion XL | `image-generation/` | CreativeML OpenRAIL++-M — a *use-restricted* license, not a permissive one |
+| Stable Audio Open | `sound-effects/` | Stability's own community license, and the HF repo is **gated** |
+| CLIPSeg | `machine-learning/` | its own model-card terms |
+| ACE-Step | `acestep` (third-party image, not built here) | upstream's terms; this repo only ever references the published image |
+| Gemini / Lyria 3 | `generation/` | Google's API terms, if you supply a `GEMINI_API_KEY` |
+
+Two practical consequences:
+
+- **Stable Audio Open is a gated repository.** You must accept its license on the model's Hugging
+  Face page with the account behind your `HF_TOKEN`, or the download fails — this is the most
+  common first-run failure, and it is not a bug in this tool.
+- **Nothing here grants you rights to model outputs.** If you plan to use generated audio, images,
+  or video commercially, read the relevant model's license. A permissive license on this code says
+  nothing about what SDXL or Stable Audio permit.
+
+Third-party Python dependencies keep their own licenses. Note also that the Docker images bundle an
+`ffmpeg` binary (via `imageio-ffmpeg`), whose terms depend on how that build was configured —
+worth confirming before redistributing images.
