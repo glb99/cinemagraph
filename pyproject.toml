@@ -9,7 +9,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "cinemagraph"
-version = "0"
+version = "0.1.0"
 description = "Turn a short video or photo into a looping lofi cinemagraph."
 requires-python = ">=3.11"
 authors = [{ name = "Guillermo" }]

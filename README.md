@@ -585,6 +585,27 @@ Two practical consequences:
   or video commercially, read the relevant model's license. A permissive license on this code says
   nothing about what SDXL or Stable Audio permit.
 
-Third-party Python dependencies keep their own licenses. Note also that the Docker images bundle an
-`ffmpeg` binary (via `imageio-ffmpeg`), whose terms depend on how that build was configured —
-worth confirming before redistributing images.
+Third-party Python dependencies keep their own licenses.
+
+### The bundled `ffmpeg` binary
+
+Worth knowing before you redistribute a built image. `imageio-ffmpeg` is BSD-2-Clause, but that
+covers the Python wrapper — **not** the ffmpeg executable it bundles, which the project ships per
+platform and doesn't document the licensing of. The binary states its own terms:
+
+```console
+$ ffmpeg -version
+ffmpeg version 7.1-essentials_build-www.gyan.dev
+configuration: --enable-gpl --enable-version3 ...
+```
+
+`--enable-gpl --enable-version3` means that build is **GPL v3**, not LGPL. (Checked on the Windows
+binary; the Linux one shipped inside the Docker image comes from the same package and hasn't been
+checked — run `ffmpeg -version` inside the image to confirm before relying on either answer.)
+
+This does **not** affect this project's own Apache-2.0 licensing: the code invokes ffmpeg as a
+separate process, so it isn't a derivative work. It does mean that *publishing a Docker image
+containing that binary is redistributing GPL software*, which carries the usual obligations —
+ship the GPL text alongside it and provide the corresponding source, or an offer for it.
+
+Running the tool locally is unaffected; this is purely about handing the image to someone else.
