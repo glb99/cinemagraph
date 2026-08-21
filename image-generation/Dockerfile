@@ -2,7 +2,7 @@
 # CPU-capable by default (torch's PyPI wheel); for real GPU use, swap the
 # base image / torch install for a CUDA-matched build, same as any other
 # torch project (see ACE-Step's own Dockerfile for a GPU-oriented example).
-FROM python:3.11-slim
+FROM python:3.14-slim
 
 WORKDIR /app
 
