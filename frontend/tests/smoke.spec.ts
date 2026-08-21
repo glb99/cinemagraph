@@ -1,10 +1,10 @@
 import { expect, test } from "@playwright/test";
 
+// Every feature is listed in the rail whatever is running (availability is a
+// dot, not the row's absence), so gated labels are safe to assert on now.
 // These run against a live backend -- `uv run uvicorn server.app:app --reload`
 // (or the docker-compose `core` service) reachable through Vite's dev-server
-// proxy. They cover the always-available tabs only: Music/Sound effects/Image
-// are hidden unless their optional satellite is configured, so asserting on
-// them would make the suite depend on which containers happen to be up.
+// proxy.
 
 test("photo tab renders the effect list and the always-available nav", async ({ page }) => {
   await page.goto("/");
@@ -13,7 +13,7 @@ test("photo tab renders the effect list and the always-available nav", async ({ 
   await expect(page).toHaveURL(/\/ui$/);
 
   await expect(page.getByRole("heading", { name: "cinemagraph" })).toBeVisible();
-  for (const tab of ["Photo", "Video", "Assemble", "Library"]) {
+  for (const tab of ["From photo", "From video", "Timeline", "Library"]) {
     await expect(page.getByRole("link", { name: tab, exact: true })).toBeVisible();
   }
 
@@ -72,7 +72,7 @@ test("setup tab reports every optional service and how to enable it", async ({ p
 
   // Always-available, unlike the gated tabs -- the whole point is that it
   // works when nothing else is configured, so it's safe to assert on here.
-  await expect(page.getByRole("link", { name: "Setup", exact: true })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Settings", exact: true })).toBeVisible();
 
   // Every satellite is listed whether or not it's configured, with the env var
   // that turns it on. Which *state* each is in depends on what's running, so
