@@ -42,6 +42,15 @@ RUN uv sync --frozen --no-install-project --extra server --extra generation
 COPY src ./src
 RUN uv sync --frozen --extra server --extra generation
 
+# The FFmpeg binary that `uv sync` just pulled in (inside the imageio-ffmpeg
+# wheel) is GPLv3, and publishing this image redistributes it -- so the licence
+# text and the pointer to its corresponding source have to travel with it. See
+# licenses/ffmpeg/README.md for the full reasoning; this project's own code is
+# unaffected and stays Apache-2.0, since FFmpeg is invoked as a separate
+# process rather than linked against.
+COPY LICENSE ./LICENSE
+COPY licenses ./licenses
+
 # Last, since the UI changes more often than the Python deps above it.
 COPY --from=frontend-build /app/frontend/dist ./frontend/dist
 

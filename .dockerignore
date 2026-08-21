@@ -16,6 +16,12 @@ examples/*.jpg
 data/
 .claude/
 *.md
+# ...except the FFmpeg licence notice, which has to travel inside the image
+# alongside the GPLv3 binary it describes (see Dockerfile and
+# licenses/ffmpeg/README.md). Without this negation, `*.md` above silently
+# drops the notice and ships the bare licence text with nothing explaining
+# what it covers or where the corresponding source is.
+!licenses/**
 
 frontend/node_modules
 frontend/dist

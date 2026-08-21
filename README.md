@@ -614,7 +614,11 @@ docker run --rm <image> python -c \
 
 This does **not** affect this project's own Apache-2.0 licensing: the code invokes ffmpeg as a
 separate process, so it isn't a derivative work. It does mean that *publishing a Docker image
-containing that binary is redistributing GPL software*, which carries the usual obligations —
-ship the GPL text alongside it and provide the corresponding source, or an offer for it.
+containing that binary is redistributing GPL software*, which carries obligations.
 
-Running the tool locally is unaffected; this is purely about handing the image to someone else.
+Those are met in [`licenses/ffmpeg/`](licenses/ffmpeg/), which carries the GPLv3 text, the exact
+versions and build sources involved, and links to the corresponding FFmpeg source releases. The
+`Dockerfile` copies that directory into every image at `/app/licenses/ffmpeg/`, so the notice
+travels with the binary rather than living only in this repository.
+
+Running the tool locally distributes nothing and carries no obligation here.
