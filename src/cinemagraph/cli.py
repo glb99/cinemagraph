@@ -11,8 +11,8 @@ import click
 import asset_library as library
 from assembly import pipeline as assembly_pipeline
 
+from . import doctor, pipeline, validation
 from . import effects as effects_pkg
-from . import pipeline, validation
 
 
 @click.group()
@@ -452,6 +452,54 @@ def assemble(
     except (ValueError, RuntimeError) as e:
         raise click.UsageError(str(e))
     click.echo(f"Saved assembled video to {output_path}")
+
+
+_DOCTOR_MARKERS = {
+    doctor.Status.OK: ("ok  ", "green"),
+    doctor.Status.OFF: ("--  ", None),
+    doctor.Status.WARN: ("warn", "yellow"),
+    doctor.Status.FAIL: ("FAIL", "red"),
+}
+
+
+@cli.command()
+def doctor_cmd():
+    """Check the environment: what's configured, reachable, and broken.
+
+    Exits non-zero if any check fails, so it can gate a deploy or serve as a
+    container healthcheck. A satellite that simply isn't configured is not a
+    failure -- optional features being off is the expected state.
+    """
+    results = doctor.run_all_checks()
+    width = max(len(r.name) for r in results)
+
+    for result in results:
+        marker, color = _DOCTOR_MARKERS[result.status]
+        click.echo(
+            f"{click.style(marker, fg=color, bold=result.status is doctor.Status.FAIL)}  "
+            f"{result.name.ljust(width)}  {result.detail}"
+        )
+        # Only show the fix where there's something to act on -- a passing
+        # check with a hint attached is noise that trains people to skim.
+        if result.fix and result.status in (doctor.Status.WARN, doctor.Status.FAIL):
+            click.echo(f"      {' ' * width}  -> {result.fix}")
+
+    worst = doctor.worst_status(results)
+    click.echo()
+    if worst is doctor.Status.FAIL:
+        failed = [r.name for r in results if r.status is doctor.Status.FAIL]
+        raise click.ClickException(
+            f"{len(failed)} check(s) failed: {', '.join(failed)}"
+        )
+    if worst is doctor.Status.WARN:
+        click.echo(
+            "Core features are fine; some optional services need attention (above)."
+        )
+    else:
+        click.echo("All good.")
+
+
+cli.add_command(doctor_cmd, name="doctor")
 
 
 @cli.group()

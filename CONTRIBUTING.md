@@ -9,7 +9,8 @@ someone who only wants the 200 KB core.
 ```bash
 uv sync                                      # core CLI + dev tools
 uv sync --extra server --extra generation    # + the API and the Gemini/Lyria adapters
-uv run pytest                                # 163 tests, seconds, no GPU needed
+uv run pytest                                # fast, no GPU needed
+uv run cinemagraph doctor                    # what's configured, reachable, or broken
 ```
 
 `dev` is a [PEP 735 dependency group](https://peps.python.org/pep-0735/) — synced by default, never

@@ -42,6 +42,17 @@ so a missing service can never stop the app from booting.
 Copy `.env.example` to `.env` before enabling any of the optional pieces — it documents every
 variable, including the Hugging Face license acceptance that `sound-effects` needs.
 
+To see the state of all of it at once:
+
+```bash
+uv run cinemagraph doctor
+```
+
+It reports what's configured, what's actually reachable, and what to run to fix anything that
+isn't — including whether a satellite is loaded, idle, or stuck on a wedged request. Optional
+services being off is reported as off, not as a problem; it exits non-zero only when something is
+genuinely broken, so it also works as a deploy gate.
+
 ## Before you put this on a network
 
 There is **no authentication**. Anyone who can reach the port can use every endpoint, read your

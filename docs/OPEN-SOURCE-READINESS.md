@@ -1,6 +1,6 @@
 # Open-source readiness plan
 
-**Status:** 2026-08-21. W0 shipped; W1–W5 proposed, not started. Decisions recorded at the end.
+**Status:** 2026-08-21. W0, W1, W2 shipped; W3–W5 proposed, not started. Decisions recorded at the end.
 **Goal:** make this repo something a stranger can install, understand, run, and extend — without
 reading the source to find out why a feature is missing.
 
@@ -61,7 +61,7 @@ and the point that a permissive code license grants nothing about model outputs.
 
 ---
 
-## W1 — `.env.example` and a README that leads with the easy path
+## W1 — `.env.example` and a README that leads with the easy path — ✅ done 2026-08-21
 
 **Why here:** the cheapest possible fix for the largest number of "it doesn't work" reports, and a
 prerequisite for W2 having anything to check against.
@@ -97,7 +97,7 @@ other than the README, and every env var in `docker-compose.yml` appears in `.en
 
 ---
 
-## W2 — `cinemagraph doctor`
+## W2 — `cinemagraph doctor` — ✅ done 2026-08-21
 
 **Why here:** turns every silent misconfiguration into a message with a fix. It pays for itself in
 support burden immediately, serves CLI and Docker users equally, and is genuinely useful for our
@@ -133,7 +133,27 @@ tier discipline.
 **Done when:** `uv run cinemagraph doctor` prints a status table on a clean checkout, and each
 failing line names the command or URL that fixes it.
 
-**Effort:** one to two days including tests.
+**Outcome:** shipped as `src/cinemagraph/doctor.py` (checks return `CheckResult` records, never
+print) plus a thin `doctor` command in `cli.py`. The tier constraint held and is now verified
+rather than asserted: importing the CLI pulls in no `httpx`, `pydantic`, `fastapi`, `server`, or
+`torch`.
+
+Four statuses rather than pass/fail, because "not configured" and "configured but broken" are
+genuinely different: `ok`, `off` (an optional feature nobody enabled — the expected state, and
+flagging it would train people to skim), `warn` (configured but unreachable, or wedged), `fail`
+(something core is actually broken). Exit code is non-zero only on `fail`, so an optional service
+being down doesn't break a deploy gate.
+
+It also reads the satellites' new `/health` fields, so a wedged model shows up as
+`reports a wedged request (1500s in flight)` rather than as a generic outage — the CLI and the web
+UI will report the same state from the same source.
+
+25 tests in `tests/test_doctor.py`, none needing a live stack. One behaviour worth noting: the
+library check deliberately does *not* call `asset_library.library_root()`, because that function
+creates the directory as a side effect and a diagnostic must not change what it diagnoses — there's
+a test asserting the directory stays absent.
+
+**Effort:** as estimated.
 
 ---
 
