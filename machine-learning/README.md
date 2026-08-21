@@ -3,7 +3,7 @@
 Isolated FastAPI service wrapping [CLIPSeg](https://huggingface.co/CIDAS/clipseg-rd64-refined)
 (via [`transformers`](https://huggingface.co/docs/transformers/model_doc/clipseg)) for
 text-prompted semantic masking ("water", "clouds", "the candle flame") — the model backing
-`cinemagraph-tool`'s `POST /mask/semantic`, an alternative to hand-painting a mask PNG for
+`cinemagraph`'s `POST /mask/semantic`, an alternative to hand-painting a mask PNG for
 `cinemagraph from-photo --mask ...`.
 
 Named to match the [Immich](https://github.com/immich-app/immich/tree/main/machine-learning)
@@ -116,7 +116,7 @@ Manually, end-to-end, against a real GPU (RTX 4060, using `audio-effect-generati
 venv which already had `torch`/`transformers` installed): `GET /health` → `{"status": "ok",
 "device": "cuda"}`; `POST /segment` on `examples/test_photo.jpg` with `prompt=sky` → real 200,
 a 480x320 8-bit grayscale PNG (matching the input's dimensions exactly), pixel values spanning
-0–229 (not blank/degenerate). Also validated the full chain through `cinemagraph-tool`'s own
+0–229 (not blank/degenerate). Also validated the full chain through `cinemagraph`'s own
 `POST /mask/semantic` with `ML_SERVICE_URL` pointed at the running service → `GET /capabilities`
 correctly flipped `semantic_mask` to `true` → the identical PNG bytes came back through the
 proxy. See `docs/experiments/2026-07-27-audio-model-serving-research.md` for details.

@@ -2,12 +2,12 @@
 
 Isolated FastAPI service wrapping [Stable Diffusion XL](https://huggingface.co/stabilityai/stable-diffusion-xl-base-1.0)
 (via [`diffusers`](https://github.com/huggingface/diffusers)) for text-prompted image
-generation — the model backing `cinemagraph-tool`'s `POST /generate/image`.
+generation — the model backing `cinemagraph`'s `POST /generate/image`.
 
 ## Why a separate service
 
 Same reasoning as `machine-learning/`/`sound-effects/` (see `docs/DESIGN.md` §3.2/§5.7/§5.2):
-`torch`/`diffusers` are multi-GB dependencies with no business in the core `cinemagraph-tool`
+`torch`/`diffusers` are multi-GB dependencies with no business in the core `cinemagraph`
 image, and generating an input image isn't part of what `cinemagraph` (the animate-a-photo
 library) does — it's a separate capability that happens to feed the same pipeline.
 
@@ -143,7 +143,7 @@ Prior art, and why this rather than a VRAM-aware scheduler:
 ## Validated
 
 Manually, end-to-end, against a real GPU (RTX 4060): both the service standalone (`POST /generate`
-directly, text-to-image and img2img both) and the full chain through `cinemagraph-tool`'s own
+directly, text-to-image and img2img both) and the full chain through `cinemagraph`'s own
 `POST /generate/image` → job polling → file download. See
 `docs/experiments/2026-07-29-image-generation-backend-choice.md` for the original text-to-image
 build (including why Gemini's hosted API was tried first and reverted, and the VAE OOM fix above),

@@ -1,7 +1,7 @@
 [project]
 name = "image-generation-service"
 version = "0"
-description = "Isolated FastAPI wrapper around Stable Diffusion XL for cinemagraph-tool's image generation."
+description = "Isolated FastAPI wrapper around Stable Diffusion XL for cinemagraph's image generation."
 requires-python = ">=3.10,<3.13"
 dependencies = [
     "torch>=2.0.0",

@@ -1,13 +1,13 @@
 """FastAPI wrapper around Stability AI's Stable Audio Open model.
 
-This service exists as a wrapper rather than cinemagraph-tool shelling out
+This service exists as a wrapper rather than cinemagraph shelling out
 to a script per call so the model stays resident *between* requests instead
 of paying the multi-second checkpoint-load / GPU-init cost on every one.
 The actual generation logic is copied verbatim from the proven-working
 experiment at audio-effect-generation/generate_rain_stableaudio.py (see
 that project's RESEARCH.md for why a serving layer wasn't worth it there,
 as a standalone script -- it is here, since this service has a real caller
-now: cinemagraph-tool's own server/app.py POST /generate/sound-effect).
+now: cinemagraph's own server/app.py POST /generate/sound-effect).
 
 Residency is bounded by an idle TTL rather than lasting forever, for the
 same measured reason as image-generation/app.py (see its docstring): this

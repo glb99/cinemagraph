@@ -1,6 +1,6 @@
 """FastAPI wrapper around Stable Diffusion XL for text-to-image generation.
 
-This service exists as a wrapper rather than cinemagraph-tool shelling out
+This service exists as a wrapper rather than cinemagraph shelling out
 to a script per call so that the model stays resident *between* requests
 instead of paying the multi-second checkpoint-load / GPU-init cost on every
 one. Same shape as sound-effects/app.py -- module-global singleton behind a

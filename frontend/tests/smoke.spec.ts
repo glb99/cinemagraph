@@ -12,7 +12,7 @@ test("photo tab renders the effect list and the always-available nav", async ({ 
   // shadows an API path (see src/lib/tabs.ts).
   await expect(page).toHaveURL(/\/ui$/);
 
-  await expect(page.getByRole("heading", { name: "cinemagraph-tool" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "cinemagraph" })).toBeVisible();
   for (const tab of ["Photo", "Video", "Assemble", "Library"]) {
     await expect(page.getByRole("link", { name: tab, exact: true })).toBeVisible();
   }

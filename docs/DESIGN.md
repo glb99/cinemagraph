@@ -1,4 +1,4 @@
-# Design Document — cinemagraph-tool
+# Design Document — cinemagraph
 
 > Status: living document. Last substantial revision: 2026-07.
 > Audience: the project's own future self. Written to survive long gaps between work sessions.
@@ -413,7 +413,7 @@ exist" discipline, not an exception to it.
 ## 4. Current state (implemented)
 
 ```
-cinemagraph-tool/
+cinemagraph/
 ├── src/
 │   ├── cinemagraph/           # the stable core: pipeline, effects registry, mask, grade, loop, io
 │   ├── asset_library/         # content-addressed local library, its own top-level package
@@ -514,7 +514,7 @@ Two backends were tried, in order, before landing here -- see
 
 `image-generation/` follows the exact shape `sound-effects/` established: `POST /generate`
 (multipart/form-data), `GET /health`, eager text-to-image model load at startup. Wired into
-`cinemagraph-tool`'s own API the same way as `/generate/sound-effect`
+`cinemagraph`'s own API the same way as `/generate/sound-effect`
 (`IMAGE_GENERATION_URL`, `call_optional_service`, a background job). Validated end-to-end
 against a real GPU (RTX 4060): both the service standalone and the full chain through
 `POST /generate/image` → job polling → file download → the web UI's Image tab, with the
@@ -557,7 +557,7 @@ service existed — fixed when this was built). Same shape as `sound-effects/`: 
 end-to-end against a real GPU (RTX 4060, reusing `audio-effect-generation`'s existing
 `torch`/`transformers` install): standalone `POST /segment` on a real photo produced a
 correctly-sized, non-degenerate grayscale PNG, and the full chain through
-`cinemagraph-tool`'s own `POST /mask/semantic` (with `ML_SERVICE_URL` pointed at it)
+`cinemagraph`'s own `POST /mask/semantic` (with `ML_SERVICE_URL` pointed at it)
 round-tripped the identical bytes. See `machine-learning/README.md`'s Validated section
 and `docs/experiments/2026-07-27-audio-model-serving-research.md`.
 
@@ -905,7 +905,7 @@ same remaining work:
 - **Sound effects — Stable Audio Open, wrapped in `sound-effects/` — done, and
   validated for real.** The premature-to-build call from the first pass of this section
   was revisited and reversed: once sound-effect generation is meant to be a
-  `cinemagraph-tool` feature (reachable via its own API, the way music now is), the
+  `cinemagraph` feature (reachable via its own API, the way music now is), the
   alternative to a thin wrapper isn't "no server" — it's `server/app.py` shelling out to
   the script as a subprocess, which is exactly the fragile pattern the project's own
   `RESEARCH.md` warns against (`"parsing stdout, argument quoting, blocking"`). A real
@@ -914,7 +914,7 @@ same remaining work:
   wrapper's only addition is loading the model once at startup instead of per-call.
   Validated end-to-end on a real GPU (RTX 4060, model already cached): the service
   standalone (`POST /generate` → valid 44.1kHz stereo WAV, correct duration) *and* the
-  full chain through `cinemagraph-tool`'s own `POST /generate/sound-effect` → job
+  full chain through `cinemagraph`'s own `POST /generate/sound-effect` → job
   polling → file download. Not validated: the Docker build itself (Docker wasn't running
   in the validating session) — Python-level logic is proven, containerization isn't.
 See §5.3 for the fourth capability in this same family: **semantic masking —
@@ -1104,7 +1104,7 @@ Decisions already made, with reasoning — so they aren't accidentally relitigat
 | Cross-satellite GPU admission control: deliberately not built (2026-08-21) | Ollama's scheduler and LocalAI's `MAX_ACTIVE_BACKENDS` are the real answer to contention, and core is where ours would live (the only component that sees all jobs). Left undone because the busy watchdog changes a stuck model from permanent to self-healing, which is most of the observed pain; revisit only if satellites are still seen fighting over the card afterwards |
 | `server/_external_service.py` — one shared client helper, used by every optional-service route | this *is* safe to share: it never crosses the isolation boundary, since it's client-side code living in the one codebase (`server/`) that already calls every one of these services |
 | CLIPSeg must be loaded via `transformers`, never `pip install git+https://github.com/timojl/clipseg` | the original repo isn't a real PyPI package (git-install only); `transformers` is a maintained package that happens to support CLIPSeg as one of many architectures |
-| Reversed the "premature" call on the Stable Audio Open wrapper and built it | `RESEARCH.md`'s "wait until reload cost hurts" reasoning was written for a standalone script with no caller; once it's meant to be a `cinemagraph-tool` feature, the alternative to a wrapper is subprocess-shelling from `server/app.py`, which the same doc calls fragile — a real consumer changes which of that doc's own criteria applies |
+| Reversed the "premature" call on the Stable Audio Open wrapper and built it | `RESEARCH.md`'s "wait until reload cost hurts" reasoning was written for a standalone script with no caller; once it's meant to be a `cinemagraph` feature, the alternative to a wrapper is subprocess-shelling from `server/app.py`, which the same doc calls fragile — a real consumer changes which of that doc's own criteria applies |
 | `sound-effects/` service built and code-reviewed but not vendored from a third party | unlike CLIPSeg/ACE-Step, this one *is* code this project owns and wrote (ported from the proven `audio-effect-generation` experiment) — "own the wrapper" was always the plan for this capability, this just executed it |
 | `machine-learning/` built following the exact `sound-effects/` shape (own pyproject/Dockerfile, eager startup load, raw-bytes response) | consistency across the two isolated services beats bespoke structure per service — a future third service should follow the same shape unless it has a genuine reason not to |
 | `/mask/semantic`'s proxy fixed to return raw `image/png` bytes instead of `.json()` | it was written before `machine-learning/`'s actual contract (a PNG mask, per its README) was implemented against; caught and fixed while building the real service, not left as a silent mismatch |

@@ -2,7 +2,7 @@ from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as _version
 
 try:
-    __version__ = _version("cinemagraph-tool")
+    __version__ = _version("cinemagraph")
 except PackageNotFoundError:
     __version__ = "0+unknown"
 

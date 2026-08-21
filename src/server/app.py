@@ -120,7 +120,7 @@ from .schemas import AssetResponse, CapabilitiesResponse, JobResponse, JobStatus
 
 SettingsDep = Annotated[Settings, Depends(get_settings)]
 
-app = FastAPI(title="cinemagraph-tool API")
+app = FastAPI(title="cinemagraph API")
 
 # Populates generation_registry for real (sec 3.6) -- "sdxl"/"acestep" always
 # register (their own satellite reachability is still checked fresh per
@@ -186,7 +186,7 @@ async def _resolve_optional_audio_input(
 
 
 _FRONTEND_NOT_BUILT_HTML = """<!doctype html>
-<title>cinemagraph-tool</title>
+<title>cinemagraph</title>
 <h1>The web UI hasn't been built yet</h1>
 <p>The API itself is running fine -- every other route works. This page is the
 built <code>frontend/</code> bundle, which isn't where the server expects it:</p>

@@ -2,18 +2,18 @@
 
 Isolated FastAPI service wrapping [Stable Audio Open](https://huggingface.co/stabilityai/stable-audio-open-1.0)
 (via [`stable-audio-tools`](https://github.com/Stability-AI/stable-audio-tools)) for text-prompted
-ambient/SFX generation — the model backing `cinemagraph-tool`'s `POST /generate/sound-effect`.
+ambient/SFX generation — the model backing `cinemagraph`'s `POST /generate/sound-effect`.
 
 Generation logic is a direct port of the proven-working
 `audio-effect-generation/generate_rain_stableaudio.py` experiment (see that project's `RESEARCH.md`
 for why a serving layer wasn't worth it *there*, as a standalone script — it is here, since this
-service has a real caller: `cinemagraph-tool`'s own API). The only thing this service adds is loading
+service has a real caller: `cinemagraph`'s own API). The only thing this service adds is loading
 the model once at startup instead of once per call.
 
 ## Why a separate service
 
 Same reasoning as `machine-learning/` (see `docs/DESIGN.md` §3.2/§5.7): `torch`/`stable-audio-tools`
-are multi-GB dependencies with no business in the core `cinemagraph-tool` image, and text-to-audio
+are multi-GB dependencies with no business in the core `cinemagraph` image, and text-to-audio
 generation isn't part of what `cinemagraph` (the animate-a-photo library) does — it's a separate
 capability that happens to serve the same ambient-video goal.
 
@@ -92,7 +92,7 @@ Prior art, and why this rather than a VRAM-aware scheduler:
 ## Validated
 
 Manually, end-to-end, against a real GPU (RTX 4060): both the service standalone (`POST /generate`
-directly) and the full chain through `cinemagraph-tool`'s own `POST /generate/sound-effect` → job
+directly) and the full chain through `cinemagraph`'s own `POST /generate/sound-effect` → job
 polling → file download → the web UI's Sound effects tab, playing back real generated audio in a
 real browser (`readyState: 4`, correct duration). See
 `docs/experiments/2026-07-27-audio-model-serving-research.md` and

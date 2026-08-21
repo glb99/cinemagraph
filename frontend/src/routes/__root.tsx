@@ -14,7 +14,7 @@ function RootLayout() {
     <div className="min-h-screen bg-background text-foreground">
       <div className="mx-auto max-w-3xl px-4 py-8">
         <header className="space-y-1">
-          <h1 className="text-xl font-semibold">cinemagraph-tool</h1>
+          <h1 className="text-xl font-semibold">cinemagraph</h1>
           <p className="text-xs text-muted-foreground">
             A thin client over the same API a script or curl would use — nothing here that the
             underlying routes don't already do themselves.

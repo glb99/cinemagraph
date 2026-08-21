@@ -1,4 +1,4 @@
-# cinemagraph-tool
+# cinemagraph
 
 Make looping lofi video: freeze a background, keep one element moving. Start from a short video
 clip, or from a single still photo animated with built-in procedural effects — rain, snow, dust,
@@ -377,7 +377,7 @@ it's known to hang under Docker Desktop's WSL2 file sharing (see `docs/experimen
 The CLI works the same way inside the container, overriding the default command:
 
 ```bash
-docker run --rm -v "$(pwd)/data:/data" cinemagraph-tool cinemagraph from-photo /data/photo.jpg /data/out.mp4 --effect smoke
+docker run --rm -v "$(pwd)/data:/data" cinemagraph cinemagraph from-photo /data/photo.jpg /data/out.mp4 --effect smoke
 ```
 
 ### Live development: Compose Watch

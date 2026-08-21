@@ -221,7 +221,7 @@ wheels = [
 ]
 
 [[package]]
-name = "cinemagraph-tool"
+name = "cinemagraph"
 version = "0"
 source = { editable = "." }
 dependencies = [

@@ -111,6 +111,14 @@ services:
   # structurally can't happen. Trade-off: the checkpoints aren't browsable
   # from Windows Explorer the way ./data/* is; `docker volume inspect
   # cinemagraph-tool_acestep-checkpoints` finds the real path if needed.
+  #
+  # That prefix is Compose's project name, which defaults to the *directory*
+  # name -- still `cinemagraph-tool` on disk even though the project is now
+  # named `cinemagraph`. Renaming the directory, or adding an explicit `name:`
+  # here, makes Compose look for differently-named volumes and silently create
+  # empty ones: ~30GB of already-downloaded weights would appear to vanish and
+  # re-download. If you rename, rename the volumes with it (or accept the
+  # re-download) -- don't do one without the other.
   # First run downloads ~11GB into the volume, cached across restarts.
   #
   # ACESTEP_NO_INIT=false forces eager loading at startup: found a third

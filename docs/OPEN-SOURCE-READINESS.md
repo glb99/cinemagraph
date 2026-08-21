@@ -308,29 +308,37 @@ Taken 2026-08-21. Recorded here so W3 and the README don't relitigate them.
    AGPL-3.0 was the considered alternative (Immich's and Nextcloud's choice) and was rejected:
    it protects against someone running a hosted commercial version, which isn't a concern for a
    personal creative tool, and it deters some corporate users outright. **Applied.**
-2. **GHCR owner: the author's personal account**, images named `cinemagraph-core`,
-   `cinemagraph-machine-learning`, `cinemagraph-sound-effects`, `cinemagraph-image-generation` —
+2. **GHCR owner: `glb99`**, the author's personal account. Repo is
+   <https://github.com/glb99/cinemagraph>, now set as `origin`. Images:
+   `ghcr.io/glb99/cinemagraph-core`, `-machine-learning`, `-sound-effects`, `-image-generation` —
    one prefix so they sort together. An org for a solo project is ceremony, and GHCR packages can
-   be transferred later if that changes. *Still outstanding: the literal GitHub handle. The repo
-   has no git remote configured yet, so this cannot be filled in from the repo.*
+   be transferred later if that changes. **Resolved.**
 3. **First release publishes `core` only.** The satellites are exactly where the CI disk risk
    lives (see W3), and tying the first public release to an unproven multi-GB CUDA build is how a
    release slips. `core` is small, builds in existing CI today, and covers the entire
    always-available surface — photo, video, library, assemble, the whole web UI. Satellites follow
    in the next release once runner disk has been measured; until then users build them locally,
    which is exactly today's status quo, so nobody is worse off.
-4. **Rename to `Stillwave`** — a **still** image plus a **wave**, both the motion and the audio.
-   `cinemagraph-tool` is accurate as a repo name and forgettable as a product name, and it is now
-   actively too narrow: the project does music, sound effects, image generation, and long-form
-   assembly, none of which are cinemagraphs. Renaming is free today and expensive once anyone
-   links to it. **Not yet applied** — a rename touches the package directory, the console script,
-   every import, the image names, and the docs, so it is its own task, and this decision is the
-   one most open to being overruled on taste.
+4. **Name: `cinemagraph`.** `Stillwave` was proposed and **overruled by the author** — the repo is
+   `glb99/cinemagraph`, and the project keeps that name. This turned out to be much the smaller
+   change anyway: the package directory and the console script were already `cinemagraph`, so only
+   the *distribution* name (`cinemagraph-tool`) and prose references had to move. **Applied.**
+
+   Deliberately not renamed: the two decision-log rows in `DESIGN.md` and the note in `CLAUDE.md`
+   that quote `pip install cinemagraph-tool[...]`, since those record what was true at the time,
+   and everything under `docs/experiments/`, which is a dated lab notebook rather than living
+   documentation.
+
+   **Not done, and it needs care:** the working directory on disk is still `cinemagraph-tool/`.
+   Docker Compose derives its project name from the directory, so the existing volumes are named
+   `cinemagraph-tool_acestep-checkpoints` and so on. Renaming the directory — or adding an explicit
+   `name:` to `docker-compose.yml` — makes Compose look for *differently named* volumes and quietly
+   start from empty ones, which presents as ~30GB of downloaded weights having vanished. If the
+   directory is renamed, either rename the volumes with it or accept the re-download.
 
 ## Open questions
 
-1. **The GitHub handle** for decision 2's image names — blocks writing the W3 workflow.
-2. **`ffmpeg` redistribution terms.** The Docker images bundle an `ffmpeg` binary via
+1. **`ffmpeg` redistribution terms.** The Docker images bundle an `ffmpeg` binary via
    `imageio-ffmpeg`, and its license depends on how that build was configured (LGPL vs GPL). This
    affects redistributing the *images*, not this repo's source. Worth confirming before W3
    publishes anything; noted in the README's Licensing section.

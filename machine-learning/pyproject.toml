@@ -1,7 +1,7 @@
 [project]
 name = "machine-learning-service"
 version = "0"
-description = "Isolated FastAPI wrapper around CLIPSeg for cinemagraph-tool's semantic masking."
+description = "Isolated FastAPI wrapper around CLIPSeg for cinemagraph's semantic masking."
 requires-python = ">=3.10,<3.13"
 dependencies = [
     "torch>=2.0.0",
