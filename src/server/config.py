@@ -21,7 +21,9 @@ instead of three is the correct outcome here, not a half-finished migration.
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
+from typing import Annotated
 
+from fastapi import Depends
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -134,3 +136,8 @@ def get_settings() -> Settings:
     lifetime -- env vars are set before the process starts.
     """
     return Settings()
+
+
+# Shared across app.py and every router in routers/ so each module doesn't
+# redeclare its own alias for the same dependency.
+SettingsDep = Annotated[Settings, Depends(get_settings)]
