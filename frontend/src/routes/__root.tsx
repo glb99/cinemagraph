@@ -1,7 +1,9 @@
 import { Link, Outlet, createRootRoute } from "@tanstack/react-router";
 
+import { ActivityDrawer } from "@/components/ActivityDrawer";
 import { NavIcon } from "@/components/NavIcon";
 import { useCapabilities } from "@/hooks/useCapabilities";
+import { JobsProvider } from "@/hooks/useJobs";
 import { TABS, type TabDef, type TabStatus, tabStatus } from "@/lib/tabs";
 
 export const Route = createRootRoute({
@@ -52,6 +54,16 @@ function GroupLabel({ children }: { children: React.ReactNode }) {
 }
 
 function RootLayout() {
+  // The provider sits above the shell, not inside it: the rail's activity
+  // drawer and the routed tabs both read the same job store.
+  return (
+    <JobsProvider>
+      <RootShell />
+    </JobsProvider>
+  );
+}
+
+function RootShell() {
   const { data: capabilities } = useCapabilities();
   const gated = TABS.filter((tab) => tab.capability);
   const ready = gated.filter((tab) => tabStatus(tab, capabilities) === "ready").length;
@@ -81,6 +93,7 @@ function RootLayout() {
         </div>
 
         <div className="mt-auto flex flex-col gap-2">
+          <ActivityDrawer />
           {/* Only worth saying when something is actually off -- a permanent
               "5 of 5 ready" banner is furniture. */}
           {capabilities && ready < gated.length ? (

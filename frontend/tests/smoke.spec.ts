@@ -105,3 +105,35 @@ test("setup tab reports every optional service and how to enable it", async ({ p
   await page.getByRole("button", { name: "Recheck" }).click();
   await expect(page.getByRole("button", { name: "Recheck" })).toBeEnabled({ timeout: 10_000 });
 });
+
+test("a render survives navigating away from the tab that started it", async ({ page }) => {
+  // The regression this guards: job state used to live in the submitting
+  // component, so unmounting it cancelled the poll and dropped the job id.
+  // The render carried on server-side and its file stayed downloadable, but
+  // the UI had no way back to it.
+  await page.goto("/ui");
+
+  await page.getByLabel("Photo").setInputFiles("../photo.jpg");
+  await page.getByRole("checkbox", { name: "smoke", exact: true }).check();
+  // A handful of frames is enough to prove the point and keeps CI quick.
+  // exact: "Duration (s)" is also a substring of "Loop duration (s)". Distinct
+  // labels, unlike the two Kind selects -- so this is the locator's problem to
+  // fix, not the page's.
+  await page.getByLabel("Duration (s)", { exact: true }).fill("1");
+  await page.getByLabel("FPS", { exact: true }).fill("5");
+  await page.getByRole("button", { name: "Render" }).click();
+
+  // Leave immediately -- under the old implementation this is the point of no
+  // return, before the job could possibly have finished.
+  await expect(page.getByTestId("job-status")).toBeVisible();
+  await page.getByRole("link", { name: "Library", exact: true }).click();
+  await expect(page).toHaveURL(/\/ui\/library$/);
+
+  // The drawer is the whole reason a job is watchable from elsewhere.
+  await page.getByRole("button", { name: "Activity" }).click();
+  await expect(page.getByRole("complementary", { name: "Activity" })).toContainText("From photo");
+
+  // Back on the tab, the finished render is waiting rather than an empty form.
+  await page.getByRole("link", { name: "From photo", exact: true }).click();
+  await expect(page.getByTestId("job-preview")).toBeVisible({ timeout: 60_000 });
+});

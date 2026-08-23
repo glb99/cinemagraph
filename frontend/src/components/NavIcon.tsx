@@ -65,6 +65,7 @@ const PATHS: Record<string, React.ReactNode> = {
     </>
   ),
   cloud: <path d="M17.5 19a4.5 4.5 0 000-9 6 6 0 00-11.6 1.6A4 4 0 006.5 19z" />,
+  activity: <path d="M3 12h4l3-7 4 14 3-7h4" />,
 };
 
 export function NavIcon({ name, size = 16 }: { name: string; size?: number }) {

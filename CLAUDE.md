@@ -431,10 +431,23 @@ fails on any clean checkout — CI and Docker builds included.
 - **`src/routes/`** — one file per tab, all under **`/ui`** (`/` redirects there). The namespace is
   load-bearing: `server.app:app` serves its routes unprefixed, so a client-side `/library` or
   `/assemble` shadows a real endpoint — see `src/lib/tabs.ts`'s own comment and the decision log.
-- **`src/hooks/useJobRunner.ts`** — the single submit-then-poll implementation shared by all six
-  job-producing tabs, replacing the old single-page UI's `pollJob()`/`wireForm()`. Client-side
-  validation failures
-  go through the same `fail()` surface as job errors.
+- **`src/hooks/useJobs.tsx`** — the job store, mounted above the router in `__root.tsx`. Holds
+  every submitted job and runs the polling loops itself, so a job outlives the tab that started
+  it. That placement is the fix for a real data-loss path: the loop used to live in the submitting
+  component's own state, so navigating away unmounted it, cancelled the poll and dropped the job
+  id — the render carried on server-side and its file stayed downloadable, but the UI had no route
+  back to it. In memory only, deliberately: `server/jobs.py` is an in-process dict a restart
+  clears, so persisting ids would resurrect rows pointing at 404s. Both sides forget together.
+  Guarded by `tests/smoke.spec.ts`'s "a render survives navigating away" (verified against the old
+  implementation, where it fails).
+- **`src/hooks/useJobRunner.ts`** — the per-tab view of that store, shared by all six job-producing
+  tabs, replacing the old single-page UI's `pollJob()`/`wireForm()`. Its shape is unchanged from
+  when it owned the polling itself, which is why lifting the state touched no route file. Reads its
+  owning route from the router rather than taking it as an argument — the router already knows it,
+  and `lib/tabs.ts` turns it into the label the activity drawer shows. Client-side validation
+  failures go through the same `fail()` surface as job errors.
+- **`src/components/ActivityDrawer.tsx`** — the rail's view of the store: what's running, from
+  where, and how long it's been going. Renders nothing until something has been submitted.
 - **`src/components/`** — the shared pieces the tabs are built from: asset pickers with inline
   previews, project assign/filter selects, save-to-library, the config hints, the repaint waveform.
 - **`tests/smoke.spec.ts`** — Playwright, against a live backend; covers the always-available tabs
