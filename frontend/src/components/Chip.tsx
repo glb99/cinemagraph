@@ -5,7 +5,10 @@ import { cn } from "@/lib/utils";
 export function ChipRow({
   className,
   children,
-}: { className?: string; children: React.ReactNode }) {
+}: {
+  className?: string;
+  children: React.ReactNode;
+}) {
   return <div className={cn("flex flex-wrap gap-2", className)}>{children}</div>;
 }
 

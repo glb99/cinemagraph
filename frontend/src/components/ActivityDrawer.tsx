@@ -3,7 +3,7 @@ import { useState } from "react";
 
 import { NavIcon } from "@/components/NavIcon";
 import { Button } from "@/components/ui/button";
-import { type JobRecord, isTerminal, useJobs } from "@/hooks/useJobs";
+import { isTerminal, type JobRecord, useJobs } from "@/hooks/useJobs";
 import { TABS } from "@/lib/tabs";
 import { cn } from "@/lib/utils";
 

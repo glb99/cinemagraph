@@ -1,6 +1,6 @@
 import { useCapabilities } from "@/hooks/useCapabilities";
-import { TABS, tabAvailability } from "@/lib/tabs";
 import type { TabDef } from "@/lib/tabs";
+import { TABS, tabAvailability } from "@/lib/tabs";
 
 /** Explains, in place, why a feature can't run yet.
  *

@@ -20,6 +20,14 @@ updates:
     # not via an automated PR.
     ignore:
       - dependency-name: "@hey-api/openapi-ts"
+      # TypeScript 7 (the native port) removed ts.NewLineKind, which
+      # @hey-api/openapi-ts calls -- so generate-client.sh dies on import
+      # under TS 7, on 0.97 and 0.99 alike. Since openapi-ts is pinned above
+      # and bumped by hand, an automated TypeScript major would break codegen
+      # while every other check stayed green. Lift this once openapi-ts
+      # supports TS 7; 5.x and 6.x minors still come through.
+      - dependency-name: "typescript"
+        update-types: ["version-update:semver-major"]
 
   - package-ecosystem: docker
     directory: /
@@ -35,16 +43,37 @@ updates:
     directory: /machine-learning
     schedule:
       interval: monthly
+    # This service pins requires-python to ">=3.10,<3.13" because that's what
+    # its torch stack supports, so a base-image major is dead on arrival --
+    # it fails at dependency resolution. Widen requires-python first, then
+    # let the image follow.
+    ignore:
+      - dependency-name: "python"
+        update-types: ["version-update:semver-major"]
 
   - package-ecosystem: docker
     directory: /sound-effects
     schedule:
       interval: monthly
+    # This service pins requires-python to ">=3.10,<3.13" because that's what
+    # its torch stack supports, so a base-image major is dead on arrival --
+    # it fails at dependency resolution. Widen requires-python first, then
+    # let the image follow.
+    ignore:
+      - dependency-name: "python"
+        update-types: ["version-update:semver-major"]
 
   - package-ecosystem: docker
     directory: /image-generation
     schedule:
       interval: monthly
+    # This service pins requires-python to ">=3.10,<3.13" because that's what
+    # its torch stack supports, so a base-image major is dead on arrival --
+    # it fails at dependency resolution. Widen requires-python first, then
+    # let the image follow.
+    ignore:
+      - dependency-name: "python"
+        update-types: ["version-update:semver-major"]
 
   - package-ecosystem: docker-compose
     directory: /
