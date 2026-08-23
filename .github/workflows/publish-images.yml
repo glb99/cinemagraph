@@ -36,7 +36,7 @@ jobs:
 
       - name: Derive tags
         id: meta
-        uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
         with:
           # repository_owner rather than a hardcoded name, so a fork publishes
           # to its own namespace instead of failing on someone else's.
