@@ -58,6 +58,13 @@ const PATHS: Record<string, React.ReactNode> = {
       <path d="M3 14l4.5-4 4 3.5L16 9l5 4.5" />
     </>
   ),
+  server: (
+    <>
+      <rect x="6" y="6" width="12" height="12" rx="2" />
+      <path d="M9 3v3M15 3v3M9 18v3M15 18v3M3 9h3M3 15h3M18 9h3M18 15h3" />
+    </>
+  ),
+  cloud: <path d="M17.5 19a4.5 4.5 0 000-9 6 6 0 00-11.6 1.6A4 4 0 006.5 19z" />,
 };
 
 export function NavIcon({ name, size = 16 }: { name: string; size?: number }) {

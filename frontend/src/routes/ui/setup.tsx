@@ -26,6 +26,18 @@ const STATE_LABELS: Record<State, string> = {
   off: "Not configured",
 };
 
+/** What each local satellite is for, alongside its live status -- the thing
+ * a bare env-var name and a dot can't say on their own. Sizes/GPU needs
+ * aren't in the API response (they're deployment facts, not runtime state),
+ * so this stays a small frontend-side table next to SERVICE_START_COMMANDS
+ * in lib/tabs.ts rather than a new field on ServiceStatus. */
+const SERVICE_BLURB: Record<string, string> = {
+  IMAGE_GENERATION_URL: "SDXL — image generation, needs a GPU",
+  ACESTEP_URL: "ACE-Step — music generation, needs a GPU",
+  SOUND_EFFECTS_URL: "Stable Audio Open — sound effects, needs a GPU and its licence accepted",
+  ML_SERVICE_URL: "CLIPSeg — mask by describing what to animate, runs on CPU",
+};
+
 function Badge({ state }: { state: State }) {
   return (
     <span
@@ -65,11 +77,14 @@ function ServiceRow({ service }: { service: ServiceStatus }) {
   const startCommand = SERVICE_START_COMMANDS[service.env_var];
 
   return (
-    <li className="flex flex-col gap-2 border-border border-b py-3 last:border-b-0">
+    <li className="flex flex-col gap-2 px-4 py-3">
       <div className="flex items-baseline justify-between gap-3">
         <span className="font-medium text-sm">{service.name}</span>
         <Badge state={state} />
       </div>
+      {SERVICE_BLURB[service.env_var] ? (
+        <p className="text-xs">{SERVICE_BLURB[service.env_var]}</p>
+      ) : null}
       <div className="text-muted-foreground text-xs">
         <code className="font-mono">{service.env_var}</code>
         {summary ? <> — {summary}</> : null}
@@ -117,6 +132,11 @@ function SetupTab() {
   }
 
   const features = TABS.filter((tab) => tab.capability);
+  const services = capabilities.services ?? [];
+  // Neither adapter has its own health check (it's a single hosted API call,
+  // not a satellite) -- registration is the only signal, and both register
+  // together off the one GEMINI_API_KEY (see app.py's registration block).
+  const geminiConfigured = (capabilities.image_generation_models ?? []).includes("gemini");
 
   return (
     <div className="space-y-8">
@@ -136,6 +156,45 @@ function SetupTab() {
             Version <code className="font-mono">{capabilities.version}</code>
           </p>
         ) : null}
+      </section>
+
+      <section className="space-y-2">
+        <h3 className="font-medium text-sm">Hosted</h3>
+        <p className="text-muted-foreground text-xs">
+          Runs on Google's hardware — no GPU needed, billed to your key.
+        </p>
+        <div className="rounded-lg border border-border p-4">
+          <div className="flex items-baseline justify-between gap-3">
+            <div>
+              <p className="font-medium text-sm">Google AI key</p>
+              <p className="text-xs">Enables Gemini for images and Lyria 3 for music.</p>
+              <p className="mt-1 text-muted-foreground text-xs">
+                <code className="font-mono">GEMINI_API_KEY</code>
+              </p>
+            </div>
+            <Badge state={geminiConfigured ? "on" : "off"} />
+          </div>
+          {!geminiConfigured ? (
+            <p className="mt-2 text-muted-foreground text-xs">
+              Set it in the environment the API runs with, then restart it and recheck here.
+            </p>
+          ) : null}
+        </div>
+      </section>
+
+      <section className="space-y-2">
+        <h3 className="font-medium text-sm">On this machine</h3>
+        <p className="text-muted-foreground text-xs">
+          Free and private, but each one downloads a model and wants a GPU — an 8&nbsp;GB card means
+          image generation and the audio models take turns rather than running together (see the
+          justfile's <code className="font-mono">gpu-image</code>/
+          <code className="font-mono">gpu-audio</code> recipes).
+        </p>
+        <ul className="divide-y divide-border rounded-lg border border-border">
+          {services.map((service) => (
+            <ServiceRow key={service.env_var} service={service} />
+          ))}
+        </ul>
       </section>
 
       <section className="space-y-2">
@@ -159,15 +218,6 @@ function SetupTab() {
           A feature can be on through more than one backend — image generation and music also work
           with a <code className="font-mono">GEMINI_API_KEY</code> and no container at all.
         </p>
-      </section>
-
-      <section className="space-y-2">
-        <h3 className="font-medium text-sm">Services</h3>
-        <ul>
-          {capabilities.services?.map((service) => (
-            <ServiceRow key={service.env_var} service={service} />
-          ))}
-        </ul>
       </section>
 
       <section className="space-y-2">

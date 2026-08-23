@@ -4,6 +4,7 @@ import { type FormEvent, useMemo, useState } from "react";
 import { DefaultService } from "@/client";
 import { SingleAssetPicker } from "@/components/AssetPicker";
 import { ConfigHint } from "@/components/ConfigHint";
+import { EnginePicker } from "@/components/EnginePicker";
 import { JobResult } from "@/components/JobResult";
 import { RepaintWaveform } from "@/components/RepaintWaveform";
 import { Button } from "@/components/ui/button";
@@ -15,6 +16,7 @@ import { useCapabilities } from "@/hooks/useCapabilities";
 import { useJobRunner } from "@/hooks/useJobRunner";
 import { useLibraryAssets } from "@/hooks/useLibrary";
 import { REMIX_AUDIO_EXTS, assetHasExtension } from "@/lib/assets";
+import { MUSIC_ENGINES, engineState } from "@/lib/engines";
 import { numberField } from "@/lib/form";
 
 export const Route = createFileRoute("/ui/music")({
@@ -52,19 +54,35 @@ function MusicTab() {
 
   // A remix is in play when the task type says so, *or* whenever a reference
   // track is picked -- style transfer is independent of task type (see
-  // /generate/music's own docstring). Either way the model list narrows to the
-  // adapters whose remix() actually does something, so a non-remix-capable
-  // model can't be chosen here; the route rejects it server-side too.
+  // /generate/music's own docstring). Either way, `remixUnsupported` below
+  // takes any adapter whose remix() does nothing off the table, so it can't
+  // be selected here; the route rejects it server-side too.
   const isRemix = taskType !== "text2music" || !!referenceAssetId;
-  const modelOptions = useMemo(
-    () =>
-      (isRemix ? capabilities?.music_remix_models : capabilities?.music_generation_models) ?? [],
-    [isRemix, capabilities],
+  const registered = capabilities?.music_generation_models ?? [];
+  // Which engines can remix is the backend's answer, not a fact repeated in
+  // lib/engines.ts: `music_remix_models` is already the subset whose remix()
+  // actually does something (Lyria3Adapter's raises NotImplementedError), so
+  // registering a third adapter needs no frontend change. Only meaningful for
+  // an engine that's registered at all -- an unregistered one is "off", and
+  // "set this up" is the more useful thing to say about it than "can't cover".
+  const remixModels = capabilities?.music_remix_models ?? [];
+  const remixUnsupported = (engine: (typeof MUSIC_ENGINES)[number]) =>
+    isRemix && registered.includes(engine.id) && !remixModels.includes(engine.id)
+      ? `Can't ${taskType === "repaint" ? "repaint" : "cover"} — it only writes new tracks`
+      : null;
+  // Two engines, checked on every render -- not worth memoizing.
+  const readyEngine = MUSIC_ENGINES.find(
+    (engine) =>
+      engineState(engine, capabilities, registered) === "ready" && !remixUnsupported(engine),
   );
-  // A dropdown of one is no choice at all -- it only appears once a second
-  // adapter is actually registered (see docs/DESIGN.md sec 3.6).
-  const showModelPicker = modelOptions.length > 1;
-  const selectedModel = modelOptions.includes(model) ? model : (modelOptions[0] ?? "");
+  const selectedModel = MUSIC_ENGINES.some(
+    (engine) =>
+      engine.id === model &&
+      engineState(engine, capabilities, registered) === "ready" &&
+      !remixUnsupported(engine),
+  )
+    ? model
+    : (readyEngine?.id ?? "");
 
   const submit = (event: FormEvent) => {
     event.preventDefault();
@@ -75,6 +93,10 @@ function MusicTab() {
     }
     if (taskType !== "text2music" && !sourceAssetId) {
       runner.fail(`task_type="${taskType}" needs a song picked to remix.`);
+      return;
+    }
+    if (!selectedModel) {
+      runner.fail("No engine can do this yet -- set one up first.");
       return;
     }
 
@@ -92,7 +114,7 @@ function MusicTab() {
           cover_strength: taskType === "cover" ? numberField(coverStrength, 1) : undefined,
           repainting_start: taskType === "repaint" ? numberField(repaintStart, 0) : undefined,
           repainting_end: taskType === "repaint" ? numberField(repaintEnd, -1) : undefined,
-          model: showModelPicker ? selectedModel : undefined,
+          model: selectedModel,
         },
       });
       return data.job_id;
@@ -147,6 +169,17 @@ function MusicTab() {
           ))}
         </Select>
       </InlineField>
+
+      <Field label="Engine" hint={isRemix ? "Only one can do covers and repaints." : undefined}>
+        <EnginePicker
+          engines={MUSIC_ENGINES}
+          registered={registered}
+          capabilities={capabilities}
+          selected={selectedModel}
+          onSelect={setModel}
+          unsupportedReason={remixUnsupported}
+        />
+      </Field>
 
       {taskType !== "text2music" && (
         <div className="space-y-2">
@@ -223,18 +256,6 @@ function MusicTab() {
           emptyText="(no songs in the library yet)"
         />
       </div>
-
-      {showModelPicker && (
-        <InlineField label="Model">
-          <Select value={selectedModel} onChange={(event) => setModel(event.target.value)}>
-            {modelOptions.map((name) => (
-              <option key={name} value={name}>
-                {name}
-              </option>
-            ))}
-          </Select>
-        </InlineField>
-      )}
 
       <Button type="submit" disabled={runner.isRunning}>
         {runner.isRunning ? "Generating…" : "Generate"}
