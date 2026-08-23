@@ -34,7 +34,12 @@ dead (nothing in `cinemagraph` or `server` ever imported torch/transformers, and
 `Dockerfile` explicitly excluded it from every build).
 
 Tests: `uv run pytest` (needs `--extra server --extra generation` synced first, for the API
-smoke tests and the Gemini-adapter unit tests). No linter/formatter configured yet.
+smoke tests and the Gemini-adapter unit tests).
+
+Linting and formatting run through `pre-commit` (`.pre-commit-config.yaml`), not by hand: ruff
+check/format and mypy + ty over `src/`, biome over `frontend/`, typos everywhere, and zizmor over
+`.github/workflows/`. The same file regenerates `frontend/src/client` whenever `src/server/`'s API
+surface changes. `uv run pre-commit install` once, or `uv run pre-commit run --all-files` to sweep.
 
 ## Running
 
@@ -433,7 +438,11 @@ fails on any clean checkout — CI and Docker builds included.
 - **`src/components/`** — the shared pieces the tabs are built from: asset pickers with inline
   previews, project assign/filter selects, save-to-library, the config hints, the repaint waveform.
 - **`tests/smoke.spec.ts`** — Playwright, against a live backend; covers the always-available tabs
-  only, since the gated ones depend on which satellites happen to be running.
+  only, since the gated ones depend on which satellites happen to be running. Runs in CI
+  (`test-frontend.yml`'s `e2e` job) against the *bundle the API serves*, not the Vite dev server,
+  so it exercises the path that actually ships. That job runs with no satellites and no
+  `GEMINI_API_KEY`, which is deliberate: the all-engines-off state is what a new contributor sees
+  first, and it's what the setup tab and the engine rows exist to explain.
 
 **How it gets served.** Two paths, and it matters which one you're looking at:
 

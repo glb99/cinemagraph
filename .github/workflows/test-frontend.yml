@@ -3,9 +3,11 @@ name: Test frontend
 on:
   push:
     branches: [main]
-    paths: ["frontend/**"]
+    # src/** as well as frontend/**: the e2e job below drives the real API, so
+    # a route change can break these tests without frontend/ being touched.
+    paths: ["frontend/**", "src/**", ".github/workflows/test-frontend.yml"]
   pull_request:
-    paths: ["frontend/**"]
+    paths: ["frontend/**", "src/**", ".github/workflows/test-frontend.yml"]
 
 permissions:
   contents: read
@@ -32,3 +34,65 @@ jobs:
       - name: Build
         run: bun run build
         working-directory: frontend
+
+  e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: Install bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
+        with:
+          python-version-file: .python-version
+
+      - name: Install frontend dependencies
+        run: bun install --frozen-lockfile
+        working-directory: frontend
+
+      - name: Install backend dependencies
+        run: uv sync --extra server --extra generation
+
+      # Only chromium: playwright.config.ts declares that one project, so
+      # installing the rest is download time nothing runs.
+      - name: Install Playwright browser
+        run: bunx playwright install --with-deps chromium
+        working-directory: frontend
+
+      # The bundle the API serves at GET /, not the Vite dev server -- these
+      # tests then cover the path that actually ships (see CLAUDE.md's
+      # "How it gets served").
+      - name: Build the bundle
+        run: bun run build
+        working-directory: frontend
+
+      - name: Start the API
+        run: |
+          uv run uvicorn server.app:app --port 8000 &
+          for _ in $(seq 1 60); do
+            curl -sf http://localhost:8000/health >/dev/null && exit 0
+            sleep 1
+          done
+          echo "API never became healthy" >&2
+          exit 1
+
+      # No satellites and no GEMINI_API_KEY here, so every optional engine
+      # reads as unconfigured. That's deliberate: it's the degraded path the
+      # setup tab and the engine rows exist to explain, and the one a new
+      # contributor sees first.
+      - name: Run Playwright
+        run: bunx playwright test
+        working-directory: frontend
+        env:
+          PLAYWRIGHT_BASE_URL: http://localhost:8000
+
+      - name: Upload Playwright report
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: playwright-report
+          path: frontend/playwright-report
