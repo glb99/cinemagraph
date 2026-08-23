@@ -1,0 +1,22 @@
+# Git already stores every text file with LF. Without this, the working tree
+# is left to each contributor's core.autocrlf: on Windows that checks files
+# out as CRLF, while the JS toolchain here (biome, openapi-ts) writes them
+# back as LF -- so files show as modified with no content change at all.
+# That churn is not cosmetic in practice: it buries real diffs, and twice in
+# one session it was mistaken for lost work.
+#
+# eol=lf, not just text=auto: this project's own tools emit LF regardless of
+# platform, and nothing tracked here needs CRLF (no .bat/.cmd/.ps1).
+* text=auto eol=lf
+
+# Declared binary so git never tries to translate them, and never offers a
+# line-diff for bytes that have no lines.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.mp4 binary
+*.mp3 binary
+*.wav binary
+*.ico binary
+*.pdf binary
