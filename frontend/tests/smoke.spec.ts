@@ -52,7 +52,9 @@ test("video tab rejects loop duration combined with gif export", async ({ page }
 test("library tab lists assets from GET /library", async ({ page }) => {
   await page.goto("/ui/library");
 
-  await expect(page.getByRole("combobox", { name: "Kind" })).toBeVisible();
+  // "Kind filter", not "Kind": UploadToLibrary has its own Kind select, so the
+  // bare name matches two comboboxes and trips strict mode.
+  await expect(page.getByRole("combobox", { name: "Kind filter" })).toBeVisible();
   // Either the first card or the empty-state line, depending on what's in the
   // library -- both mean the fetch resolved, and exactly one of them is on
   // screen in either case. Asserting on the grid *container* instead would

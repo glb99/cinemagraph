@@ -60,7 +60,11 @@ export function UploadToLibrary() {
           onChange={(event) => setFile(event.target.files?.[0] ?? null)}
         />
         <InlineField label="Kind">
-          <Select value={kind} onChange={(event) => setKind(event.target.value)}>
+          <Select
+            value={kind}
+            onChange={(event) => setKind(event.target.value)}
+            aria-label="Kind to upload"
+          >
             {KINDS.map((name) => (
               <option key={name} value={name}>
                 {name}

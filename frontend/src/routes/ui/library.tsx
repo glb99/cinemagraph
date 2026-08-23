@@ -95,7 +95,14 @@ function LibraryTab() {
 
       <div className="flex flex-wrap items-center gap-3">
         <InlineField label="Kind">
-          <Select value={kind} onChange={(event) => setKind(event.target.value)}>
+          {/* Two "Kind" selects share this page -- this filter and
+              UploadToLibrary's. Disambiguated by aria-label, same as the two
+              project selects below. */}
+          <Select
+            value={kind}
+            onChange={(event) => setKind(event.target.value)}
+            aria-label="Kind filter"
+          >
             <option value="">all</option>
             {KINDS.map((name) => (
               <option key={name} value={name}>
