@@ -15,8 +15,8 @@ import { Textarea } from "@/components/ui/textarea";
 import { useCapabilities } from "@/hooks/useCapabilities";
 import { useJobRunner } from "@/hooks/useJobRunner";
 import { useLibraryAssets } from "@/hooks/useLibrary";
-import { REMIX_AUDIO_EXTS, assetHasExtension } from "@/lib/assets";
-import { MUSIC_ENGINES, engineState } from "@/lib/engines";
+import { assetHasExtension, REMIX_AUDIO_EXTS } from "@/lib/assets";
+import { engineState, MUSIC_ENGINES } from "@/lib/engines";
 import { numberField } from "@/lib/form";
 
 export const Route = createFileRoute("/ui/music")({

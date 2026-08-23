@@ -10,7 +10,7 @@ import { Field, InlineField } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { useCapabilities } from "@/hooks/useCapabilities";
 import { useJobRunner } from "@/hooks/useJobRunner";
-import { IMAGE_ENGINES, engineState } from "@/lib/engines";
+import { engineState, IMAGE_ENGINES } from "@/lib/engines";
 import { numberField } from "@/lib/form";
 
 export const Route = createFileRoute("/ui/image")({

@@ -19,7 +19,9 @@
     "noFallthroughCasesInSwitch": true,
     "noUncheckedSideEffectImports": true,
 
-    "baseUrl": ".",
+    // No baseUrl: "paths" resolve relative to this file, which is what
+    // "./src/*" already meant. Dropped rather than kept because TypeScript 7
+    // removes the option outright, and nothing here needed it.
     "paths": {
       "@/*": ["./src/*"]
     }

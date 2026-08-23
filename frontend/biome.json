@@ -1,23 +1,61 @@
 {
-  "$schema": "https://biomejs.dev/schemas/1.9.4/schema.json",
-  "vcs": { "enabled": true, "clientKind": "git", "useIgnoreFile": true },
+  "$schema": "https://biomejs.dev/schemas/2.5.9/schema.json",
+  "vcs": {
+    "enabled": true,
+    "clientKind": "git",
+    "useIgnoreFile": true,
+    "root": ".."
+  },
   "files": {
     "ignoreUnknown": true,
-    "include": ["src/**", "tests/**", "*.ts", "*.json"],
-    "ignore": ["dist/**", "test-results/**", "playwright-report/**"]
+    "includes": [
+      "**/src/**",
+      "**/tests/**",
+      "**/*.ts",
+      "**/*.json",
+      "!**/dist",
+      "!**/test-results",
+      "!**/playwright-report"
+    ]
   },
-  "formatter": { "enabled": true, "indentStyle": "space", "indentWidth": 2, "lineWidth": 100 },
+  "formatter": {
+    "enabled": true,
+    "indentStyle": "space",
+    "indentWidth": 2,
+    "lineWidth": 100
+  },
   "linter": {
     "enabled": true,
-    "rules": { "recommended": true }
+    "rules": {
+      "recommended": true
+    }
   },
-  "javascript": { "formatter": { "quoteStyle": "double" } },
+  "javascript": {
+    "formatter": {
+      "quoteStyle": "double"
+    }
+  },
   "overrides": [
     {
-      "include": ["src/client/**", "src/routeTree.gen.ts"],
-      "linter": { "enabled": false },
-      "formatter": { "enabled": false },
-      "organizeImports": { "enabled": false }
+      "includes": ["**/src/client/**", "**/src/routeTree.gen.ts"],
+      "linter": {
+        "enabled": false
+      },
+      "formatter": {
+        "enabled": false
+      },
+      "assist": {
+        "actions": {
+          "source": {
+            "organizeImports": "off"
+          }
+        }
+      }
     }
-  ]
+  ],
+  "css": {
+    "parser": {
+      "tailwindDirectives": true
+    }
+  }
 }

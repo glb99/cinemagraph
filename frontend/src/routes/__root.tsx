@@ -1,4 +1,4 @@
-import { Link, Outlet, createRootRoute } from "@tanstack/react-router";
+import { createRootRoute, Link, Outlet } from "@tanstack/react-router";
 
 import { ActivityDrawer } from "@/components/ActivityDrawer";
 import { NavIcon } from "@/components/NavIcon";
@@ -21,6 +21,11 @@ function StatusDot({ status }: { status: TabStatus }) {
   const { className, title } = DOT[status];
   return (
     <span
+      // A bare span's implicit role is `generic`, which takes no accessible
+      // name -- so the aria-label here was being dropped by screen readers
+      // entirely. role="img" is what a coloured dot standing in for a word
+      // actually is, and it does take one.
+      role="img"
       title={title}
       aria-label={title}
       className={`ml-auto size-1.5 shrink-0 rounded-full ${className}`}

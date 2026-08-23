@@ -10,7 +10,7 @@ import { Input } from "@/components/ui/input";
 import { useCapabilities, useEffects } from "@/hooks/useCapabilities";
 import { useJobRunner } from "@/hooks/useJobRunner";
 import { useLibraryAssets } from "@/hooks/useLibrary";
-import { PHOTO_INPUT_EXTS, assetHasExtension } from "@/lib/assets";
+import { assetHasExtension, PHOTO_INPUT_EXTS } from "@/lib/assets";
 import { numberField, optionalNumberField } from "@/lib/form";
 
 export const Route = createFileRoute("/ui/")({
