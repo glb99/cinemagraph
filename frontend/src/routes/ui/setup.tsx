@@ -1,9 +1,13 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { createFileRoute } from "@tanstack/react-router";
+import { type FormEvent, useState } from "react";
 
-import type { ServiceStatus } from "@/client";
+import { type ServiceStatus, SetupService } from "@/client";
 import { Button } from "@/components/ui/button";
+import { ErrorText } from "@/components/ui/field";
+import { Input } from "@/components/ui/input";
 import { useCapabilities } from "@/hooks/useCapabilities";
+import { errorMessage } from "@/lib/api";
 import { SERVICE_START_COMMANDS, TABS, tabAvailability } from "@/lib/tabs";
 
 export const Route = createFileRoute("/ui/setup")({
@@ -24,6 +28,18 @@ const STATE_LABELS: Record<State, string> = {
   down: "Not running",
   stuck: "Stuck",
   off: "Not configured",
+};
+
+/** What each local satellite is for, alongside its live status -- the thing
+ * a bare env-var name and a dot can't say on their own. Sizes/GPU needs
+ * aren't in the API response (they're deployment facts, not runtime state),
+ * so this stays a small frontend-side table next to SERVICE_START_COMMANDS
+ * in lib/tabs.ts rather than a new field on ServiceStatus. */
+const SERVICE_BLURB: Record<string, string> = {
+  IMAGE_GENERATION_URL: "SDXL — image generation, needs a GPU",
+  ACESTEP_URL: "ACE-Step — music generation, needs a GPU",
+  SOUND_EFFECTS_URL: "Stable Audio Open — sound effects, needs a GPU and its licence accepted",
+  ML_SERVICE_URL: "CLIPSeg — mask by describing what to animate, runs on CPU",
 };
 
 function Badge({ state }: { state: State }) {
@@ -65,11 +81,14 @@ function ServiceRow({ service }: { service: ServiceStatus }) {
   const startCommand = SERVICE_START_COMMANDS[service.env_var];
 
   return (
-    <li className="flex flex-col gap-2 border-border border-b py-3 last:border-b-0">
+    <li className="flex flex-col gap-2 px-4 py-3">
       <div className="flex items-baseline justify-between gap-3">
         <span className="font-medium text-sm">{service.name}</span>
         <Badge state={state} />
       </div>
+      {SERVICE_BLURB[service.env_var] ? (
+        <p className="text-xs">{SERVICE_BLURB[service.env_var]}</p>
+      ) : null}
       <div className="text-muted-foreground text-xs">
         <code className="font-mono">{service.env_var}</code>
         {summary ? <> — {summary}</> : null}
@@ -97,6 +116,70 @@ function ServiceRow({ service }: { service: ServiceStatus }) {
   );
 }
 
+/** Stores GEMINI_API_KEY in the API's dotenv file.
+ *
+ * Write-only by design: there's no route that reads a key back, so this can
+ * report "set" but never show what was set, and it starts empty every time.
+ * The API is also explicit that a stored key applies at its *next* start --
+ * settings are read once per process (see server/config.py) -- so this says
+ * "restart" rather than pretending the change took effect. */
+function GeminiKeyForm({ isSet }: { isSet: boolean }) {
+  const [key, setKey] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [saved, setSaved] = useState<string | null>(null);
+
+  const submit = async (event: FormEvent) => {
+    event.preventDefault();
+    setError(null);
+    setSaved(null);
+    setSaving(true);
+    try {
+      const { data } = await SetupService.storeGeminiKeySetupGeminiKeyPost({
+        body: { api_key: key.trim() },
+      });
+      // Never keep the value around once it's been handed over.
+      setKey("");
+      setSaved(
+        data.is_set
+          ? `Saved to ${data.env_file}. Restart the API to start using it.`
+          : `Removed from ${data.env_file}. Restart the API to apply.`,
+      );
+    } catch (err) {
+      setError(errorMessage(err));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <form onSubmit={submit} className="mt-3 space-y-2">
+      <div className="flex flex-wrap items-center gap-2">
+        <Input
+          type="password"
+          className="min-w-56 flex-1"
+          // Browsers offer to remember anything they read as a credential; this
+          // one already lives in a file on the same machine.
+          autoComplete="off"
+          placeholder={isSet ? "Replace the stored key" : "Paste your Google AI key"}
+          aria-label="Google AI key"
+          value={key}
+          onChange={(event) => setKey(event.target.value)}
+        />
+        <Button type="submit" disabled={saving || (!key.trim() && !isSet)}>
+          {saving ? "Saving…" : "Save"}
+        </Button>
+      </div>
+      <p className="text-muted-foreground text-xs">
+        Stored in the API's <code className="font-mono">.env</code>, which is gitignored. Leave the
+        box empty and press Save to remove it.
+      </p>
+      <ErrorText>{error}</ErrorText>
+      {saved ? <p className="text-success text-xs">{saved}</p> : null}
+    </form>
+  );
+}
+
 function SetupTab() {
   const { data: capabilities, isPending, isFetching } = useCapabilities();
   const queryClient = useQueryClient();
@@ -117,6 +200,11 @@ function SetupTab() {
   }
 
   const features = TABS.filter((tab) => tab.capability);
+  const services = capabilities.services ?? [];
+  // Neither adapter has its own health check (it's a single hosted API call,
+  // not a satellite) -- registration is the only signal, and both register
+  // together off the one GEMINI_API_KEY (see app.py's registration block).
+  const geminiConfigured = (capabilities.image_generation_models ?? []).includes("gemini");
 
   return (
     <div className="space-y-8">
@@ -136,6 +224,41 @@ function SetupTab() {
             Version <code className="font-mono">{capabilities.version}</code>
           </p>
         ) : null}
+      </section>
+
+      <section className="space-y-2">
+        <h3 className="font-medium text-sm">Hosted</h3>
+        <p className="text-muted-foreground text-xs">
+          Runs on Google's hardware — no GPU needed, billed to your key.
+        </p>
+        <div className="rounded-lg border border-border p-4">
+          <div className="flex items-baseline justify-between gap-3">
+            <div>
+              <p className="font-medium text-sm">Google AI key</p>
+              <p className="text-xs">Enables Gemini for images and Lyria 3 for music.</p>
+              <p className="mt-1 text-muted-foreground text-xs">
+                <code className="font-mono">GEMINI_API_KEY</code>
+              </p>
+            </div>
+            <Badge state={geminiConfigured ? "on" : "off"} />
+          </div>
+          <GeminiKeyForm isSet={geminiConfigured} />
+        </div>
+      </section>
+
+      <section className="space-y-2">
+        <h3 className="font-medium text-sm">On this machine</h3>
+        <p className="text-muted-foreground text-xs">
+          Free and private, but each one downloads a model and wants a GPU — an 8&nbsp;GB card means
+          image generation and the audio models take turns rather than running together (see the
+          justfile's <code className="font-mono">gpu-image</code>/
+          <code className="font-mono">gpu-audio</code> recipes).
+        </p>
+        <ul className="divide-y divide-border rounded-lg border border-border">
+          {services.map((service) => (
+            <ServiceRow key={service.env_var} service={service} />
+          ))}
+        </ul>
       </section>
 
       <section className="space-y-2">
@@ -159,15 +282,6 @@ function SetupTab() {
           A feature can be on through more than one backend — image generation and music also work
           with a <code className="font-mono">GEMINI_API_KEY</code> and no container at all.
         </p>
-      </section>
-
-      <section className="space-y-2">
-        <h3 className="font-medium text-sm">Services</h3>
-        <ul>
-          {capabilities.services?.map((service) => (
-            <ServiceRow key={service.env_var} service={service} />
-          ))}
-        </ul>
       </section>
 
       <section className="space-y-2">

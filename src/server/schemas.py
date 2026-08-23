@@ -50,13 +50,13 @@ class CapabilitiesResponse(BaseModel):
     image_generation_models: list[str] = []
     music_generation_models: list[str] = []
     music_remix_models: list[str] = []
-    # Purely additive: distinguishes "not configured at all" (nothing to
-    # hint about -- the tab correctly stays hidden) from "configured but not
+    # Distinguishes "not configured at all" from "configured but not
     # currently reachable" (the env var/key is set, but e.g. the container
-    # just isn't running right now) -- lets the web UI show a helpful hint
-    # instead of the tab silently vanishing. Keyed by the same names as the
-    # bool fields above. See docs/DESIGN.md's "configured-but-unreachable
-    # UI hint" note.
+    # just isn't running right now). The UI shows a different hint for each
+    # and a different status dot; it no longer hides the tab in either case,
+    # which is what this field originally existed to avoid. Keyed by the same
+    # names as the bool fields above. See docs/DESIGN.md's
+    # "configured-but-unreachable UI hint" note.
     configured: dict[str, bool] = {}
     # Running version, so a bug report can name one. Empty when the package
     # metadata isn't readable (e.g. running from a source tree that was never
@@ -78,3 +78,20 @@ class AssetResponse(BaseModel):
     # docstring) -- excluded from `tags` above once present here, so it
     # isn't shown twice.
     project: str | None = None
+
+
+class GeminiKeyRequest(BaseModel):
+    """An empty api_key removes the assignment, so a key set here can be
+    taken back out from the same place it was added."""
+
+    api_key: str
+
+
+class SetupWriteResponse(BaseModel):
+    env_file: str
+    is_set: bool
+    # Always true. Named rather than implied because the whole contract of
+    # this route is "stored, not yet in effect": get_settings() is cached for
+    # the process lifetime by design, so the running API keeps whatever value
+    # it started with (see config.py and env_file.py).
+    restart_required: bool = True

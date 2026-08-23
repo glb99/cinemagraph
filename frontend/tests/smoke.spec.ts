@@ -1,10 +1,10 @@
 import { expect, test } from "@playwright/test";
 
+// Every feature is listed in the rail whatever is running (availability is a
+// dot, not the row's absence), so gated labels are safe to assert on now.
 // These run against a live backend -- `uv run uvicorn server.app:app --reload`
 // (or the docker-compose `core` service) reachable through Vite's dev-server
-// proxy. They cover the always-available tabs only: Music/Sound effects/Image
-// are hidden unless their optional satellite is configured, so asserting on
-// them would make the suite depend on which containers happen to be up.
+// proxy.
 
 test("photo tab renders the effect list and the always-available nav", async ({ page }) => {
   await page.goto("/");
@@ -13,7 +13,7 @@ test("photo tab renders the effect list and the always-available nav", async ({ 
   await expect(page).toHaveURL(/\/ui$/);
 
   await expect(page.getByRole("heading", { name: "cinemagraph" })).toBeVisible();
-  for (const tab of ["Photo", "Video", "Assemble", "Library"]) {
+  for (const tab of ["From photo", "From video", "Timeline", "Library"]) {
     await expect(page.getByRole("link", { name: tab, exact: true })).toBeVisible();
   }
 
@@ -52,7 +52,9 @@ test("video tab rejects loop duration combined with gif export", async ({ page }
 test("library tab lists assets from GET /library", async ({ page }) => {
   await page.goto("/ui/library");
 
-  await expect(page.getByRole("combobox", { name: "Kind" })).toBeVisible();
+  // "Kind filter", not "Kind": UploadToLibrary has its own Kind select, so the
+  // bare name matches two comboboxes and trips strict mode.
+  await expect(page.getByRole("combobox", { name: "Kind filter" })).toBeVisible();
   // Either the first card or the empty-state line, depending on what's in the
   // library -- both mean the fetch resolved, and exactly one of them is on
   // screen in either case. Asserting on the grid *container* instead would
@@ -72,7 +74,7 @@ test("setup tab reports every optional service and how to enable it", async ({ p
 
   // Always-available, unlike the gated tabs -- the whole point is that it
   // works when nothing else is configured, so it's safe to assert on here.
-  await expect(page.getByRole("link", { name: "Setup", exact: true })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Settings", exact: true })).toBeVisible();
 
   // Every satellite is listed whether or not it's configured, with the env var
   // that turns it on. Which *state* each is in depends on what's running, so
@@ -102,4 +104,36 @@ test("setup tab reports every optional service and how to enable it", async ({ p
   // which is the reason this tab exists as more than a static help page.
   await page.getByRole("button", { name: "Recheck" }).click();
   await expect(page.getByRole("button", { name: "Recheck" })).toBeEnabled({ timeout: 10_000 });
+});
+
+test("a render survives navigating away from the tab that started it", async ({ page }) => {
+  // The regression this guards: job state used to live in the submitting
+  // component, so unmounting it cancelled the poll and dropped the job id.
+  // The render carried on server-side and its file stayed downloadable, but
+  // the UI had no way back to it.
+  await page.goto("/ui");
+
+  await page.getByLabel("Photo").setInputFiles("../photo.jpg");
+  await page.getByRole("checkbox", { name: "smoke", exact: true }).check();
+  // A handful of frames is enough to prove the point and keeps CI quick.
+  // exact: "Duration (s)" is also a substring of "Loop duration (s)". Distinct
+  // labels, unlike the two Kind selects -- so this is the locator's problem to
+  // fix, not the page's.
+  await page.getByLabel("Duration (s)", { exact: true }).fill("1");
+  await page.getByLabel("FPS", { exact: true }).fill("5");
+  await page.getByRole("button", { name: "Render" }).click();
+
+  // Leave immediately -- under the old implementation this is the point of no
+  // return, before the job could possibly have finished.
+  await expect(page.getByTestId("job-status")).toBeVisible();
+  await page.getByRole("link", { name: "Library", exact: true }).click();
+  await expect(page).toHaveURL(/\/ui\/library$/);
+
+  // The drawer is the whole reason a job is watchable from elsewhere.
+  await page.getByRole("button", { name: "Activity" }).click();
+  await expect(page.getByRole("complementary", { name: "Activity" })).toContainText("From photo");
+
+  // Back on the tab, the finished render is waiting rather than an empty form.
+  await page.getByRole("link", { name: "From photo", exact: true }).click();
+  await expect(page.getByTestId("job-preview")).toBeVisible({ timeout: 60_000 });
 });

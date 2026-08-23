@@ -1,15 +1,16 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { type FormEvent, useState } from "react";
 
-import { DefaultService } from "@/client";
+import { GenerationService } from "@/client";
 import { ConfigHint } from "@/components/ConfigHint";
+import { EnginePicker } from "@/components/EnginePicker";
 import { JobResult } from "@/components/JobResult";
 import { Button } from "@/components/ui/button";
 import { Field, InlineField } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
-import { Select } from "@/components/ui/select";
 import { useCapabilities } from "@/hooks/useCapabilities";
 import { useJobRunner } from "@/hooks/useJobRunner";
+import { IMAGE_ENGINES, engineState } from "@/lib/engines";
 import { numberField } from "@/lib/form";
 
 export const Route = createFileRoute("/ui/image")({
@@ -25,11 +26,15 @@ function ImageTab() {
   const [strength, setStrength] = useState("0.6");
   const [model, setModel] = useState("");
 
-  const modelOptions = capabilities?.image_generation_models ?? [];
-  // Same rule as the music tab: the picker only appears once a second adapter
-  // is registered, since a choice of one is no choice.
-  const showModelPicker = modelOptions.length > 1;
-  const selectedModel = modelOptions.includes(model) ? model : (modelOptions[0] ?? "");
+  const registered = capabilities?.image_generation_models ?? [];
+  const readyEngine = IMAGE_ENGINES.find(
+    (engine) => engineState(engine, capabilities, registered) === "ready",
+  );
+  const selectedModel = IMAGE_ENGINES.some(
+    (engine) => engine.id === model && engineState(engine, capabilities, registered) === "ready",
+  )
+    ? model
+    : (readyEngine?.id ?? "");
 
   const submit = (event: FormEvent) => {
     event.preventDefault();
@@ -37,15 +42,19 @@ function ImageTab() {
       runner.fail("Prompt is required.");
       return;
     }
+    if (!selectedModel) {
+      runner.fail("No image engine is ready -- set one up first.");
+      return;
+    }
     runner.run(async () => {
-      const { data } = await DefaultService.generateImageGenerateImagePost({
+      const { data } = await GenerationService.generateImageGenerateImagePost({
         body: {
           prompt: prompt.trim(),
           // strength only means anything alongside a reference image (img2img);
           // sent together or not at all, matching the route's own contract.
           reference_image: referenceImage ?? undefined,
           strength: referenceImage ? numberField(strength, 0.6) : undefined,
-          model: showModelPicker ? selectedModel : undefined,
+          model: selectedModel,
         },
       });
       return data.job_id;
@@ -85,17 +94,15 @@ function ImageTab() {
         />
       </InlineField>
 
-      {showModelPicker && (
-        <InlineField label="Model">
-          <Select value={selectedModel} onChange={(event) => setModel(event.target.value)}>
-            {modelOptions.map((name) => (
-              <option key={name} value={name}>
-                {name}
-              </option>
-            ))}
-          </Select>
-        </InlineField>
-      )}
+      <Field label="Engine">
+        <EnginePicker
+          engines={IMAGE_ENGINES}
+          registered={registered}
+          capabilities={capabilities}
+          selected={selectedModel}
+          onSelect={setModel}
+        />
+      </Field>
 
       <Button type="submit" disabled={runner.isRunning}>
         {runner.isRunning ? "Generating…" : "Generate"}

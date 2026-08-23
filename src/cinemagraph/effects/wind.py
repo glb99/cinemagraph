@@ -41,7 +41,7 @@ def _precompute(ctx: EffectContext) -> dict:
 def _apply(base, pc, t):
     disp = np.zeros(pc["yy"].shape, dtype=np.float32)
     for freq, wgt, cyc, ph in zip(
-        pc["spatial_freqs"], pc["weights"], pc["cycles"], pc["phases"]
+        pc["spatial_freqs"], pc["weights"], pc["cycles"], pc["phases"], strict=True
     ):
         disp += wgt * np.sin(
             2 * np.pi * cyc * t + pc["yy"] * freq / pc["h"] * 2 * np.pi + ph

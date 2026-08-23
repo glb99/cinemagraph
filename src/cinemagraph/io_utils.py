@@ -45,7 +45,7 @@ def read_image(image_path: str) -> np.ndarray:
 
 def write_video(
     frames: list[np.ndarray],
-    out_path: str,
+    out_path: str | Path,
     fps: float,
     loop_duration: float | None = None,
 ) -> None:
@@ -100,14 +100,15 @@ def write_video(
             writer.close()
     else:
         h, w = frames[0].shape[:2]
-        fourcc = cv2.VideoWriter_fourcc(*"VP80")
-        writer = cv2.VideoWriter(str(out_path), fourcc, fps, (w, h))
-        if not writer.isOpened():
+        # Present at runtime; absent from opencv's bundled stubs.
+        fourcc = cv2.VideoWriter_fourcc(*"VP80")  # type: ignore[attr-defined]  # ty: ignore[unresolved-attribute]
+        cv_writer = cv2.VideoWriter(str(out_path), fourcc, fps, (w, h))
+        if not cv_writer.isOpened():
             raise RuntimeError(f"Could not open video writer for: {out_path}")
         with click.progressbar(range(total_frames), label="Writing video") as bar:
             for i in bar:
-                writer.write(frames[i % len(frames)])
-        writer.release()
+                cv_writer.write(frames[i % len(frames)])
+        cv_writer.release()
 
 
 def write_gif(frames: list[np.ndarray], out_path: str, fps: float) -> None:

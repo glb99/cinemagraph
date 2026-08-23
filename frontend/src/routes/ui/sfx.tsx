@@ -1,7 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { type FormEvent, useState } from "react";
 
-import { DefaultService } from "@/client";
+import { GenerationService } from "@/client";
 import { ConfigHint } from "@/components/ConfigHint";
 import { JobResult } from "@/components/JobResult";
 import { Button } from "@/components/ui/button";
@@ -26,7 +26,7 @@ function SoundEffectTab() {
       return;
     }
     runner.run(async () => {
-      const { data } = await DefaultService.generateSoundEffectGenerateSoundEffectPost({
+      const { data } = await GenerationService.generateSoundEffectGenerateSoundEffectPost({
         body: { prompt: prompt.trim(), duration: numberField(duration, 10) },
       });
       return data.job_id;

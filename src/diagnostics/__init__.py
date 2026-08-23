@@ -183,7 +183,7 @@ def _http_json(url: str) -> tuple[bool, str]:
     """GET a URL, returning (reached, body-or-error). Body is truncated.
 
     Deliberately not parsed as JSON: this only ever feeds a human-readable
-    detail string, and a service answering with something unparseable is
+    detail string, and a service answering with something unparsable is
     itself the useful signal.
     """
     ok, code, body = _http_probe(url)

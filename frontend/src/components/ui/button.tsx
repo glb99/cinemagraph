@@ -8,15 +8,25 @@ const buttonVariants = cva(
   "inline-flex items-center justify-center gap-2 rounded-md text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:pointer-events-none disabled:opacity-50",
   {
     variants: {
+      // Soft tint: colour arrives as a wash plus a hairline ring rather than a
+      // solid slab. On a screen whose whole point is showing generated images,
+      // a saturated block of primary sitting next to the artwork competes with
+      // it; a wash reads as clearly actionable without winning that fight.
+      // `ring-inset` rather than `border` so the ring costs no layout box and
+      // buttons keep lining up with inputs of the same height.
       variant: {
-        default: "bg-primary text-primary-foreground hover:bg-primary/90",
-        secondary: "bg-secondary text-secondary-foreground hover:bg-secondary/80",
+        default: "bg-primary/15 text-primary ring-1 ring-primary/45 ring-inset hover:bg-primary/25",
+        secondary: "bg-foreground/5 text-foreground hover:bg-foreground/10",
         outline: "border border-border bg-transparent hover:bg-accent hover:text-accent-foreground",
         ghost: "hover:bg-accent hover:text-accent-foreground",
-        destructive: "bg-destructive text-destructive-foreground hover:bg-destructive/90",
-        // The "keep this one" action, deliberately distinct from every other
-        // button on the page -- see SaveToLibrary.
-        success: "bg-success text-success-foreground hover:bg-success/90",
+        destructive:
+          "bg-destructive/15 text-destructive ring-1 ring-destructive/45 ring-inset hover:bg-destructive/25",
+        // The "keep this one" action. Still deliberately distinct from every
+        // other button on the page -- green wash against primary wash, rather
+        // than green slab against primary slab. It's the only control whose
+        // absence loses work, so the contrast between them has to survive any
+        // restyle. See SaveToLibrary.
+        success: "bg-success/18 text-success ring-1 ring-success/50 ring-inset hover:bg-success/28",
       },
       size: {
         default: "h-10 px-5 py-2",

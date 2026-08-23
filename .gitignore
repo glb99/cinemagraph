@@ -26,3 +26,31 @@ frontend/playwright-report/
 frontend/src/routeTree.gen.ts
 frontend/openapi.json
 frontend/*.tsbuildinfo
+
+# tool caches -- .pytest_cache is above; these two were simply missed
+.mypy_cache/
+.ruff_cache/
+
+# editor / OS noise. Ignored rather than committed because nothing here is
+# shared config today (.vscode/ is empty); a settings file worth sharing can
+# be un-ignored deliberately.
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Claude Code local state. settings.local.json is per-machine permissions,
+# worktrees/ and the lock are runtime scratch, and skills/ holds *installed*
+# packages restorable via library-skills -- vendoring third-party skill text
+# into an Apache-2.0 repo isn't worth it. A project-authored skill meant for
+# contributors would need its own negation here. CLAUDE.md stays tracked.
+.claude/settings.local.json
+.claude/scheduled_tasks.lock
+.claude/worktrees/
+.claude/skills/
+
+# UI redesign working files: the /design canvas (.dc.html + canvas.json) and
+# the 2.4 MB self-contained page published from it. Regenerable from the
+# canvas, and the durable record of a design decision belongs in docs/ per
+# this repo's own convention, not in a tool's scratch directory.
+design/
+diagram.excalidraw

@@ -15,13 +15,13 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from enum import Enum
+from enum import StrEnum
 from typing import Any
 
 import numpy as np
 
 
-class EffectFamily(str, Enum):
+class EffectFamily(StrEnum):
     TONE = "tone"
     PARTICLE = "particle"
 

@@ -1,7 +1,7 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 
-import { DefaultService } from "@/client";
+import { JobsService } from "@/client";
 import { NEW_PROJECT_VALUE, ProjectAssignSelect, resolveProject } from "@/components/ProjectSelect";
 import { Button } from "@/components/ui/button";
 import { ErrorText } from "@/components/ui/field";
@@ -21,7 +21,7 @@ export function SaveToLibrary({ jobId }: { jobId: string }) {
   const save = useMutation({
     mutationFn: async () => {
       const chosen = resolveProject(project, newProjectName);
-      await DefaultService.saveJobJobsJobIdSavePost({
+      await JobsService.saveJobJobsJobIdSavePost({
         path: { job_id: jobId },
         body: chosen ? { project: chosen } : {},
       });

@@ -1,9 +1,7 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useRouterState } from "@tanstack/react-router";
+import { useCallback, useRef } from "react";
 
-import { DefaultService } from "@/client";
-import { errorMessage, jobFileUrl } from "@/lib/api";
-
-const POLL_INTERVAL_MS = 1500;
+import { isTerminal, useJobs } from "@/hooks/useJobs";
 
 export interface JobRunnerState {
   jobId: string | null;
@@ -16,91 +14,55 @@ export interface JobRunnerState {
   isRunning: boolean;
 }
 
-const IDLE: JobRunnerState = {
-  jobId: null,
-  status: null,
-  error: null,
-  fileUrl: null,
-  canSave: false,
-  isRunning: false,
-};
-
-const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
-
 /** The one implementation of "submit, then poll until done" -- every
  * `/render/*`, `/generate/*` and `/assemble` route returns the same `{job_id}`
  * shape and is checked through the same `GET /jobs/{id}` contract, so all six
  * job-producing tabs share this rather than repeating a polling loop each.
  *
- * Written as a plain async loop rather than a react-query `refetchInterval`
- * because the lifecycle here is a one-shot submit-then-watch, not a cache
- * entry: there's nothing to share between components, nothing to refetch on
- * remount, and the terminal states (`done`/`error`) are read once and kept.
+ * The loop itself now lives in `JobsProvider`, above the router, so a job
+ * outlives the tab that started it (see that module for why). What's left here
+ * is the per-tab view of it: this hook's shape is unchanged, which is why the
+ * six tabs and `JobResult` needed no edits.
  *
  * `run` takes the submit call itself, so each tab keeps its own typed SDK call
- * and body construction and only the polling is shared. */
+ * and body construction and only the polling is shared.
+ *
+ * The owning route is read from the router rather than passed in by each tab:
+ * the router already knows it, a hand-written copy would be one more thing to
+ * keep in step with `src/routes/`, and `lib/tabs.ts` can turn it straight into
+ * the label the activity drawer shows. Captured on first render, since the
+ * pathname changes as soon as the user navigates away and the job's owner
+ * must not change with it. */
 export function useJobRunner() {
-  const [state, setState] = useState<JobRunnerState>(IDLE);
-  const cancelled = useRef(false);
+  const pathname = useRouterState({ select: (state) => state.location.pathname });
+  const source = useRef(pathname).current;
+  const jobs = useJobs();
 
-  useEffect(() => {
-    // Reset on mount, not just on unmount: under StrictMode React mounts,
-    // unmounts and remounts the same instance (refs included), so a cleanup-only
-    // version of this would leave `cancelled` stuck true for the real mount and
-    // silently swallow every job update in development.
-    cancelled.current = false;
-    return () => {
-      cancelled.current = true;
-    };
-  }, []);
+  const record = jobs.currentFor(source);
+  const failure = jobs.failureFor(source);
 
-  const run = useCallback(async (submit: () => Promise<string>) => {
-    setState({ ...IDLE, isRunning: true });
-    try {
-      const jobId = await submit();
-      if (cancelled.current) return;
-      setState((prev) => ({ ...prev, jobId, status: `Job ${jobId}: submitted` }));
-
-      for (;;) {
-        const { data: job } = await DefaultService.jobStatusJobsJobIdGet({
-          path: { job_id: jobId },
-        });
-        if (cancelled.current) return;
-        setState((prev) => ({ ...prev, status: `Job ${jobId}: ${job.status}` }));
-
-        if (job.status === "done") {
-          setState((prev) => ({
-            ...prev,
-            isRunning: false,
-            fileUrl: jobFileUrl(jobId),
-            canSave: !!job.can_save,
-          }));
-          return;
-        }
-        if (job.status === "error") {
-          setState((prev) => ({
-            ...prev,
-            isRunning: false,
-            error: job.error ?? "Job failed without an error message.",
-          }));
-          return;
-        }
-        await delay(POLL_INTERVAL_MS);
-      }
-    } catch (err) {
-      if (cancelled.current) return;
-      setState((prev) => ({ ...prev, isRunning: false, error: errorMessage(err) }));
-    }
-  }, []);
+  const run = useCallback(
+    (submit: () => Promise<string>) => jobs.start(source, submit),
+    [jobs, source],
+  );
 
   /** Client-side validation failures land in the same place a job error would,
    * so a tab has exactly one error surface (the old UI's `buildForm()` returning
    * null after writing to `errorEl` did the same thing). */
-  const fail = useCallback((message: string) => {
-    setState({ ...IDLE, error: message });
-  }, []);
+  const fail = useCallback((message: string) => jobs.fail(source, message), [jobs, source]);
 
-  return { ...state, run, fail };
+  const status = record ? (record.id ? `Job ${record.id}: ${record.phase}` : "Submitting…") : null;
+
+  return {
+    jobId: record?.id ?? null,
+    status,
+    error: failure ?? record?.error ?? null,
+    fileUrl: record?.fileUrl ?? null,
+    canSave: record?.canSave ?? false,
+    isRunning: !!record && !isTerminal(record.phase),
+    run,
+    fail,
+  };
 }
 
 export type JobRunner = ReturnType<typeof useJobRunner>;

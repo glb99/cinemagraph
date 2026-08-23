@@ -170,7 +170,6 @@ async def test_music_job_downloads_audio_and_registers_in_library(
     await service.run_music_job(
         job.id,
         output,
-        settings=acestep_settings,
         prompt="p",
         lyrics="",
         duration=10.0,
@@ -215,7 +214,6 @@ async def test_music_job_provenance_records_submitted_lyrics_not_backend_marker(
     await service.run_music_job(
         job.id,
         output,
-        settings=acestep_settings,
         prompt="p",
         lyrics="some lyrics I typed",
         duration=10.0,
@@ -243,7 +241,6 @@ async def test_music_job_reports_generator_error(tmp_path, acestep_settings):
     await service.run_music_job(
         job.id,
         tmp_path / "out.mp3",
-        settings=acestep_settings,
         prompt="p",
         lyrics="",
         duration=10.0,
@@ -282,7 +279,6 @@ async def test_music_job_routes_to_remix_for_cover_task_type(
     await service.run_music_job(
         job.id,
         output,
-        settings=acestep_settings,
         prompt="jazzier version",
         lyrics="",
         duration=30.0,
@@ -335,7 +331,6 @@ async def test_music_job_routes_to_remix_for_text2music_with_reference_audio(
     await service.run_music_job(
         job.id,
         output,
-        settings=acestep_settings,
         prompt="a dreamy synth piece",
         lyrics="",
         duration=30.0,
@@ -371,7 +366,6 @@ async def test_music_job_uses_generate_for_plain_text2music(tmp_path, acestep_se
     await service.run_music_job(
         job.id,
         output,
-        settings=acestep_settings,
         prompt="p",
         lyrics="",
         duration=10.0,
@@ -424,7 +418,6 @@ async def test_image_job_downloads_image_and_registers_in_library(tmp_path):
     await service.run_image_job(
         job.id,
         output,
-        settings=Settings(image_generation_url="http://img.invalid"),
         prompt="a lofi bedroom at sunset",
         library_kind="generated",
         image_generator=FakeGenerator(),
@@ -463,7 +456,6 @@ async def test_image_job_with_reference_image_passes_bytes_and_strength_to_gener
     await service.run_image_job(
         job.id,
         output,
-        settings=Settings(image_generation_url="http://img.invalid"),
         prompt="a lofi bedroom at sunset",
         reference_image_path=reference,
         strength=0.4,
@@ -510,7 +502,6 @@ async def test_image_job_resolves_generator_from_registry_by_model_when_none_inj
         await service.run_image_job(
             job.id,
             output,
-            settings=Settings(),
             prompt="a lofi bedroom at sunset",
             model="test-registry-fake",
             library_kind="generated",
@@ -537,7 +528,6 @@ async def test_image_job_errors_cleanly_for_unregistered_model(tmp_path):
     await service.run_image_job(
         job.id,
         output,
-        settings=Settings(),
         prompt="a lofi bedroom at sunset",
         model="does-not-exist",
         library_kind="generated",

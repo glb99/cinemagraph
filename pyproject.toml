@@ -97,6 +97,17 @@ select = ["E", "W", "F", "I", "B", "C4", "UP", "ARG001", "T201"]
 # app-code-wide rewrite as a side effect of adopting a linter.
 ignore = ["E501", "B008", "W191", "B904"]
 
+[tool.ruff.lint.per-file-ignores]
+# T201: these are command-line scripts whose entire output *is* prints. The
+# rule earns its place in src/, where a stray print is a debugging leftover
+# that should have been a log line or a click.echo.
+"scripts/*" = ["T201"]
+# ARG001: a test double has to accept the arguments of the thing it stands in
+# for, whether or not that particular test looks at them -- the unused ones
+# are what prove the call site passed them. Renaming each to `_`-prefixed
+# would be worse: several are pytest fixtures, which are matched *by name*.
+"tests/*" = ["ARG001"]
+
 [tool.mypy]
 # Matches the interpreter actually used to run mypy (.python-version), not
 # requires-python's floor (3.11) -- numpy's bundled stubs use 3.12+ syntax
@@ -106,6 +117,18 @@ python_version = "3.13"
 warn_unused_ignores = true
 # Non-strict to start: no existing type-hint baseline to assume `strict = true`
 # is reachable in one pass. Revisit once `uv run mypy src`'s real error count is known.
+# Without this, every `Settings()` call reads as "missing named argument" for
+# each field -- mypy can't see that a BaseSettings field with a default is
+# optional, so it treats the generated __init__ as all-required.
+plugins = ["pydantic.mypy"]
+
+# Third-party packages that ship no stubs and no py.typed marker. Listing them
+# is the documented way to say "this import is fine, we just can't check it",
+# as opposed to blanket ignore_missing_imports, which would also hide a
+# genuinely misspelled import of a package we *do* have types for.
+[[tool.mypy.overrides]]
+module = ["imageio_ffmpeg", "imageio.*"]
+ignore_missing_imports = true
 
 [tool.ty.terminal]
 error-on-warning = true

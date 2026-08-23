@@ -12,7 +12,13 @@ repos:
       - id: check-yaml
         args: ["--unsafe"]
       - id: end-of-file-fixer
+        exclude: &generated ^frontend/src/(client/|routeTree\.gen\.ts)
       - id: trailing-whitespace
+        # The generated OpenAPI client is written by openapi-ts and rewritten
+        # from scratch whenever src/server changes. Trimming it here just
+        # means these two hooks and generate-frontend-sdk undo each other on
+        # every run, which is why --all-files could never come out clean.
+        exclude: *generated
 
   - repo: https://github.com/crate-ci/typos
     rev: v1.28.4

@@ -55,7 +55,7 @@ export type Body_assemble_assemble_post = {
     /**
      * Sound Effect Asset Ids
      */
-    sound_effect_asset_ids?: Array<string>;
+    sound_effect_asset_ids?: Array<string> | null;
     /**
      * Video Crossfade Duration
      */
@@ -231,6 +231,10 @@ export type Body_rename_project_projects_rename_post = {
  */
 export type Body_render_photo_render_photo_post = {
     /**
+     * Effect
+     */
+    effect: Array<string>;
+    /**
      * Input File
      */
     input_file?: Blob | File | null;
@@ -238,10 +242,6 @@ export type Body_render_photo_render_photo_post = {
      * Input Asset Id
      */
     input_asset_id?: string | null;
-    /**
-     * Effect
-     */
-    effect: Array<string>;
     /**
      * Mask
      */
@@ -253,7 +253,7 @@ export type Body_render_photo_render_photo_post = {
     /**
      * Unmasked Effects
      */
-    unmasked_effects?: Array<string>;
+    unmasked_effects?: Array<string> | null;
     /**
      * Duration
      */
@@ -489,6 +489,19 @@ export type CapabilitiesResponse = {
 };
 
 /**
+ * GeminiKeyRequest
+ *
+ * An empty api_key removes the assignment, so a key set here can be
+ * taken back out from the same place it was added.
+ */
+export type GeminiKeyRequest = {
+    /**
+     * Api Key
+     */
+    api_key: string;
+};
+
+/**
  * HTTPValidationError
  */
 export type HTTPValidationError = {
@@ -575,6 +588,24 @@ export type ServiceStatus = {
 };
 
 /**
+ * SetupWriteResponse
+ */
+export type SetupWriteResponse = {
+    /**
+     * Env File
+     */
+    env_file: string;
+    /**
+     * Is Set
+     */
+    is_set: boolean;
+    /**
+     * Restart Required
+     */
+    restart_required?: boolean;
+};
+
+/**
  * ValidationError
  */
 export type ValidationError = {
@@ -600,50 +631,6 @@ export type ValidationError = {
     ctx?: {
         [key: string]: unknown;
     };
-};
-
-export type healthHealthGetData = {
-    body?: never;
-    path?: never;
-    query?: never;
-    url: '/health';
-};
-
-export type healthHealthGetResponses = {
-    /**
-     * Successful Response
-     */
-    200: unknown;
-};
-
-export type capabilitiesCapabilitiesGetData = {
-    body?: never;
-    path?: never;
-    query?: never;
-    url: '/capabilities';
-};
-
-export type capabilitiesCapabilitiesGetResponses = {
-    /**
-     * Successful Response
-     */
-    200: CapabilitiesResponse;
-};
-
-export type capabilitiesCapabilitiesGetResponse = capabilitiesCapabilitiesGetResponses[keyof capabilitiesCapabilitiesGetResponses];
-
-export type listEffectsEffectsGetData = {
-    body?: never;
-    path?: never;
-    query?: never;
-    url: '/effects';
-};
-
-export type listEffectsEffectsGetResponses = {
-    /**
-     * Successful Response
-     */
-    200: unknown;
 };
 
 export type renderVideoRenderVideoPostData = {
@@ -904,75 +891,6 @@ export type setAssetProjectLibraryAssetIdProjectPostResponses = {
 
 export type setAssetProjectLibraryAssetIdProjectPostResponse = setAssetProjectLibraryAssetIdProjectPostResponses[keyof setAssetProjectLibraryAssetIdProjectPostResponses];
 
-export type listProjectsProjectsGetData = {
-    body?: never;
-    path?: never;
-    query?: never;
-    url: '/projects';
-};
-
-export type listProjectsProjectsGetResponses = {
-    /**
-     * Response List Projects Projects Get
-     *
-     * Successful Response
-     */
-    200: Array<string>;
-};
-
-export type listProjectsProjectsGetResponse = listProjectsProjectsGetResponses[keyof listProjectsProjectsGetResponses];
-
-export type renameProjectProjectsRenamePostData = {
-    body: Body_rename_project_projects_rename_post;
-    path?: never;
-    query?: never;
-    url: '/projects/rename';
-};
-
-export type renameProjectProjectsRenamePostErrors = {
-    /**
-     * Validation Error
-     */
-    422: HTTPValidationError;
-};
-
-export type renameProjectProjectsRenamePostError = renameProjectProjectsRenamePostErrors[keyof renameProjectProjectsRenamePostErrors];
-
-export type renameProjectProjectsRenamePostResponses = {
-    /**
-     * Successful Response
-     */
-    200: unknown;
-};
-
-export type deleteProjectProjectsNameDeleteData = {
-    body?: never;
-    path: {
-        /**
-         * Name
-         */
-        name: string;
-    };
-    query?: never;
-    url: '/projects/{name}';
-};
-
-export type deleteProjectProjectsNameDeleteErrors = {
-    /**
-     * Validation Error
-     */
-    422: HTTPValidationError;
-};
-
-export type deleteProjectProjectsNameDeleteError = deleteProjectProjectsNameDeleteErrors[keyof deleteProjectProjectsNameDeleteErrors];
-
-export type deleteProjectProjectsNameDeleteResponses = {
-    /**
-     * Successful Response
-     */
-    200: unknown;
-};
-
 export type libraryRemoveLibraryAssetIdDeleteData = {
     body?: never;
     path: {
@@ -996,10 +914,16 @@ export type libraryRemoveLibraryAssetIdDeleteError = libraryRemoveLibraryAssetId
 
 export type libraryRemoveLibraryAssetIdDeleteResponses = {
     /**
+     * Response Library Remove Library  Asset Id  Delete
+     *
      * Successful Response
      */
-    200: unknown;
+    200: {
+        [key: string]: string;
+    };
 };
+
+export type libraryRemoveLibraryAssetIdDeleteResponse = libraryRemoveLibraryAssetIdDeleteResponses[keyof libraryRemoveLibraryAssetIdDeleteResponses];
 
 export type libraryGetLibraryAssetIdGetData = {
     body?: never;
@@ -1058,6 +982,87 @@ export type libraryFileLibraryAssetIdFileGetResponses = {
      */
     200: unknown;
 };
+
+export type listProjectsProjectsGetData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/projects';
+};
+
+export type listProjectsProjectsGetResponses = {
+    /**
+     * Response List Projects Projects Get
+     *
+     * Successful Response
+     */
+    200: Array<string>;
+};
+
+export type listProjectsProjectsGetResponse = listProjectsProjectsGetResponses[keyof listProjectsProjectsGetResponses];
+
+export type renameProjectProjectsRenamePostData = {
+    body: Body_rename_project_projects_rename_post;
+    path?: never;
+    query?: never;
+    url: '/projects/rename';
+};
+
+export type renameProjectProjectsRenamePostErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type renameProjectProjectsRenamePostError = renameProjectProjectsRenamePostErrors[keyof renameProjectProjectsRenamePostErrors];
+
+export type renameProjectProjectsRenamePostResponses = {
+    /**
+     * Response Rename Project Projects Rename Post
+     *
+     * Successful Response
+     */
+    200: {
+        [key: string]: string | number;
+    };
+};
+
+export type renameProjectProjectsRenamePostResponse = renameProjectProjectsRenamePostResponses[keyof renameProjectProjectsRenamePostResponses];
+
+export type deleteProjectProjectsNameDeleteData = {
+    body?: never;
+    path: {
+        /**
+         * Name
+         */
+        name: string;
+    };
+    query?: never;
+    url: '/projects/{name}';
+};
+
+export type deleteProjectProjectsNameDeleteErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type deleteProjectProjectsNameDeleteError = deleteProjectProjectsNameDeleteErrors[keyof deleteProjectProjectsNameDeleteErrors];
+
+export type deleteProjectProjectsNameDeleteResponses = {
+    /**
+     * Response Delete Project Projects  Name  Delete
+     *
+     * Successful Response
+     */
+    200: {
+        [key: string]: string | number;
+    };
+};
+
+export type deleteProjectProjectsNameDeleteResponse = deleteProjectProjectsNameDeleteResponses[keyof deleteProjectProjectsNameDeleteResponses];
 
 export type semanticMaskMaskSemanticPostData = {
     body: Body_semantic_mask_mask_semantic_post;
@@ -1181,3 +1186,84 @@ export type assembleAssemblePostResponses = {
 };
 
 export type assembleAssemblePostResponse = assembleAssemblePostResponses[keyof assembleAssemblePostResponses];
+
+export type storeGeminiKeySetupGeminiKeyPostData = {
+    body: GeminiKeyRequest;
+    path?: never;
+    query?: never;
+    url: '/setup/gemini-key';
+};
+
+export type storeGeminiKeySetupGeminiKeyPostErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type storeGeminiKeySetupGeminiKeyPostError = storeGeminiKeySetupGeminiKeyPostErrors[keyof storeGeminiKeySetupGeminiKeyPostErrors];
+
+export type storeGeminiKeySetupGeminiKeyPostResponses = {
+    /**
+     * Successful Response
+     */
+    200: SetupWriteResponse;
+};
+
+export type storeGeminiKeySetupGeminiKeyPostResponse = storeGeminiKeySetupGeminiKeyPostResponses[keyof storeGeminiKeySetupGeminiKeyPostResponses];
+
+export type healthHealthGetData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/health';
+};
+
+export type healthHealthGetResponses = {
+    /**
+     * Response Health Health Get
+     *
+     * Successful Response
+     */
+    200: {
+        [key: string]: string;
+    };
+};
+
+export type healthHealthGetResponse = healthHealthGetResponses[keyof healthHealthGetResponses];
+
+export type capabilitiesCapabilitiesGetData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/capabilities';
+};
+
+export type capabilitiesCapabilitiesGetResponses = {
+    /**
+     * Successful Response
+     */
+    200: CapabilitiesResponse;
+};
+
+export type capabilitiesCapabilitiesGetResponse = capabilitiesCapabilitiesGetResponses[keyof capabilitiesCapabilitiesGetResponses];
+
+export type listEffectsEffectsGetData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/effects';
+};
+
+export type listEffectsEffectsGetResponses = {
+    /**
+     * Response List Effects Effects Get
+     *
+     * Successful Response
+     */
+    200: {
+        [key: string]: Array<string>;
+    };
+};
+
+export type listEffectsEffectsGetResponse = listEffectsEffectsGetResponses[keyof listEffectsEffectsGetResponses];

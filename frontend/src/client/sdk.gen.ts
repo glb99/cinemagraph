@@ -2,7 +2,7 @@
 
 import { type Client, formDataBodySerializer, type Options as Options2, type TDataShape, urlSearchParamsBodySerializer } from './client';
 import { client } from './client.gen';
-import type { assembleAssemblePostData, assembleAssemblePostErrors, assembleAssemblePostResponses, capabilitiesCapabilitiesGetData, capabilitiesCapabilitiesGetResponses, deleteProjectProjectsNameDeleteData, deleteProjectProjectsNameDeleteErrors, deleteProjectProjectsNameDeleteResponses, generateImageGenerateImagePostData, generateImageGenerateImagePostErrors, generateImageGenerateImagePostResponses, generateMusicGenerateMusicPostData, generateMusicGenerateMusicPostErrors, generateMusicGenerateMusicPostResponses, generateSoundEffectGenerateSoundEffectPostData, generateSoundEffectGenerateSoundEffectPostErrors, generateSoundEffectGenerateSoundEffectPostResponses, healthHealthGetData, healthHealthGetResponses, jobFileJobsJobIdFileGetData, jobFileJobsJobIdFileGetErrors, jobFileJobsJobIdFileGetResponses, jobStatusJobsJobIdGetData, jobStatusJobsJobIdGetErrors, jobStatusJobsJobIdGetResponses, libraryAddLibraryPostData, libraryAddLibraryPostErrors, libraryAddLibraryPostResponses, libraryFileLibraryAssetIdFileGetData, libraryFileLibraryAssetIdFileGetErrors, libraryFileLibraryAssetIdFileGetResponses, libraryGetLibraryAssetIdGetData, libraryGetLibraryAssetIdGetErrors, libraryGetLibraryAssetIdGetResponses, libraryListLibraryGetData, libraryListLibraryGetErrors, libraryListLibraryGetResponses, libraryRemoveLibraryAssetIdDeleteData, libraryRemoveLibraryAssetIdDeleteErrors, libraryRemoveLibraryAssetIdDeleteResponses, listEffectsEffectsGetData, listEffectsEffectsGetResponses, listProjectsProjectsGetData, listProjectsProjectsGetResponses, maskPreviewMaskPreviewPostData, maskPreviewMaskPreviewPostErrors, maskPreviewMaskPreviewPostResponses, renameProjectProjectsRenamePostData, renameProjectProjectsRenamePostErrors, renameProjectProjectsRenamePostResponses, renderPhotoRenderPhotoPostData, renderPhotoRenderPhotoPostErrors, renderPhotoRenderPhotoPostResponses, renderVideoRenderVideoPostData, renderVideoRenderVideoPostErrors, renderVideoRenderVideoPostResponses, saveJobJobsJobIdSavePostData, saveJobJobsJobIdSavePostErrors, saveJobJobsJobIdSavePostResponses, semanticMaskMaskSemanticPostData, semanticMaskMaskSemanticPostErrors, semanticMaskMaskSemanticPostResponses, setAssetProjectLibraryAssetIdProjectPostData, setAssetProjectLibraryAssetIdProjectPostErrors, setAssetProjectLibraryAssetIdProjectPostResponses } from './types.gen';
+import type { assembleAssemblePostData, assembleAssemblePostErrors, assembleAssemblePostResponses, capabilitiesCapabilitiesGetData, capabilitiesCapabilitiesGetResponses, deleteProjectProjectsNameDeleteData, deleteProjectProjectsNameDeleteErrors, deleteProjectProjectsNameDeleteResponses, generateImageGenerateImagePostData, generateImageGenerateImagePostErrors, generateImageGenerateImagePostResponses, generateMusicGenerateMusicPostData, generateMusicGenerateMusicPostErrors, generateMusicGenerateMusicPostResponses, generateSoundEffectGenerateSoundEffectPostData, generateSoundEffectGenerateSoundEffectPostErrors, generateSoundEffectGenerateSoundEffectPostResponses, healthHealthGetData, healthHealthGetResponses, jobFileJobsJobIdFileGetData, jobFileJobsJobIdFileGetErrors, jobFileJobsJobIdFileGetResponses, jobStatusJobsJobIdGetData, jobStatusJobsJobIdGetErrors, jobStatusJobsJobIdGetResponses, libraryAddLibraryPostData, libraryAddLibraryPostErrors, libraryAddLibraryPostResponses, libraryFileLibraryAssetIdFileGetData, libraryFileLibraryAssetIdFileGetErrors, libraryFileLibraryAssetIdFileGetResponses, libraryGetLibraryAssetIdGetData, libraryGetLibraryAssetIdGetErrors, libraryGetLibraryAssetIdGetResponses, libraryListLibraryGetData, libraryListLibraryGetErrors, libraryListLibraryGetResponses, libraryRemoveLibraryAssetIdDeleteData, libraryRemoveLibraryAssetIdDeleteErrors, libraryRemoveLibraryAssetIdDeleteResponses, listEffectsEffectsGetData, listEffectsEffectsGetResponses, listProjectsProjectsGetData, listProjectsProjectsGetResponses, maskPreviewMaskPreviewPostData, maskPreviewMaskPreviewPostErrors, maskPreviewMaskPreviewPostResponses, renameProjectProjectsRenamePostData, renameProjectProjectsRenamePostErrors, renameProjectProjectsRenamePostResponses, renderPhotoRenderPhotoPostData, renderPhotoRenderPhotoPostErrors, renderPhotoRenderPhotoPostResponses, renderVideoRenderVideoPostData, renderVideoRenderVideoPostErrors, renderVideoRenderVideoPostResponses, saveJobJobsJobIdSavePostData, saveJobJobsJobIdSavePostErrors, saveJobJobsJobIdSavePostResponses, semanticMaskMaskSemanticPostData, semanticMaskMaskSemanticPostErrors, semanticMaskMaskSemanticPostResponses, setAssetProjectLibraryAssetIdProjectPostData, setAssetProjectLibraryAssetIdProjectPostErrors, setAssetProjectLibraryAssetIdProjectPostResponses, storeGeminiKeySetupGeminiKeyPostData, storeGeminiKeySetupGeminiKeyPostErrors, storeGeminiKeySetupGeminiKeyPostResponses } from './types.gen';
 
 export type Options<TData extends TDataShape = TDataShape, ThrowOnError extends boolean = boolean, TResponse = unknown> = Options2<TData, ThrowOnError, TResponse> & {
     /**
@@ -18,72 +18,7 @@ export type Options<TData extends TDataShape = TDataShape, ThrowOnError extends 
     meta?: Record<string, unknown>;
 };
 
-export class DefaultService {
-    /**
-     * Health
-     */
-    public static healthHealthGet<ThrowOnError extends boolean = true>(options?: Options<healthHealthGetData, ThrowOnError>) {
-        return (options?.client ?? client).get<healthHealthGetResponses, unknown, ThrowOnError>({
-            responseType: 'json',
-            url: '/health',
-            ...options
-        });
-    }
-    
-    /**
-     * Capabilities
-     *
-     * image_generation/music_generation are each true if *either* their
-     * self-hosted satellite health-checks (a real, fresh-per-request call, same
-     * as every other satellite) or Gemini/Lyria3 is registered (no equivalent
-     * health check exists for a hosted API -- its registration, gated on
-     * GEMINI_API_KEY at app startup in this module, is the only signal
-     * available). *_models lists every registered adapter regardless of live
-     * reachability -- same "checked fresh at actual request time" philosophy as
-     * the rest of this file: a registered-but-currently-unreachable SDXL/
-     * ACE-Step still shows up here, and a real generate request against it
-     * still degrades to a clear per-job error, exactly as before either
-     * adapter existed.
-     *
-     * `configured` distinguishes "nothing to hint about" from "operator
-     * likely just forgot to start a container": a satellite whose env var is
-     * set but whose health check currently fails is `configured=True,
-     * <bool>=False` -- the web UI uses that combination to show a hint instead
-     * of hiding the tab outright (see frontend/src/lib/tabs.ts).
-     * image_generation's/
-     * music_generation's own `configured` is true if either backend has *any*
-     * config present (URL or key), independent of live reachability --
-     * deliberately not narrowed to "SDXL/ACE-Step only", since a Gemini key
-     * alone is enough to make either capability genuinely configured even with
-     * no self-hosted URL at all.
-     *
-     * `music_remix_models` is a subset of `music_generation_models` -- only
-     * adapters whose `remix()` actually does something (ACEStepAdapter;
-     * Lyria3Adapter's raises NotImplementedError, see its own docstring). The
-     * web UI's model picker filters to this list whenever a remix is being
-     * requested, so a caller can't pick a non-remix-capable model through the
-     * UI -- POST /generate/music still rejects it server-side too, since the
-     * UI filtering isn't the only way to hit this route.
-     */
-    public static capabilitiesCapabilitiesGet<ThrowOnError extends boolean = true>(options?: Options<capabilitiesCapabilitiesGetData, ThrowOnError>) {
-        return (options?.client ?? client).get<capabilitiesCapabilitiesGetResponses, unknown, ThrowOnError>({
-            responseType: 'json',
-            url: '/capabilities',
-            ...options
-        });
-    }
-    
-    /**
-     * List Effects
-     */
-    public static listEffectsEffectsGet<ThrowOnError extends boolean = true>(options?: Options<listEffectsEffectsGetData, ThrowOnError>) {
-        return (options?.client ?? client).get<listEffectsEffectsGetResponses, unknown, ThrowOnError>({
-            responseType: 'json',
-            url: '/effects',
-            ...options
-        });
-    }
-    
+export class RenderService {
     /**
      * Render Video
      */
@@ -155,7 +90,9 @@ export class DefaultService {
             }
         });
     }
-    
+}
+
+export class JobsService {
     /**
      * Job Status
      */
@@ -205,7 +142,9 @@ export class DefaultService {
             }
         });
     }
-    
+}
+
+export class LibraryService {
     /**
      * Library List
      */
@@ -255,6 +194,41 @@ export class DefaultService {
     }
     
     /**
+     * Library Remove
+     */
+    public static libraryRemoveLibraryAssetIdDelete<ThrowOnError extends boolean = true>(options: Options<libraryRemoveLibraryAssetIdDeleteData, ThrowOnError>) {
+        return (options.client ?? client).delete<libraryRemoveLibraryAssetIdDeleteResponses, libraryRemoveLibraryAssetIdDeleteErrors, ThrowOnError>({
+            responseType: 'json',
+            url: '/library/{asset_id}',
+            ...options
+        });
+    }
+    
+    /**
+     * Library Get
+     */
+    public static libraryGetLibraryAssetIdGet<ThrowOnError extends boolean = true>(options: Options<libraryGetLibraryAssetIdGetData, ThrowOnError>) {
+        return (options.client ?? client).get<libraryGetLibraryAssetIdGetResponses, libraryGetLibraryAssetIdGetErrors, ThrowOnError>({
+            responseType: 'json',
+            url: '/library/{asset_id}',
+            ...options
+        });
+    }
+    
+    /**
+     * Library File
+     */
+    public static libraryFileLibraryAssetIdFileGet<ThrowOnError extends boolean = true>(options: Options<libraryFileLibraryAssetIdFileGetData, ThrowOnError>) {
+        return (options.client ?? client).get<libraryFileLibraryAssetIdFileGetResponses, libraryFileLibraryAssetIdFileGetErrors, ThrowOnError>({
+            responseType: 'json',
+            url: '/library/{asset_id}/file',
+            ...options
+        });
+    }
+}
+
+export class ProjectsService {
+    /**
      * List Projects
      */
     public static listProjectsProjectsGet<ThrowOnError extends boolean = true>(options?: Options<listProjectsProjectsGetData, ThrowOnError>) {
@@ -291,40 +265,9 @@ export class DefaultService {
             ...options
         });
     }
-    
-    /**
-     * Library Remove
-     */
-    public static libraryRemoveLibraryAssetIdDelete<ThrowOnError extends boolean = true>(options: Options<libraryRemoveLibraryAssetIdDeleteData, ThrowOnError>) {
-        return (options.client ?? client).delete<libraryRemoveLibraryAssetIdDeleteResponses, libraryRemoveLibraryAssetIdDeleteErrors, ThrowOnError>({
-            responseType: 'json',
-            url: '/library/{asset_id}',
-            ...options
-        });
-    }
-    
-    /**
-     * Library Get
-     */
-    public static libraryGetLibraryAssetIdGet<ThrowOnError extends boolean = true>(options: Options<libraryGetLibraryAssetIdGetData, ThrowOnError>) {
-        return (options.client ?? client).get<libraryGetLibraryAssetIdGetResponses, libraryGetLibraryAssetIdGetErrors, ThrowOnError>({
-            responseType: 'json',
-            url: '/library/{asset_id}',
-            ...options
-        });
-    }
-    
-    /**
-     * Library File
-     */
-    public static libraryFileLibraryAssetIdFileGet<ThrowOnError extends boolean = true>(options: Options<libraryFileLibraryAssetIdFileGetData, ThrowOnError>) {
-        return (options.client ?? client).get<libraryFileLibraryAssetIdFileGetResponses, libraryFileLibraryAssetIdFileGetErrors, ThrowOnError>({
-            responseType: 'json',
-            url: '/library/{asset_id}/file',
-            ...options
-        });
-    }
-    
+}
+
+export class GenerationService {
     /**
      * Semantic Mask
      *
@@ -464,6 +407,98 @@ export class DefaultService {
                 'Content-Type': 'application/x-www-form-urlencoded',
                 ...options.headers
             }
+        });
+    }
+}
+
+export class SetupService {
+    /**
+     * Store Gemini Key
+     *
+     * Store (or, with an empty value, remove) GEMINI_API_KEY in the dotenv
+     * file, for the *next* start of this API to pick up.
+     *
+     * 422 when the value can't be written unquoted -- dotenv quoting is read
+     * slightly differently by Compose, pydantic-settings and sh, so a value
+     * needing it is refused with a pointer to setting the variable directly,
+     * rather than guessing which dialect will parse it back.
+     */
+    public static storeGeminiKeySetupGeminiKeyPost<ThrowOnError extends boolean = true>(options: Options<storeGeminiKeySetupGeminiKeyPostData, ThrowOnError>) {
+        return (options.client ?? client).post<storeGeminiKeySetupGeminiKeyPostResponses, storeGeminiKeySetupGeminiKeyPostErrors, ThrowOnError>({
+            responseType: 'json',
+            url: '/setup/gemini-key',
+            ...options,
+            headers: {
+                'Content-Type': 'application/json',
+                ...options.headers
+            }
+        });
+    }
+}
+
+export class DefaultService {
+    /**
+     * Health
+     */
+    public static healthHealthGet<ThrowOnError extends boolean = true>(options?: Options<healthHealthGetData, ThrowOnError>) {
+        return (options?.client ?? client).get<healthHealthGetResponses, unknown, ThrowOnError>({
+            responseType: 'json',
+            url: '/health',
+            ...options
+        });
+    }
+    
+    /**
+     * Capabilities
+     *
+     * image_generation/music_generation are each true if *either* their
+     * self-hosted satellite health-checks (a real, fresh-per-request call, same
+     * as every other satellite) or Gemini/Lyria3 is registered (no equivalent
+     * health check exists for a hosted API -- its registration, gated on
+     * GEMINI_API_KEY at app startup in this module, is the only signal
+     * available). *_models lists every registered adapter regardless of live
+     * reachability -- same "checked fresh at actual request time" philosophy as
+     * the rest of this file: a registered-but-currently-unreachable SDXL/
+     * ACE-Step still shows up here, and a real generate request against it
+     * still degrades to a clear per-job error, exactly as before either
+     * adapter existed.
+     *
+     * `configured` distinguishes "nothing to hint about" from "operator
+     * likely just forgot to start a container": a satellite whose env var is
+     * set but whose health check currently fails is `configured=True,
+     * <bool>=False` -- the web UI uses that combination to show a hint instead
+     * of hiding the tab outright (see frontend/src/lib/tabs.ts).
+     * image_generation's/
+     * music_generation's own `configured` is true if either backend has *any*
+     * config present (URL or key), independent of live reachability --
+     * deliberately not narrowed to "SDXL/ACE-Step only", since a Gemini key
+     * alone is enough to make either capability genuinely configured even with
+     * no self-hosted URL at all.
+     *
+     * `music_remix_models` is a subset of `music_generation_models` -- only
+     * adapters whose `remix()` actually does something (ACEStepAdapter;
+     * Lyria3Adapter's raises NotImplementedError, see its own docstring). The
+     * web UI's model picker filters to this list whenever a remix is being
+     * requested, so a caller can't pick a non-remix-capable model through the
+     * UI -- POST /generate/music still rejects it server-side too, since the
+     * UI filtering isn't the only way to hit this route.
+     */
+    public static capabilitiesCapabilitiesGet<ThrowOnError extends boolean = true>(options?: Options<capabilitiesCapabilitiesGetData, ThrowOnError>) {
+        return (options?.client ?? client).get<capabilitiesCapabilitiesGetResponses, unknown, ThrowOnError>({
+            responseType: 'json',
+            url: '/capabilities',
+            ...options
+        });
+    }
+    
+    /**
+     * List Effects
+     */
+    public static listEffectsEffectsGet<ThrowOnError extends boolean = true>(options?: Options<listEffectsEffectsGetData, ThrowOnError>) {
+        return (options?.client ?? client).get<listEffectsEffectsGetResponses, unknown, ThrowOnError>({
+            responseType: 'json',
+            url: '/effects',
+            ...options
         });
     }
 }

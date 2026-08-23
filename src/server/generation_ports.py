@@ -10,7 +10,22 @@ from typing import Literal, Protocol
 
 
 class ImageGenerator(Protocol):
-    async def generate(self, prompt: str, **kwargs) -> bytes: ...
+    async def generate(
+        self,
+        prompt: str,
+        *,
+        reference_image_bytes: bytes | None = None,
+        reference_image_filename: str = "reference.png",
+        strength: float = 0.6,
+    ) -> bytes:
+        """Spelled out rather than `**kwargs`, matching MusicGenerator below.
+        A `**kwargs` protocol promises callers may pass anything, which no
+        adapter actually honours -- so every adapter failed to satisfy its own
+        port, and the registry's type guarantee was decorative. `strength`
+        only means anything in img2img mode; an adapter with no equivalent
+        (GeminiAdapter) accepts and ignores it, which is the parity this
+        signature exists to state."""
+        ...
 
 
 class MusicGenerator(Protocol):

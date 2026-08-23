@@ -1,7 +1,7 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useRef, useState } from "react";
 
-import { DefaultService } from "@/client";
+import { LibraryService } from "@/client";
 import { ProjectAssignSelect, resolveProject } from "@/components/ProjectSelect";
 import { Button } from "@/components/ui/button";
 import { ErrorText, InlineField } from "@/components/ui/field";
@@ -31,7 +31,7 @@ export function UploadToLibrary() {
     mutationFn: async () => {
       if (!file) throw new Error("Choose a file first.");
       const chosenProject = resolveProject(project, newProjectName);
-      await DefaultService.libraryAddLibraryPost({
+      await LibraryService.libraryAddLibraryPost({
         body: {
           upload: file,
           kind,
@@ -60,7 +60,11 @@ export function UploadToLibrary() {
           onChange={(event) => setFile(event.target.files?.[0] ?? null)}
         />
         <InlineField label="Kind">
-          <Select value={kind} onChange={(event) => setKind(event.target.value)}>
+          <Select
+            value={kind}
+            onChange={(event) => setKind(event.target.value)}
+            aria-label="Kind to upload"
+          >
             {KINDS.map((name) => (
               <option key={name} value={name}>
                 {name}

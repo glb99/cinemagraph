@@ -1,11 +1,11 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
-import { DefaultService } from "@/client";
+import { ProjectsService } from "@/client";
 
 export function useProjects() {
   return useQuery({
     queryKey: ["projects"],
-    queryFn: async () => (await DefaultService.listProjectsProjectsGet()).data,
+    queryFn: async () => (await ProjectsService.listProjectsProjectsGet()).data,
   });
 }
 
@@ -24,7 +24,7 @@ export function useRenameProject() {
   const invalidate = useProjectInvalidator();
   return useMutation({
     mutationFn: async ({ from, to }: { from: string; to: string }) =>
-      DefaultService.renameProjectProjectsRenamePost({ body: { old: from, new: to } }),
+      ProjectsService.renameProjectProjectsRenamePost({ body: { old: from, new: to } }),
     onSuccess: invalidate,
   });
 }
@@ -33,7 +33,7 @@ export function useDeleteProject() {
   const invalidate = useProjectInvalidator();
   return useMutation({
     mutationFn: async (name: string) =>
-      DefaultService.deleteProjectProjectsNameDelete({ path: { name } }),
+      ProjectsService.deleteProjectProjectsNameDelete({ path: { name } }),
     onSuccess: invalidate,
   });
 }

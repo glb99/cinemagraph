@@ -1,7 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { type FormEvent, useMemo, useRef, useState } from "react";
 
-import { DefaultService } from "@/client";
+import { RenderService } from "@/client";
 import { SingleAssetPicker } from "@/components/AssetPicker";
 import { JobResult } from "@/components/JobResult";
 import { Button } from "@/components/ui/button";
@@ -87,7 +87,7 @@ function PhotoTab() {
     }
 
     runner.run(async () => {
-      const { data } = await DefaultService.renderPhotoRenderPhotoPost({
+      const { data } = await RenderService.renderPhotoRenderPhotoPost({
         body: {
           input_file: photoFile ?? undefined,
           input_asset_id: photoFile ? undefined : libraryAssetId,

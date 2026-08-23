@@ -21,7 +21,9 @@ instead of three is the correct outcome here, not a half-finished migration.
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
+from typing import Annotated
 
+from fastapi import Depends
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -77,6 +79,13 @@ class Settings(BaseSettings):
     frontend_dist_dir: Path = Field(
         _REPO_ROOT / "frontend" / "dist", validation_alias="CINEMAGRAPH_FRONTEND_DIR"
     )
+    # The dotenv file POST /setup/gemini-key writes to. Same file Docker
+    # Compose auto-loads for ${VAR} substitution and the same one .gitignore
+    # already excludes, so one path covers both the source checkout and the
+    # compose deployment. Only ever written, never read back into Settings --
+    # pydantic-settings isn't pointed at it, because a value written here
+    # applies at the next start, not this one (see env_file.py).
+    env_file: Path = Field(_REPO_ROOT / ".env", validation_alias="CINEMAGRAPH_ENV_FILE")
     ml_service_url: str | None = None
     acestep_url: str | None = None
     sound_effects_url: str | None = None
@@ -87,7 +96,7 @@ class Settings(BaseSettings):
     # docs/DESIGN.md sec 3.6's Gemini follow-up.
     gemini_api_key: str | None = None
 
-    @field_validator("data_dir", "frontend_dist_dir")
+    @field_validator("data_dir", "frontend_dist_dir", "env_file")
     @classmethod
     def _resolve_paths(cls, value: Path) -> Path:
         # Matches the previous module-level `.resolve()`; job directories are
@@ -134,3 +143,8 @@ def get_settings() -> Settings:
     lifetime -- env vars are set before the process starts.
     """
     return Settings()
+
+
+# Shared across app.py and every router in routers/ so each module doesn't
+# redeclare its own alias for the same dependency.
+SettingsDep = Annotated[Settings, Depends(get_settings)]
