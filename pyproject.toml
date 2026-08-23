@@ -39,7 +39,7 @@ classifiers = [
     "Topic :: Multimedia :: Video",
 ]
 dependencies = [
-    "opencv-python-headless>=4.9.0,<5",
+    "opencv-python-headless>=4.9.0,<6",
     "numpy>=1.26.0,<3",
     "click>=8.1.0,<9",
     "imageio>=2.34.0,<3",
@@ -67,7 +67,7 @@ dev = [
     "pytest-cov",
     "httpx>=0.27.0,<1",
     "ruff>=0.2.2,<1.0.0",
-    "mypy>=1.8.0,<2.0.0",
+    "mypy>=1.8.0,<3.0.0",
     "ty>=0.0.25",
     "prek>=0.4.11,<1.0.0",
     "zizmor>=1.0.0",
