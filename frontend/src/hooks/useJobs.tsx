@@ -8,7 +8,7 @@ import {
   useState,
 } from "react";
 
-import { DefaultService } from "@/client";
+import { JobsService } from "@/client";
 import { errorMessage, jobFileUrl } from "@/lib/api";
 
 const POLL_INTERVAL_MS = 1500;
@@ -115,7 +115,7 @@ export function JobsProvider({ children }: { children: ReactNode }) {
         patch(key, { id: jobId, phase: "pending" });
 
         for (;;) {
-          const { data: job } = await DefaultService.jobStatusJobsJobIdGet({
+          const { data: job } = await JobsService.jobStatusJobsJobIdGet({
             path: { job_id: jobId },
           });
           if (stopped.current) return;

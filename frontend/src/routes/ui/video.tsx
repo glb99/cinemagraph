@@ -1,7 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { type FormEvent, useState } from "react";
 
-import { DefaultService } from "@/client";
+import { RenderService } from "@/client";
 import { JobResult } from "@/components/JobResult";
 import { Button } from "@/components/ui/button";
 import { CheckboxField, Field, Fieldset, Hint, InlineField } from "@/components/ui/field";
@@ -40,7 +40,7 @@ function VideoTab() {
     }
 
     runner.run(async () => {
-      const { data } = await DefaultService.renderVideoRenderVideoPost({
+      const { data } = await RenderService.renderVideoRenderVideoPost({
         body: {
           input_file: videoFile,
           mask: maskFile ?? undefined,

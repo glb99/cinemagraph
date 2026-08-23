@@ -2,7 +2,7 @@ import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import type { AssetResponse } from "@/client";
-import { DefaultService } from "@/client";
+import { GenerationService } from "@/client";
 import { AssetPickerBox, AssetPickerEmpty, AssetPickerRow } from "@/components/AssetPicker";
 import { Chip, ChipRow } from "@/components/Chip";
 import { JobResult } from "@/components/JobResult";
@@ -107,7 +107,7 @@ function AssembleTab() {
       return;
     }
     runner.run(async () => {
-      const { data } = await DefaultService.assembleAssemblePost({
+      const { data } = await GenerationService.assembleAssemblePost({
         body: {
           clip_asset_ids: selection.clips.map((entry) => entry.assetId),
           music_asset_ids: selection.music.map((entry) => entry.assetId),

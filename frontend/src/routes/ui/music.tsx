@@ -1,7 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { type FormEvent, useMemo, useState } from "react";
 
-import { DefaultService } from "@/client";
+import { GenerationService } from "@/client";
 import { SingleAssetPicker } from "@/components/AssetPicker";
 import { ConfigHint } from "@/components/ConfigHint";
 import { EnginePicker } from "@/components/EnginePicker";
@@ -101,7 +101,7 @@ function MusicTab() {
     }
 
     runner.run(async () => {
-      const { data } = await DefaultService.generateMusicGenerateMusicPost({
+      const { data } = await GenerationService.generateMusicGenerateMusicPost({
         body: {
           prompt: prompt.trim(),
           lyrics,

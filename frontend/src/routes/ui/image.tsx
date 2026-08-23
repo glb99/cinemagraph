@@ -1,7 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { type FormEvent, useState } from "react";
 
-import { DefaultService } from "@/client";
+import { GenerationService } from "@/client";
 import { ConfigHint } from "@/components/ConfigHint";
 import { EnginePicker } from "@/components/EnginePicker";
 import { JobResult } from "@/components/JobResult";
@@ -47,7 +47,7 @@ function ImageTab() {
       return;
     }
     runner.run(async () => {
-      const { data } = await DefaultService.generateImageGenerateImagePost({
+      const { data } = await GenerationService.generateImageGenerateImagePost({
         body: {
           prompt: prompt.trim(),
           // strength only means anything alongside a reference image (img2img);

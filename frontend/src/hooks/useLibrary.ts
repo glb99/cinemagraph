@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
-import { DefaultService } from "@/client";
+import { LibraryService } from "@/client";
 
 export interface LibraryFilters {
   kind?: string;
@@ -22,7 +22,7 @@ export function useLibraryAssets(filters: LibraryFilters = {}) {
   const query = libraryQuery(filters);
   return useQuery({
     queryKey: ["library", query] as const,
-    queryFn: async () => (await DefaultService.libraryListLibraryGet({ query })).data,
+    queryFn: async () => (await LibraryService.libraryListLibraryGet({ query })).data,
   });
 }
 
@@ -42,7 +42,7 @@ export function useDeleteAsset() {
   const invalidate = useLibraryInvalidator();
   return useMutation({
     mutationFn: async (assetId: string) =>
-      DefaultService.libraryRemoveLibraryAssetIdDelete({ path: { asset_id: assetId } }),
+      LibraryService.libraryRemoveLibraryAssetIdDelete({ path: { asset_id: assetId } }),
     onSuccess: invalidate,
   });
 }
@@ -51,7 +51,7 @@ export function useSetAssetProject() {
   const invalidate = useLibraryInvalidator();
   return useMutation({
     mutationFn: async ({ assetId, project }: { assetId: string; project: string }) =>
-      DefaultService.setAssetProjectLibraryAssetIdProjectPost({
+      LibraryService.setAssetProjectLibraryAssetIdProjectPost({
         path: { asset_id: assetId },
         body: { project },
       }),

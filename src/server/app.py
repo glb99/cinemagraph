@@ -111,7 +111,7 @@ from .generation_registry import (
     register_music_generator,
     register_sound_effect_generator,
 )
-from .routers import generation, jobs, library, render
+from .routers import generation, jobs, library, render, setup
 from .schemas import CapabilitiesResponse, ServiceStatus
 
 app = FastAPI(title="cinemagraph API")
@@ -121,6 +121,7 @@ app.include_router(jobs.router)
 app.include_router(library.library_router)
 app.include_router(library.projects_router)
 app.include_router(generation.router)
+app.include_router(setup.router)
 
 # Populates generation_registry for real (sec 3.6) -- "sdxl"/"acestep" always
 # register (their own satellite reachability is still checked fresh per

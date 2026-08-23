@@ -1,9 +1,13 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { createFileRoute } from "@tanstack/react-router";
+import { type FormEvent, useState } from "react";
 
-import type { ServiceStatus } from "@/client";
+import { type ServiceStatus, SetupService } from "@/client";
 import { Button } from "@/components/ui/button";
+import { ErrorText } from "@/components/ui/field";
+import { Input } from "@/components/ui/input";
 import { useCapabilities } from "@/hooks/useCapabilities";
+import { errorMessage } from "@/lib/api";
 import { SERVICE_START_COMMANDS, TABS, tabAvailability } from "@/lib/tabs";
 
 export const Route = createFileRoute("/ui/setup")({
@@ -112,6 +116,70 @@ function ServiceRow({ service }: { service: ServiceStatus }) {
   );
 }
 
+/** Stores GEMINI_API_KEY in the API's dotenv file.
+ *
+ * Write-only by design: there's no route that reads a key back, so this can
+ * report "set" but never show what was set, and it starts empty every time.
+ * The API is also explicit that a stored key applies at its *next* start --
+ * settings are read once per process (see server/config.py) -- so this says
+ * "restart" rather than pretending the change took effect. */
+function GeminiKeyForm({ isSet }: { isSet: boolean }) {
+  const [key, setKey] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [saved, setSaved] = useState<string | null>(null);
+
+  const submit = async (event: FormEvent) => {
+    event.preventDefault();
+    setError(null);
+    setSaved(null);
+    setSaving(true);
+    try {
+      const { data } = await SetupService.storeGeminiKeySetupGeminiKeyPost({
+        body: { api_key: key.trim() },
+      });
+      // Never keep the value around once it's been handed over.
+      setKey("");
+      setSaved(
+        data.is_set
+          ? `Saved to ${data.env_file}. Restart the API to start using it.`
+          : `Removed from ${data.env_file}. Restart the API to apply.`,
+      );
+    } catch (err) {
+      setError(errorMessage(err));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <form onSubmit={submit} className="mt-3 space-y-2">
+      <div className="flex flex-wrap items-center gap-2">
+        <Input
+          type="password"
+          className="min-w-56 flex-1"
+          // Browsers offer to remember anything they read as a credential; this
+          // one already lives in a file on the same machine.
+          autoComplete="off"
+          placeholder={isSet ? "Replace the stored key" : "Paste your Google AI key"}
+          aria-label="Google AI key"
+          value={key}
+          onChange={(event) => setKey(event.target.value)}
+        />
+        <Button type="submit" disabled={saving || (!key.trim() && !isSet)}>
+          {saving ? "Saving…" : "Save"}
+        </Button>
+      </div>
+      <p className="text-muted-foreground text-xs">
+        Stored in the API's <code className="font-mono">.env</code>, which is gitignored. Leave the
+        box empty and press Save to remove it.
+      </p>
+      <ErrorText>{error}</ErrorText>
+      {saved ? <p className="text-success text-xs">{saved}</p> : null}
+    </form>
+  );
+}
+
 function SetupTab() {
   const { data: capabilities, isPending, isFetching } = useCapabilities();
   const queryClient = useQueryClient();
@@ -174,11 +242,7 @@ function SetupTab() {
             </div>
             <Badge state={geminiConfigured ? "on" : "off"} />
           </div>
-          {!geminiConfigured ? (
-            <p className="mt-2 text-muted-foreground text-xs">
-              Set it in the environment the API runs with, then restart it and recheck here.
-            </p>
-          ) : null}
+          <GeminiKeyForm isSet={geminiConfigured} />
         </div>
       </section>
 
