@@ -4,7 +4,7 @@ already-generated library assets. See server/app.py's module docstring for
 the full per-route rationale.
 """
 
-from typing import Annotated
+from typing import Annotated, Literal, cast
 
 from fastapi import APIRouter, BackgroundTasks, File, Form, HTTPException, UploadFile
 from fastapi.responses import Response
@@ -140,14 +140,17 @@ async def generate_music(
         service.run_music_job,
         job.id,
         output_path,
-        settings=settings,
         prompt=prompt,
         lyrics=lyrics,
         duration=duration,
         thinking=thinking,
         instrumental=instrumental,
         model=model,
-        task_type=task_type,
+        # ty narrows the `not in` check above; mypy does not, so the cast is
+        # load-bearing for one checker and redundant to the other.
+        task_type=cast(  # ty: ignore[redundant-cast]
+            Literal["text2music", "cover", "repaint"], task_type
+        ),
         src_audio_path=src_audio_path,
         reference_audio_path=reference_audio_path,
         cover_strength=cover_strength,
@@ -225,7 +228,6 @@ async def generate_image(
         service.run_image_job,
         job.id,
         output_path,
-        settings=settings,
         prompt=prompt,
         reference_image_path=reference_image_path,
         strength=strength,

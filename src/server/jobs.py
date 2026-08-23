@@ -9,11 +9,11 @@ worker processes, which is explicitly out of scope for now.
 
 import uuid
 from dataclasses import dataclass
-from enum import Enum
+from enum import StrEnum
 from pathlib import Path
 
 
-class JobStatus(str, Enum):
+class JobStatus(StrEnum):
     PENDING = "pending"
     RUNNING = "running"
     DONE = "done"

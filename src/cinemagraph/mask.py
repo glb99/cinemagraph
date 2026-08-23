@@ -20,14 +20,18 @@ def auto_motion_mask(
     gray_frames = [cv2.cvtColor(f, cv2.COLOR_BGR2GRAY) for f in frames]
 
     accum = np.zeros_like(gray_frames[0], dtype=np.float32)
-    pairs = list(zip(gray_frames, gray_frames[1:]))
+    pairs = list(zip(gray_frames, gray_frames[1:], strict=False))
     with click.progressbar(pairs, label="Detecting motion") as bar:
         for a, b in bar:
             diff = cv2.absdiff(a, b).astype(np.float32)
             accum += diff
 
     accum /= max(len(gray_frames) - 1, 1)
-    accum = cv2.normalize(accum, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
+    # dst=None is valid at runtime (OpenCV allocates it); the bundled stubs
+    # only describe the overloads that take an explicit dst.
+    accum = cv2.normalize(  # type: ignore[call-overload]  # ty: ignore[no-matching-overload]
+        accum, None, 0, 255, cv2.NORM_MINMAX
+    ).astype(np.uint8)
 
     _, binary = cv2.threshold(accum, threshold, 255, cv2.THRESH_BINARY)
 

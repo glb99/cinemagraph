@@ -110,7 +110,7 @@ def build_music_track(
 
     stages = []
     track_labels = []
-    for i, path in enumerate(track_paths):
+    for i, _path in enumerate(track_paths):
         filters = [
             f"silenceremove=start_periods=1:start_threshold={_SILENCE_THRESHOLD}:"
             f"start_silence={_SILENCE_MIN_DURATION}:detection=rms",

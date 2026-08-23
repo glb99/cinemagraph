@@ -100,6 +100,7 @@ separate step -- see asset_library's own module docstring for why a
 
 import asyncio
 from pathlib import Path
+from typing import Any, Literal
 
 from fastapi import HTTPException
 
@@ -249,14 +250,13 @@ async def run_music_job(
     job_id: str,
     output_path: Path,
     *,
-    settings: Settings,
     prompt: str,
     lyrics: str,
     duration: float,
     thinking: bool,
     instrumental: bool = False,
     model: str = "acestep",
-    task_type: str = "text2music",
+    task_type: Literal["text2music", "cover", "repaint"] = "text2music",
     src_audio_path: Path | None = None,
     reference_audio_path: Path | None = None,
     cover_strength: float = 1.0,
@@ -379,7 +379,6 @@ async def run_image_job(
     job_id: str,
     output_path: Path,
     *,
-    settings: Settings,
     prompt: str,
     reference_image_path: Path | None = None,
     strength: float = 0.6,
@@ -418,7 +417,7 @@ async def run_image_job(
         )
         output_path.write_bytes(image_bytes)
         jobs.mark_done(job_id, output_path)
-        provenance = {"prompt": prompt, "model": model}
+        provenance: dict[str, Any] = {"prompt": prompt, "model": model}
         if reference_image_path is not None:
             provenance["strength"] = strength
         _stage_for_library(

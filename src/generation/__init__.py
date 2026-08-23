@@ -76,6 +76,7 @@ Further confirmed, against the real API and the public docs
 import base64
 import io
 import mimetypes
+from typing import Any
 
 import cv2
 import httpx
@@ -107,6 +108,7 @@ async def generate_image(
     is given. Always returns PNG bytes (see module docstring on why).
     """
     client = genai.Client(api_key=api_key)
+    request_input: str | list[dict[str, Any]]
     if reference_image_bytes is None:
         request_input = prompt
     else:
@@ -125,11 +127,20 @@ async def generate_image(
         input=request_input,
         response_format={"type": "image", "mime_type": "image/jpeg"},
     )
-    if response.output_image is None:
-        raise RuntimeError(f"Gemini returned no image (status={response.status!r}).")
+    # No streaming is requested above, so this is always an Interaction --
+    # the SDK's return type is the union of both modes.
+    output_image = response.output_image  # type: ignore[union-attr]  # ty: ignore[unresolved-attribute]
+    if output_image is None:
+        raise RuntimeError(
+            f"Gemini returned no image (status={response.status!r})."  # type: ignore[union-attr]  # ty: ignore[unresolved-attribute]
+        )
+    if output_image.data is None:
+        raise RuntimeError("Gemini returned an image with no data.")
 
-    jpeg_bytes = base64.b64decode(response.output_image.data)
+    jpeg_bytes = base64.b64decode(output_image.data)
     decoded = cv2.imdecode(np.frombuffer(jpeg_bytes, np.uint8), cv2.IMREAD_COLOR)
+    if decoded is None:
+        raise RuntimeError("Gemini returned an image OpenCV could not decode.")
     return cv2.imencode(".png", decoded)[1].tobytes()
 
 

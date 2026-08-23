@@ -35,6 +35,7 @@ without every caller needing to know which concrete adapter class it got.
 
 import asyncio
 import json
+from typing import Any
 
 from ._external_service import call_optional_service
 from .config import Settings
@@ -53,6 +54,17 @@ MUSIC_POLL_INTERVAL_SECONDS = 2.0
 # needs to be read here instead of hardcoded, that's a genuine future
 # improvement, not done now -- see docs/experiments/2026-08-01-acestep-poll-timeout.md.
 MUSIC_POLL_MAX_ATTEMPTS = 400
+
+
+def _require_gemini_key(settings: Settings) -> str:
+    """Both hosted adapters are only registered when GEMINI_API_KEY is set
+    (see app.py), so this is an invariant check rather than a code path
+    anyone should hit -- but the setting is `str | None`, and a named error
+    here beats whatever the hosted API returns for a missing key."""
+    key = settings.gemini_api_key
+    if not key:
+        raise RuntimeError("GEMINI_API_KEY is not set.")
+    return key
 
 
 class SDXLAdapter:
@@ -76,7 +88,7 @@ class SDXLAdapter:
         in that mode. Always sent as multipart/form-data, matching the
         service's own contract (a plain JSON body can't carry a file upload).
         """
-        data = {"prompt": prompt}
+        data: dict[str, Any] = {"prompt": prompt}
         files = None
         if reference_image_bytes is not None:
             data["strength"] = strength
@@ -122,7 +134,7 @@ class GeminiAdapter:
         from generation import generate_image
 
         return await generate_image(
-            self._settings.gemini_api_key,
+            _require_gemini_key(self._settings),
             prompt,
             reference_image_bytes=reference_image_bytes,
             reference_image_filename=reference_image_filename,
@@ -331,7 +343,7 @@ class Lyria3Adapter:
         from generation import generate_music
 
         return await generate_music(
-            self._settings.gemini_api_key,
+            _require_gemini_key(self._settings),
             prompt,
             lyrics=lyrics,
             duration=duration,

@@ -33,7 +33,9 @@ def test_stores_a_key_and_reports_it_set(api_client, tmp_path):
     body = response.json()
     assert body["is_set"] is True
     assert body["restart_required"] is True
-    assert (tmp_path / ".env").read_text(encoding="utf-8") == "GEMINI_API_KEY=AIza-test_123\n"
+    assert (tmp_path / ".env").read_text(
+        encoding="utf-8"
+    ) == "GEMINI_API_KEY=AIza-test_123\n"
 
 
 def test_never_returns_the_key_itself(api_client):
@@ -81,7 +83,9 @@ def test_collapses_duplicate_assignments(tmp_path):
     """Only the last assignment would have taken effect anyway, so leaving a
     stale earlier one behind is a trap rather than a courtesy."""
     env = tmp_path / ".env"
-    env.write_text("GEMINI_API_KEY=one\nOTHER=x\nGEMINI_API_KEY=two\n", encoding="utf-8")
+    env.write_text(
+        "GEMINI_API_KEY=one\nOTHER=x\nGEMINI_API_KEY=two\n", encoding="utf-8"
+    )
 
     set_env_var(env, "GEMINI_API_KEY", "three")
 

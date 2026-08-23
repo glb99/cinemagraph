@@ -9,7 +9,10 @@ def lofi_grade(
     frame: np.ndarray, strength: float = 1.0, grain: float = 0.03
 ) -> np.ndarray:
     """Apply a warm/faded lofi grade. `strength` scales the whole effect 0..1+."""
-    out = frame.astype(np.float32)
+    # Annotated because `out` deliberately changes dtype as it goes -- float32
+    # for the arithmetic, uint8 for the cv2 colour conversions -- so inferring
+    # its type from the first assignment makes every later step an error.
+    out: np.ndarray = frame.astype(np.float32)
 
     # Lift blacks for a faded, matte look.
     lift = 12.0 * strength

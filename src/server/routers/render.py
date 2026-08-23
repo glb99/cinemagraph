@@ -168,9 +168,13 @@ async def render_photo(
         if asset is None:
             raise HTTPException(422, f"No asset with id '{input_asset_id}'")
         input_path = asset.path
-    else:
+    elif input_file is not None:
         input_path = job_dir / (input_file.filename or "input")
         await _save_upload(input_file, input_path)
+    else:  # unreachable -- the check at the top of this route rejects it
+        raise HTTPException(
+            422, "Supply exactly one of `input_file` or `input_asset_id`."
+        )
     output_path = job_dir / "output.mp4"
 
     render_kwargs = {

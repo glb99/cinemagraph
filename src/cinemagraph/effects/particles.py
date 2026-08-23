@@ -11,39 +11,39 @@ from ._util import cycles_for, rng
 from .base import Effect, EffectContext, EffectFamily, register
 
 PARTICLE_DEFAULTS = {
-    "rain": dict(
-        count=300,
-        min_speed=1.4,
-        max_speed=2.2,
-        size_range=(1, 1),
-        direction=(0.15, 1),
-        jitter=0.5,
-        color=(200, 210, 220),
-        opacity=0.55,
-        streak_ksize=(1, 9),
-    ),
-    "snow": dict(
-        count=70,
-        min_speed=0.15,
-        max_speed=0.4,
-        size_range=(1.5, 3.5),
-        direction=(0.2, 1),
-        jitter=6.0,
-        color=(255, 255, 255),
-        opacity=0.85,
-        streak_ksize=None,
-    ),
-    "dust": dict(
-        count=45,
-        min_speed=0.05,
-        max_speed=0.15,
-        size_range=(1, 2.5),
-        direction=(0.1, -1),
-        jitter=14.0,
-        color=(210, 220, 235),
-        opacity=0.4,
-        streak_ksize=None,
-    ),
+    "rain": {
+        "count": 300,
+        "min_speed": 1.4,
+        "max_speed": 2.2,
+        "size_range": (1, 1),
+        "direction": (0.15, 1),
+        "jitter": 0.5,
+        "color": (200, 210, 220),
+        "opacity": 0.55,
+        "streak_ksize": (1, 9),
+    },
+    "snow": {
+        "count": 70,
+        "min_speed": 0.15,
+        "max_speed": 0.4,
+        "size_range": (1.5, 3.5),
+        "direction": (0.2, 1),
+        "jitter": 6.0,
+        "color": (255, 255, 255),
+        "opacity": 0.85,
+        "streak_ksize": None,
+    },
+    "dust": {
+        "count": 45,
+        "min_speed": 0.05,
+        "max_speed": 0.15,
+        "size_range": (1, 2.5),
+        "direction": (0.1, -1),
+        "jitter": 14.0,
+        "color": (210, 220, 235),
+        "opacity": 0.4,
+        "streak_ksize": None,
+    },
 }
 
 
@@ -72,7 +72,7 @@ def _particles_precompute_raw(
     x0 = r.uniform(0, w, count)
     y0 = r.uniform(0, h, count)
     base_speed = r.uniform(min_speed, max_speed, count)
-    sizes = r.uniform(*size_range, count)
+    sizes = r.uniform(*size_range, count)  # ty: ignore[no-matching-overload]
     phase = r.uniform(0, 2 * np.pi, count)
 
     dx, dy = direction
@@ -125,7 +125,7 @@ def _particles_layer(pc, t, streak_ksize=None):
         + pc["wraps_y"] * h * t
         + pc["jitter"] * np.cos(wobble_phase + pc["phase"])
     ) % h
-    for x, y, s in zip(px, py, pc["sizes"]):
+    for x, y, s in zip(px, py, pc["sizes"], strict=True):
         cv2.circle(layer, (int(x), int(y)), max(int(s), 1), pc["color"], -1)
     layer = cv2.GaussianBlur(layer, (0, 0), sigmaX=1.2)
     if streak_ksize:

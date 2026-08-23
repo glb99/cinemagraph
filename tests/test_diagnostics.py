@@ -164,7 +164,7 @@ def test_missing_nvidia_smi_is_info_not_a_failure(monkeypatch):
     assert check.status is Status.INFO
 
 
-def test_unparseable_nvidia_smi_output_degrades_to_a_warning(monkeypatch):
+def test_unparsable_nvidia_smi_output_degrades_to_a_warning(monkeypatch):
     monkeypatch.setattr(diagnostics, "_run", lambda cmd: (True, "surprise"))
     check = _find(diagnostics.check_gpu(), "nvidia-smi")
     assert check.status is Status.WARN

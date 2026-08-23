@@ -78,7 +78,9 @@ def set_env_var(path: Path, key: str, value: str) -> None:
         kept.append(assignment)
 
     path.parent.mkdir(parents=True, exist_ok=True)
-    handle, temp_name = tempfile.mkstemp(dir=str(path.parent), prefix=".env.", suffix=".tmp")
+    handle, temp_name = tempfile.mkstemp(
+        dir=str(path.parent), prefix=".env.", suffix=".tmp"
+    )
     temp_path = Path(temp_name)
     try:
         with os.fdopen(handle, "w", encoding="utf-8", newline="\n") as stream:

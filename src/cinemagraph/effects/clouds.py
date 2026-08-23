@@ -25,15 +25,15 @@ from .base import Effect, EffectContext, EffectFamily, register
 # Denser, higher-frequency turbulence than the original smoke (4 layers,
 # narrower band) for a more organic, less wallpapery drift.
 _PRESETS = {
-    "smoke": dict(
-        n_layers=6,
-        freq_range=(0.6, 2.6),
-        hz_range=(0.25, 0.55),
-        opacity=0.35,
-        blur_sigma=0.0,
-        rise_hz=0.0,
-        flow_amplitude=4.0,
-    ),
+    "smoke": {
+        "n_layers": 6,
+        "freq_range": (0.6, 2.6),
+        "hz_range": (0.25, 0.55),
+        "opacity": 0.35,
+        "blur_sigma": 0.0,
+        "rise_hz": 0.0,
+        "flow_amplitude": 4.0,
+    },
     # Water vapor/steam: more, lower-frequency layers (broader/softer blobs),
     # blurred further for diffuseness, lower opacity (subtler than smoke),
     # plus a deterministic upward-traveling carrier wave (`rise_hz`) so it
@@ -41,15 +41,15 @@ _PRESETS = {
     # amplitude than smoke -- vapor is meant to read as delicate/subtle, not
     # turbulent; the existing rise_hz brightness carrier already covers most
     # of its upward-motion cue, so the warp field only needs to add texture.
-    "vapor": dict(
-        n_layers=6,
-        freq_range=(0.25, 1.0),
-        hz_range=(0.12, 0.3),
-        opacity=0.22,
-        blur_sigma=3.0,
-        rise_hz=0.2,
-        flow_amplitude=2.5,
-    ),
+    "vapor": {
+        "n_layers": 6,
+        "freq_range": (0.25, 1.0),
+        "hz_range": (0.12, 0.3),
+        "opacity": 0.22,
+        "blur_sigma": 3.0,
+        "rise_hz": 0.2,
+        "flow_amplitude": 2.5,
+    },
 }
 
 
@@ -91,10 +91,10 @@ def _precompute_raw(
         np.arange(h), np.arange(w), indexing="ij"
     )  # pixel coords for remap
 
-    freqs_x = r.uniform(*freq_range, n_layers)
-    freqs_y = r.uniform(*freq_range, n_layers)
+    freqs_x = r.uniform(*freq_range, n_layers)  # ty: ignore[no-matching-overload]
+    freqs_y = r.uniform(*freq_range, n_layers)  # ty: ignore[no-matching-overload]
     phases = r.uniform(0, 2 * np.pi, n_layers)
-    base_hz = r.uniform(*hz_range, n_layers)
+    base_hz = r.uniform(*hz_range, n_layers)  # ty: ignore[no-matching-overload]
     cycles = np.array([cycles_for(hz, duration, speed) for hz in base_hz])
     weights = r.uniform(0.5, 1.0, n_layers)
 
@@ -159,7 +159,12 @@ def _apply(base, pc, t):
 
     field = np.zeros_like(pc["yy"])
     for fx, fy, ph, cyc, wgt in zip(
-        pc["freqs_x"], pc["freqs_y"], pc["phases"], pc["cycles"], pc["weights"]
+        pc["freqs_x"],
+        pc["freqs_y"],
+        pc["phases"],
+        pc["cycles"],
+        pc["weights"],
+        strict=True,
     ):
         field += wgt * np.sin(fx * pc["xx"] + fy * pc["yy"] + ph + 2 * np.pi * cyc * t)
     n_terms = pc["n_layers"]
